@@ -7,6 +7,11 @@ description = "banqi-scheduler WebUI JSON API：axum HTTP 服务（JSON 字段�
 [dependencies]
 bqs-core = { workspace = true }
 bqs-storage = { workspace = true }
+bqs-proto = { workspace = true }
+prost = { workspace = true }
+# 回放 god 视角重建（快照解码 / initial_layout 回退）与变体元数据
+bq-replay = { workspace = true }
+bq-env = { workspace = true }
 bqs-judgment = { workspace = true }
 bqs-config = { workspace = true }
 axum = { workspace = true }

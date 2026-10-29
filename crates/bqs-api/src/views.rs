@@ -657,3 +657,158 @@ pub struct StorageView {
     pub profiles: Vec<StorageProfileView>,
 }
 
+// ---------------------------------------------------------------------------
+// episode 回放（Go: internal/replay Game/Step/GameSummary + replay.go 信封；
+// 契约真源 = banqi-frontend/src/scheduler/types.ts 的 ReplayList/ReplayGame/
+// ReplayStep/HiddenBag，camelCase 逐字段一致，前端零改动）
+// ---------------------------------------------------------------------------
+
+/// 步前双方剩余暗子按类型计数（兵炮马车相士帅 = 下标 0..6；Go: replay.HiddenBag）。
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct HiddenBagView {
+    #[serde(rename = "red")]
+    pub red: [i64; 7],
+    #[serde(rename = "black")]
+    pub black: [i64; 7],
+}
+
+/// 单局轻量摘要（Go: replay.GameSummary）。
+#[derive(Debug, Serialize)]
+pub struct ReplayGameSummaryView {
+    #[serde(rename = "index")]
+    pub index: usize,
+    #[serde(rename = "steps")]
+    pub steps: usize,
+    #[serde(rename = "gameLength")]
+    pub game_length: usize,
+    #[serde(rename = "winner")]
+    pub winner: Option<i32>,
+    #[serde(rename = "termination")]
+    pub termination: String,
+    #[serde(rename = "hasSeed")]
+    pub has_seed: bool,
+}
+
+/// GET /api/episodes/{id}/replay 信封（Go: handleEpisodeReplayList 的匿名 struct）。
+#[derive(Debug, Serialize)]
+pub struct ReplayListView {
+    #[serde(rename = "id")]
+    pub id: i64,
+    #[serde(rename = "kind")]
+    pub kind: String,
+    #[serde(rename = "variant")]
+    pub variant: String,
+    #[serde(rename = "gameCount")]
+    pub game_count: i64,
+    #[serde(rename = "games")]
+    pub games: Vec<ReplayGameSummaryView>,
+}
+
+/// 单步视图（上帝视角；Go: replay.Step）。
+#[derive(Debug, Clone, Serialize)]
+pub struct ReplayStepView {
+    #[serde(rename = "ply")]
+    pub ply: usize,
+    #[serde(rename = "player")]
+    pub player: String,
+    #[serde(rename = "action")]
+    pub action: u32,
+    #[serde(rename = "from")]
+    pub from: i64,
+    #[serde(rename = "to")]
+    pub to: i64,
+    #[serde(rename = "kind")]
+    pub kind: String,
+    /// Go omitempty：false 时省略（前端 undefined 按 falsy 处理）。
+    #[serde(rename = "isChance", skip_serializing_if = "std::ops::Not::not")]
+    pub is_chance: bool,
+    #[serde(rename = "revealed", skip_serializing_if = "String::is_empty")]
+    pub revealed: String,
+    #[serde(rename = "captured", skip_serializing_if = "String::is_empty")]
+    pub captured: String,
+    #[serde(rename = "moveCounter")]
+    pub move_counter: i64,
+    #[serde(rename = "scores")]
+    pub scores: [i64; 2],
+    #[serde(rename = "board")]
+    pub board: Vec<String>,
+    #[serde(rename = "revealedAt")]
+    pub revealed_at: Vec<bool>,
+    #[serde(rename = "hiddenBag")]
+    pub hidden_bag: HiddenBagView,
+    #[serde(rename = "boardSource")]
+    pub board_source: String,
+    #[serde(rename = "producer")]
+    pub producer: i64,
+    #[serde(rename = "searchValue")]
+    pub search_value: f32,
+    #[serde(rename = "playerValue")]
+    pub player_value: f32,
+    #[serde(rename = "hiddenCount")]
+    pub hidden_count: i64,
+    #[serde(rename = "searchDepth")]
+    pub search_depth: i64,
+    #[serde(rename = "searchNodes")]
+    pub search_nodes: i64,
+    #[serde(rename = "chosenValueGap")]
+    pub chosen_value_gap: f32,
+    #[serde(rename = "explRandom")]
+    pub expl_random: bool,
+    #[serde(rename = "labelerFallback")]
+    pub labeler_fallback: bool,
+    #[serde(rename = "labelerAction")]
+    pub labeler_action: Option<u32>,
+    #[serde(rename = "policyActions")]
+    pub policy_actions: Option<Vec<u32>>,
+    #[serde(rename = "policyValues")]
+    pub policy_values: Option<Vec<f32>>,
+}
+
+/// 一局完整回放（Go: replay.Game）。
+#[derive(Debug, Serialize)]
+pub struct ReplayGameView {
+    #[serde(rename = "index")]
+    pub index: usize,
+    #[serde(rename = "steps")]
+    pub steps: usize,
+    #[serde(rename = "gameLength")]
+    pub game_length: usize,
+    #[serde(rename = "winner")]
+    pub winner: Option<i32>,
+    #[serde(rename = "termination")]
+    pub termination: String,
+    #[serde(rename = "seed")]
+    pub seed: u64,
+    #[serde(rename = "hasSeed")]
+    pub has_seed: bool,
+    #[serde(rename = "sideA")]
+    pub side_a: String,
+    #[serde(rename = "sideB")]
+    pub side_b: String,
+    #[serde(rename = "redIsA")]
+    pub red_is_a: bool,
+    #[serde(rename = "aSideOnly")]
+    pub a_side_only: bool,
+    #[serde(rename = "initialBoard")]
+    pub initial_board: Vec<String>,
+    #[serde(rename = "initialShown")]
+    pub initial_shown: Vec<bool>,
+    #[serde(rename = "initialBag")]
+    pub initial_bag: HiddenBagView,
+    #[serde(rename = "finalBoard")]
+    pub final_board: Vec<String>,
+    #[serde(rename = "finalShown")]
+    pub final_shown: Vec<bool>,
+    #[serde(rename = "finalBag")]
+    pub final_bag: HiddenBagView,
+    #[serde(rename = "moves")]
+    pub moves: Vec<ReplayStepView>,
+    #[serde(rename = "labelerAgree")]
+    pub labeler_agree: f64,
+    #[serde(rename = "labelerTotal")]
+    pub labeler_total: usize,
+    #[serde(rename = "explCount")]
+    pub expl_count: usize,
+}
+
+

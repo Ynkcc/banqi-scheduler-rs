@@ -167,6 +167,20 @@ impl EpisodeStore for Store {
 
     // ---- [api 需求] 追加（SQL 对照 Go internal/store/episodes.go 的对应函数）----
 
+    /// 按 id 查单条 episode 元数据（[replay 需求] Go: store.GetEpisode）。
+    fn get_episode(&self, id: i64) -> CoreResult<Option<Episode>> {
+        self.with_conn(|conn| {
+            conn.query_row(
+                &format!("SELECT {EPISODE_COLUMNS} FROM episodes WHERE id = ?"),
+                rusqlite::params![id],
+                scan_episode_row,
+            )
+            .optional()
+            .map_err(StoreError::from)
+        })
+    }
+
+
     /// 按窗口聚合各 worker 登记的 episode 产出（[api 需求] Go: store.EpisodeStatsByWorker；
     /// 批数/局数/步数，window<=0 表示不限窗口。混合任务形态下 selfplay 与 rating
     /// 侧产数据同表登记，此处不做来源区分）。

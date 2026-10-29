@@ -150,6 +150,16 @@ pub trait EpisodeStore: Send + Sync {
     // ---- [api 需求] 追加（default 返回 Err：仅 bqs-store::Store 覆盖，
     // ---- test_support 的 fake 无需同步修改）----
 
+    // ---- [replay 需求] 追加（default 返回 Err：仅 bqs-store::Store 覆盖，
+    // ---- test_support 的 fake 无需同步修改）----
+
+    /// 按 id 查单条 episode 元数据（[replay 需求] Go: store.GetEpisode；
+    /// 回放端点据 object_key 拉对象、network_sha/opponent_* 渲染对局双方）。
+    fn get_episode(&self, id: i64) -> CoreResult<Option<Episode>> {
+        let _ = id;
+        Err(CoreError::Internal("get_episode 仅 bqs-store::Store 实现（[replay 需求]）".into()))
+    }
+
     /// 按窗口聚合各 worker 登记的 episode 产出（[api 需求] Go: store.EpisodeStatsByWorker；
     /// 键 = worker_id；window<=0 表示不限窗口/累计口径）。
     fn episode_stats_by_worker(&self, window_secs: i64) -> CoreResult<BTreeMap<String, KindStats>> {

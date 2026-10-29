@@ -20,6 +20,7 @@
 //!   连通性校验，失败不切换；成功后原子替换签名器并持久化 active）。
 //!   HeadBucket 用 `ureq`（全仓唯一网络调用点，同步）。
 
+pub mod fetch;
 mod sigv4;
 
 use std::fmt;

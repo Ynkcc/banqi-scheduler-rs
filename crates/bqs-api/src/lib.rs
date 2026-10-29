@@ -7,19 +7,15 @@
 //! 由 Go 版 `contract_test.go` 锁定，本 crate 以 `tests::contract` 快照对照）——
 //! **前端零改动可用**。
 //!
-//! 路由（与 Go 版一致；episode replay 端点暂缺，见文末注记）：
+//! 路由（与 Go 版一致）：
 //! - 只读：/api/status / networks / matches / eval / workers / trainers /
-//!   episodes（分页）/ data-stats / tasks / task-stats / train-config /
-//!   storage(+active, profiles/{name})
+//!   episodes（分页）/ episodes/{id}/replay(/{index})（回放）/ data-stats /
+//!   tasks / task-stats / train-config / storage(+active, profiles/{name})
 //! - 控制：POST /api/networks/{sha}/promote、POST /api/control、
 //!   PUT /api/train-config、PUT|DELETE /api/storage/profiles/{name}、
 //!   POST /api/storage/activate、PUT /api/workers/{id}/note、POST /api/eval/trigger、
 //!   GET|PUT /api/eval-config
 //! - 静态：`server.webui_dist` 目录托管 + SPA 回落 index.html（未配置 → 503 提示）
-//!
-//! 注记：`GET /api/episodes/{id}/replay(/{index})` 需要对象下载（HTTP 客户端）+
-//! gzip 解压 + EpisodeBatch proto 解码三组依赖，任务范围未含，暂未挂路由
-//! （挂载后行为对齐 Go 版 replay.go）。
 //!
 //! 约定：handlers 依赖 `bqs_core::Server` 的子系统 pub 字段读取查询方法
 //! （`srv.ports.*` / `srv.evalc.*` / `srv.disp.*` / `srv.ctl`）；需要新增 store 查询
@@ -28,9 +24,11 @@
 pub mod handlers_control;
 pub mod handlers_episodes;
 pub mod handlers_eval;
+pub mod handlers_replay;
 pub mod handlers_status;
 pub mod handlers_storage;
 pub mod handlers_trainers;
+pub mod replay_build;
 pub mod views;
 
 use std::path::{Path, PathBuf};
@@ -176,6 +174,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/workers/{id}/note", put(handlers_status::worker_note))
         .route("/api/trainers", get(handlers_trainers::trainers))
         .route("/api/episodes", get(handlers_episodes::episodes))
+        // episode 回放（Go: replay.go；对象拉取 + gzip + proto 解码 + god 视角重建）
+        .route(
+            "/api/episodes/{id}/replay",
+            get(handlers_replay::episode_replay_list),
+        )
+        .route(
+            "/api/episodes/{id}/replay/{index}",
+            get(handlers_replay::episode_replay_game),
+        )
         .route("/api/data-stats", get(handlers_episodes::data_stats))
         .route("/api/tasks", get(handlers_status::tasks))
         .route("/api/task-stats", get(handlers_status::task_stats))
@@ -666,5 +673,127 @@ mod contract {
     fn eval_trigger_view() {
         let v = EvalTriggerView { ok: true, triggered: 2, message: "已入队 2 条评估".into() };
         assert_keys(&keys(&v), &["ok", "triggered", "message"]);
+    }
+
+    /// episode 回放契约（对齐 banqi-frontend types.ts 的
+    /// ReplayList/ReplayGameSummary/ReplayGame/ReplayStep/HiddenBag，camelCase）。
+    #[test]
+    fn replay_views() {
+        use crate::views::*;
+
+        let bag = HiddenBagView { red: [5, 2, 2, 2, 2, 2, 1], black: [0; 7] };
+        assert_keys(&keys(&bag), &["red", "black"]);
+
+        let summary = ReplayGameSummaryView {
+            index: 0,
+            steps: 8,
+            game_length: 8,
+            winner: Some(1),
+            termination: "decisive".into(),
+            has_seed: true,
+        };
+        assert_keys(
+            &keys(&summary),
+            &["index", "steps", "gameLength", "winner", "termination", "hasSeed"],
+        );
+
+        let list = ReplayListView {
+            id: 7,
+            kind: "nnue".into(),
+            variant: "4x8".into(),
+            game_count: 1,
+            games: vec![summary],
+        };
+        assert_keys(&keys(&list), &["id", "kind", "variant", "gameCount", "games"]);
+
+        let step = ReplayStepView {
+            ply: 0,
+            player: "Red".into(),
+            action: 3,
+            from: 3,
+            to: 3,
+            kind: "flip".into(),
+            is_chance: true,
+            revealed: "R_Gen".into(),
+            captured: "B_Can".into(),
+            move_counter: 0,
+            scores: [60, 60],
+            board: vec!["Hidden".into()],
+            revealed_at: vec![false],
+            hidden_bag: bag,
+            board_source: "snapshot".into(),
+            producer: 0,
+            search_value: 0.25,
+            player_value: -0.5,
+            hidden_count: 32,
+            search_depth: 4,
+            search_nodes: 1024,
+            chosen_value_gap: 0.0,
+            expl_random: false,
+            labeler_fallback: false,
+            labeler_action: Some(3),
+            policy_actions: Some(vec![3]),
+            policy_values: Some(vec![1.0]),
+        };
+        let step_json = serde_json::to_value(&step).unwrap();
+        for k in [
+            "ply", "player", "action", "from", "to", "kind", "isChance", "revealed",
+            "captured", "moveCounter", "scores", "board", "revealedAt", "hiddenBag",
+            "boardSource", "producer", "searchValue", "playerValue", "hiddenCount",
+            "searchDepth", "searchNodes", "chosenValueGap", "explRandom",
+            "labelerFallback", "labelerAction", "policyActions", "policyValues",
+        ] {
+            assert!(step_json.get(k).is_some(), "ReplayStep 缺字段 {k}");
+        }
+        // omitempty 语义：false/空字符串省略（对齐 Go json tag）
+        let mut quiet = ReplayStepView { is_chance: false, revealed: String::new(), captured: String::new(), policy_actions: None, policy_values: None, labeler_action: None, ..step.clone() };
+        quiet.is_chance = false;
+        quiet.revealed = String::new();
+        quiet.captured = String::new();
+        let quiet_json = serde_json::to_value(&quiet).unwrap();
+        assert!(quiet_json.get("isChance").is_none(), "isChance=false 应省略");
+        assert!(quiet_json.get("revealed").is_none(), "revealed 空 应省略");
+        assert!(quiet_json.get("captured").is_none(), "captured 空 应省略");
+        // 可空诊断字段：None 序列化为 null（TS: number[] | null）
+        quiet.policy_actions = None;
+        quiet.policy_values = None;
+        quiet.labeler_action = None;
+        let null_json = serde_json::to_value(&quiet).unwrap();
+        assert!(null_json["policyActions"].is_null());
+        assert!(null_json["policyValues"].is_null());
+        assert!(null_json["labelerAction"].is_null());
+
+        let game = ReplayGameView {
+            index: 0,
+            steps: 8,
+            game_length: 8,
+            winner: Some(1),
+            termination: "decisive".into(),
+            seed: 42,
+            has_seed: true,
+            side_a: "NNUE abcdef123456".into(),
+            side_b: "规则评估器（capture_first）".into(),
+            red_is_a: true,
+            a_side_only: false,
+            initial_board: vec!["Hidden".into()],
+            initial_shown: vec![false],
+            initial_bag: bag,
+            final_board: vec!["Empty".into()],
+            final_shown: vec![true],
+            final_bag: bag,
+            moves: vec![step],
+            labeler_agree: 1.0,
+            labeler_total: 8,
+            expl_count: 0,
+        };
+        assert_keys(
+            &keys(&game),
+            &[
+                "index", "steps", "gameLength", "winner", "termination", "seed",
+                "hasSeed", "sideA", "sideB", "redIsA", "aSideOnly", "initialBoard",
+                "initialShown", "initialBag", "finalBoard", "finalShown", "finalBag",
+                "moves", "labelerAgree", "labelerTotal", "explCount",
+            ],
+        );
     }
 }

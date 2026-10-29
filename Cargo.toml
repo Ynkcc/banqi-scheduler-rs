@@ -49,6 +49,8 @@ ureq = { version = "2", default-features = false, features = ["tls"] }
 # 跨仓库依赖：banqi-core 领域核心（仅取 bq-env 环境层作为变体元数据唯一真源，
 # 不引入搜索/NNUE 等重量级 crate；路径指向上级仓库 banqi-core workspace）
 bq-env = { path = "../banqi-core/crates/bq-env" }
+# 回放共享库（banqi-core workspace；episode 回放 god 视角重建复用）
+bq-replay = { path = "../banqi-core/crates/bq-replay" }
 
 # 内部 crate
 bqs-proto = { path = "crates/bqs-proto" }
