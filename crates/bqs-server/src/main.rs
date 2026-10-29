@@ -294,7 +294,13 @@ async fn run_webui(
                             let mut builder = hyper_util::server::conn::auto::Builder::new(
                                 hyper_util::rt::TokioExecutor::new(),
                             );
-                            builder.http1().header_read_timeout(HTTP_READ_HEADER_TIMEOUT);
+                            // timer 必须安装：header_read_timeout 依赖它，
+                            // 否则 hyper 运行时 panic（timeout set but no timer）
+                            builder
+                                .http1()
+                                .timer(hyper_util::rt::TokioTimer::new())
+                                .header_read_timeout(HTTP_READ_HEADER_TIMEOUT);
+                            builder.http2().timer(hyper_util::rt::TokioTimer::new());
                             let conn = builder.serve_connection_with_upgrades(
                                 hyper_util::rt::TokioIo::new(stream),
                                 svc,
