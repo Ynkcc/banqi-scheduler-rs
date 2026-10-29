@@ -1,0 +1,30 @@
+[package]
+name = "bqs-server"
+version.workspace = true
+edition.workspace = true
+description = "banqi-scheduler 二进制：装配根 + tonic 传输层 + 生命周期编排（无 TLS）"
+
+[[bin]]
+name = "scheduler"
+path = "src/main.rs"
+
+[dependencies]
+bqs-proto = { workspace = true }
+bqs-config = { workspace = true }
+bqs-core = { workspace = true }
+bqs-store = { workspace = true }
+bqs-storage = { workspace = true }
+bqs-api = { workspace = true }
+tonic = { workspace = true }
+prost = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# WebUI HTTP 手工服务循环（读头超时 + 优雅排空；axum::serve 不暴露 http1 配置）
+hyper = { version = "1", default-features = false }
+hyper-util = { version = "0.1", default-features = false, features = ["server-auto", "server-graceful", "tokio", "service"] }
+# Router(Service<Request<Body>>) → hyper Service<Request<Incoming>> 适配（oneshot）
+tower = { version = "0.5", default-features = false, features = ["util"] }

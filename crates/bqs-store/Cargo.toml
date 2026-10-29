@@ -1,0 +1,15 @@
+[package]
+name = "bqs-store"
+version.workspace = true
+edition.workspace = true
+description = "banqi-scheduler 存储适配器：SQLite（rusqlite）+ 版本化迁移链 + 端口实现"
+
+[dependencies]
+bqs-core = { workspace = true }
+bqs-judgment = { workspace = true }
+rusqlite = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

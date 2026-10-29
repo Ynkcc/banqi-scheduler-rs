@@ -1,0 +1,62 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/bqs-proto",
+    "crates/bqs-config",
+    "crates/bqs-judgment",
+    "crates/bqs-core",
+    "crates/bqs-store",
+    "crates/bqs-storage",
+    "crates/bqs-api",
+    "crates/bqs-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+# gRPC 契约层（与 banqi-collector 同版本，保证互通）
+tonic = { version = "0.12", default-features = false, features = ["codegen", "prost", "transport"] }
+prost = "0.13"
+tonic-build = "0.12"
+prost-build = "0.13"
+# HTTP API
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "sync"] }
+# 存储
+rusqlite = { version = "0.32", features = ["bundled"] }
+# 序列化与配置
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+# CLI 与错误处理
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+thiserror = "2"
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# 工具
+uuid = { version = "1", features = ["v4"] }
+# SigV4 预签名（纯字符串运算，无网络依赖）
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+# HeadBucket 连通性校验（唯一网络调用点；scheduler 本身无 TLS 监听）
+ureq = { version = "2", default-features = false, features = ["tls"] }
+
+# 内部 crate
+bqs-proto = { path = "crates/bqs-proto" }
+bqs-config = { path = "crates/bqs-config" }
+bqs-judgment = { path = "crates/bqs-judgment" }
+bqs-core = { path = "crates/bqs-core" }
+bqs-store = { path = "crates/bqs-store" }
+bqs-storage = { path = "crates/bqs-storage" }
+bqs-api = { path = "crates/bqs-api" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

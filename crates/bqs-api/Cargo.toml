@@ -1,0 +1,17 @@
+[package]
+name = "bqs-api"
+version.workspace = true
+edition.workspace = true
+description = "banqi-scheduler WebUI JSON API：axum HTTP 服务（JSON 字段名与 Go 版契约一致）+ 静态托管"
+
+[dependencies]
+bqs-core = { workspace = true }
+bqs-storage = { workspace = true }
+bqs-judgment = { workspace = true }
+bqs-config = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }

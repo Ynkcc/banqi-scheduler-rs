@@ -1,0 +1,13 @@
+[package]
+name = "bqs-proto"
+version.workspace = true
+edition.workspace = true
+description = "banqi-scheduler gRPC 契约层：scheduler.proto 的 tonic/prost 代码生成与类型助手"
+
+[dependencies]
+tonic = { workspace = true }
+prost = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }
+prost-build = { workspace = true }

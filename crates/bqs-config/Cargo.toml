@@ -1,0 +1,13 @@
+[package]
+name = "bqs-config"
+version.workspace = true
+edition.workspace = true
+description = "banqi-scheduler 配置层：类型化配置树（单一真源）+ 未知键拒绝启动"
+
+[dependencies]
+serde = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

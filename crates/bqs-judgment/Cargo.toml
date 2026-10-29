@@ -1,0 +1,12 @@
+[package]
+name = "bqs-judgment"
+version.workspace = true
+edition.workspace = true
+description = "banqi-scheduler 判定引擎：六桶 GSPRT 与全部停机/回滚判据（纯函数、无 I/O、无锁，判据语义的单一真源）"
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -1,0 +1,562 @@
+// ============================================================================
+// scheduler.proto — 全仓唯一真源（M3 schema 窗口收敛；本文件即单一来源，
+// 此前三仓各持副本，collector 副本已实际落后缺 VariantMeta）。
+//
+// 各端引用方式（禁止再复制本文件）：
+// - banqi-scheduler: `make proto`（protoc --proto_path=proto proto/scheduler.proto）
+// - banqi-collector: build.rs compile_protos("../banqi-scheduler/proto/scheduler.proto")
+// - banqi-training:  `python gen_proto.py`（grpc_tools + import 改写）
+//
+// 字段号只增不改；破坏性变更必须提升 schema_version，训练端遇到不认识的版本直接拒绝。
+// ============================================================================
+
+syntax = "proto3";
+
+package scheduler;
+
+option go_package = "banqi/server/pb";
+
+// worker 拉取任务请求（含机器规格，服务端按规格匹配任务量）
+message TaskRequest {
+  string worker_id = 1;
+  string client_version = 2;
+  int32 threads = 3;          // 可用线程数
+  int64 memory_mb = 4;        // 可用内存
+  string current_network = 5; // 本地已有网络 sha（空表示需要下载）
+}
+
+// 任务响应
+message TaskResponse {
+  string task_id = 1;
+  TaskKind kind = 2;
+  string network_sha = 3;       // 主网络（训练网络）
+  string opponent_sha = 4;      // rating 对打时的对手网络；selfplay 为空
+  string network_url = 5;       // R2 预签名下载 URL（主网络）；空 = 本地已有缓存
+  string opponent_url = 6;      // 对手网络下载 URL
+  string network_sha_remote = 7;  // 服务端当前 best sha（用于本地缓存比对）
+  int32 games = 8;              // 本批对局数
+  SelfPlayParams params = 9;
+  string message = 10;          // 无任务时的说明（task_waiting 等）
+  // 网络对象键（networks/<sha>.<ext>）：恒下发，worker 的本地缓存路径即
+  // cache_dir/<network_key>，扩展名即权重格式（onnx / pt / nnue）。
+  string network_key = 11;
+  string opponent_key = 12;     // rating 任务的对手网络对象键
+  // 重搜任务（TASK_REANALYSIS）携带的历史局面载荷（版本化紧凑编码，格式见
+  // banqi-collector/src/pipeline/self_play/reanalysis.rs 的 encode_payload）。
+  // 其余任务为空。games 字段对重搜任务表示「位置条数」。
+  bytes reanalysis_payload = 13;
+  // 绝对强度评估（TASK_EVAL）的对手标识；空 = 用 opponent_sha / opponent_url 指定的网络。
+  // 取值形如 "rule:capture_first" / "rule:reveal_first" / "random"。
+  // 评估模式（纯策略 / 带搜索）由 params.mcts_sims 决定：0 = 纯策略 argmax，>0 = MCTS 模拟数。
+  string opponent_spec = 14;
+  // 特征包派生任务（TASK_DERIVE_FEATURES）的目标记录批次对象键
+  // （episodes/<network_sha>/<data_id>.epb.gz）。其余任务为空。
+  string episode_object_key = 15;
+  // 上述记录批次的预签名 GET URL（worker 下载记录批次用）；空 = 无。
+  string episode_url = 16;
+}
+
+enum TaskKind {
+  TASK_NONE = 0;      // 无任务，按 message 退避轮询
+  TASK_SELFPLAY = 1;
+  TASK_RATING = 2;    // gatekeeper / rating 对打
+  // 局面重搜（reanalysis）：用当前 best 网络对下发的历史局面重跑搜索
+  // （按 best.Format 分派 MCTS / Expectimax 栈），产出新的策略/价值目标
+  // （一局面一条 1 样本 episode），走 ReportEpisode 常规通道上报。
+  TASK_REANALYSIS = 3;
+  // 绝对强度评估（eval）：指定网络 vs 规则/内建对手，只统计胜负、不产 episode、
+  // 不参与 gatekeeper 晋级（结果落 eval_results，仅用于趋势观测与停机判据）。
+  // 对手由 TaskResponse.opponent_spec 指定；评估模式由 SelfPlayParams.mcts_sims 决定。
+  TASK_EVAL = 4;
+  // 特征包补派（derive features）：下载指定记录批次（GameRecord v2），用
+  // banqi-core 特征编码器派生 FeaturePack 并经 ReportFeaturePack 上传。
+  // 目标批次由 TaskResponse.episode_object_key / episode_url 指定。
+  TASK_DERIVE_FEATURES = 5;
+}
+
+// 产线栈标识：决定 worker 用哪套搜索栈产数据、trainer 消费哪类特征包。
+// v2 起不再区分记录类型（记录统一为 GameRecord），仅作路由/过滤标签，
+// 由服务端下发（selfplay.data_kind 配置 / WebUI 在线切换）。
+enum DataKind {
+  DATA_RESNET = 0;    // Gumbel MCTS 栈（ResNet 特征包，配 .onnx 权重）
+  DATA_NNUE = 1;      // Expectimax 栈（NNUE 稀疏特征包，配 .nnue 权重）
+  // 不产训练数据的对局记录（eval 评估任务）：记录仅含对局真源（快照/动作/
+  // 胜负），无搜索标签，不派生特征包、不进入训练消费管道；仅供 WebUI 回放观测。
+  DATA_NONE = 2;
+}
+
+message SelfPlayParams {
+  int32 mcts_sims = 1;
+  float temperature = 2;
+  bool playout_cap_random = 3;
+  string variant = 4;           // 4x8 / 4x4 / 4x2
+  string extra_config = 5;      // JSON 透传
+  DataKind data_kind = 6;       // 本任务要产的数据类别（rating 任务不产数据，该字段无意义）
+}
+
+// episode 元数据上报：服务端只收元数据 + 签发 R2 预签名 PUT，数据直传 R2
+message EpisodeMeta {
+  string worker_id = 1;
+  string task_id = 2;
+  int32 game_count = 3;
+  int32 total_steps = 4;
+  int32 winner = 5;             // 1 红 / -1 黑 / 0 平；rating 任务另有字段
+  string network_sha = 6;
+  int64 timestamp = 7;
+  int64 content_length = 8;     // 待上传对象大小
+  string content_sha256 = 9;    // 对象 sha256（R2 强校验）
+  DataKind kind = 10;           // 本批对象的数据类别（落库，供 ListEpisodes 按类别过滤；
+                                // DATA_NONE = 不产训练数据的对局记录，仅供回放）
+  // 批内逐局结果四分（红/黑为绝对色彩视角；平局按成因拆分）：
+  // 旧版 collector 不填（落库 0），WebUI 据此显示四分而不仅是批级聚合 winner。
+  int32 red_wins = 11;
+  int32 black_wins = 12;
+  int32 draw_no_capture = 13;
+  int32 draw_truncation = 14;
+}
+
+message EpisodeAck {
+  bool accepted = 1;
+  string message = 2;
+  string upload_url = 3;        // 预签名 PUT URL；accepted=false 时为空
+  string object_key = 4;        // R2 对象键 episodes/<sha>/<uuid>.epb.gz
+}
+
+// 网络请求：sha 为空 = 拉取当前 best
+message NetworkRequest {
+  string sha = 1;
+}
+
+message NetworkInfo {
+  string sha = 1;
+  string download_url = 2;      // 预签名 GET URL
+  int64 created_at = 3;
+  bool is_best = 4;
+  string game_data = 5;         // 训练侧附加信息（parent sha 等），JSON
+  string key = 6;               // 对象键 networks/<sha>.<ext>（供 worker 预取缓存命名）
+}
+
+// trainer（GPU 机）注册新网络 → 触发 gatekeeper 对打
+message RegisterNetworkRequest {
+  string sha = 1;
+  string parent_sha = 2;
+  string upload_url = 3;        // trainer 已直传 R2，这里登记元数据
+  string notes = 4;
+  // 权重格式（onnx / pt / nnue）：与 SignNetworkUploadRequest.format 一致，
+  // 决定对象键扩展名；两处必须由 upload 方用同一来源填写。
+  string format = 5;
+}
+
+message RegisterNetworkAck {
+  bool accepted = 1;
+  string message = 2;
+  string match_task_hint = 3;   // 若已生成 gatekeeper 任务，附说明
+}
+
+// 对局结果上报（selfplay 汇总 / rating 单局）
+message MatchResult {
+  string worker_id = 1;
+  string task_id = 2;
+  TaskKind kind = 3;
+  string network_sha = 4;
+  string opponent_sha = 5;
+  int32 games = 6;              // 本批局数
+  int32 wins = 7;               // 主网络视角（统计用）
+  int32 losses = 8;
+  int32 draws = 9;
+  // 成对六桶计数（换色配对两局一组，互斥对型 [LL, LD, DD, WL, DW, WW]，
+  // WL = 一胜一负混合对）：rating 任务必填，selfplay 为 0。
+  // 旧版五桶的 pair_dd 聚合了 DD 与 WL，六桶拆开后逐桶无歧义。
+  int32 pair_ll = 10;
+  int32 pair_ld = 11;
+  int32 pair_dd = 12;
+  int32 pair_wl = 21;           // 一胜一负混合对（旧五桶混在 pair_dd 中）
+  int32 pair_dw = 13;
+  int32 pair_ww = 14;
+  // 绝对强度评估（TASK_EVAL）：对手标识（与 TaskResponse.opponent_spec 同源，回显便于对账）。
+  // 其余任务为空。
+  string opponent_spec = 15;
+  // 平均对局步数（TASK_EVAL 统计用；rating / selfplay 未填时为 0）。
+  float avg_moves = 16;
+  // ---- 评估明细四分（TASK_EVAL 填写；旧版 collector 不填 = 0，调度器按聚合值兼容展示） ----
+  // 红方获胜局数（绝对色彩视角；与主网络视角 wins/losses 无换算关系，用于对称性诊断）
+  int32 red_wins = 17;
+  // 黑方获胜局数
+  int32 black_wins = 18;
+  // 未吃子平局（连续无吃子/翻棋判和）
+  int32 draw_no_capture = 19;
+  // 步数截断平局（到达环境步数上限）
+  int32 draw_truncation = 20;
+}
+
+message MatchResultAck {
+  bool accepted = 1;
+  string message = 2;
+  bool match_concluded = 3;     // 该 gatekeeper 对打已出结论
+  bool promoted = 4;            // 新网络晋级 best
+  string best_sha = 5;          // 晋级后的 best（未变则当前 best）
+}
+
+// 心跳 + 控制参数（worker 周期上报资源与版本声明）
+message HeartbeatRequest {
+  string worker_id = 1;
+  int32 current_threads = 2;
+  int32 completed_games = 3;
+  string running_task_id = 4;
+  string client_version = 5;    // collector 版本声明（仅记录/展示，不做强校验）
+  int64 memory_mb = 6;          // 可用内存
+  // 进程内健康状态（banqi_training.health）：ok | degraded | fatal。
+  // 空串 = 旧客户端（按 ok 语义处理）。WebUI worker 卡片据此显示红黄绿。
+  string health_status = 7;
+  // 最近一次降级/致命摘要（空 = 无）。形如 "[publish] x3: SignNetworkUpload 被拒绝: ..."
+  string last_error = 8;
+}
+
+message HeartbeatReply {
+  bool pause_self_play = 1;
+  int32 mcts_sims = 2;          // 覆盖值，0 表示不覆盖
+  float temperature = 3;
+  bool playout_cap_random = 4;
+  string best_network = 5;      // 当前 best sha（供 worker 判断是否换网）
+}
+
+// trainer 请求签发网络上传预签名 PUT（R2 凭据只在调度器持有，trainer 零配置）
+message SignNetworkUploadRequest {
+  string trainer_id = 1;
+  string sha = 2;               // 网络内容 sha256（决定对象键与去重）
+  int64 content_length = 3;
+  string content_sha256 = 4;
+  // 权重格式（onnx / pt / nnue）：决定对象键扩展名，供 worker 按格式分派加载器。
+  string format = 5;
+}
+
+message SignNetworkUploadAck {
+  bool accepted = 1;
+  string message = 2;
+  string upload_url = 3;        // 预签名 PUT；accepted=false 时为空
+  string object_key = 4;        // networks/<sha>.<format>
+}
+
+// trainer 拉取已登记 episode 的预签名 GET 列表（游标分页）
+message ListEpisodesRequest {
+  int32 limit = 1;              // 单次最多返回条数（0 = 服务端默认）
+  string after_key = 2;         // 游标：上次返回的最后一个对象键（服务端按登记顺序推进）
+  // 数据类别过滤：缺省 = 不过滤。consumer 应显式指定自己消费的类别，
+  // 避免下载并解析无法消费的对象。
+  optional DataKind kind = 3;
+}
+
+message EpisodeObject {
+  string object_key = 1;
+  string download_url = 2;
+  int64 size = 3;
+}
+
+message ListEpisodesReply {
+  repeated EpisodeObject objects = 1;
+  bool has_more = 2;
+}
+
+// trainer 提交「局面重搜」任务：把从历史 episode 里攒下的局面快照交给调度器，
+// 由任意 worker 用当前 best 网络重跑搜索刷新训练目标（跨进程 reanalysis）。
+message SubmitReanalysisRequest {
+  string requester = 1;   // 提交方标识（日志用）
+  string variant = 2;     // 必须与服务端 VARIANT 一致，否则拒绝（防串变体）
+  int32 mcts_sims = 3;    // 重搜模拟次数；0 = 用 worker 自对弈配置的默认值
+  uint32 positions = 4;   // 位置条数（仅统计/展示；权威值在 payload 内）
+  bytes payload = 5;      // 位置载荷（见 reanalysis.rs 的 encode_payload）
+}
+
+message SubmitReanalysisReply {
+  bool accepted = 1;
+  string message = 2;
+  uint64 queued_positions = 3;   // 入队后待重搜的位置总数（含本次）
+}
+
+// 调度器全局信息（trainer 启动时获取变体，无需命令行传入）
+message GetInfoRequest {}
+
+// 变体对局元信息（单一真源：banqi-core::Variant，调度器经 variants.json 持有）。
+// 只下发训练真正需要的对局元数据；网络结构等训练专属字段由训练端本地维护。
+message VariantMeta {
+  string id = 1;                            // 稳定标识（Variant::as_str()）
+  string label = 2;                         // 显示名
+  uint32 rows = 3;
+  uint32 cols = 4;
+  repeated uint32 piece_counts = 5;         // 7 元，按 PieceType 索引（未激活型为 0）
+  repeated int32 piece_values = 6;          // 7 元，按 PieceType 索引
+  int32 initial_health = 7;
+  uint32 max_consecutive_moves_for_draw = 8;
+  repeated string symmetries = 9;           // 合法空间对称集（含 identity，由棋盘形状推导）
+}
+
+message GetInfoReply {
+  string variant = 1;
+  // 当前变体的对局元信息（与 variant 同源）。旧版训练端会忽略；
+  // 新版训练端以本字段构建变体描述符（缺省视为调度器过旧）。
+  VariantMeta variant_meta = 4;
+  // trainer 轮询：true 时按既有优雅停止路径收尾（先让 worker 完成当前轮并落
+  // checkpoint，再退出）。由调度器按绝对强度判据置位（如「连续 N 次评测无提升」），
+  // 见 banqi-scheduler/internal/scheduler/eval.go。
+  bool should_stop = 2;
+  string stop_reason = 3;
+}
+
+// trainer 消费心跳：周期上报消费水位与积压，调度器据此判定消费停滞并按 [balance]
+// 策略自动暂停/恢复任务派发（生成-消费平衡，见 internal/scheduler/balance.go）。
+//
+// 消费水位的口径是「真实消费进度」：训练线程已从就绪缓冲取走的记录所对应的
+// episode 对象键——而非 ListEpisodes 的翻页游标。后者在 prefetch 缓冲满（健康但
+// 慢速消费）时停止推进，用它判定停滞会把「消费慢」误判为「消费停摆」。
+message TrainerHeartbeatRequest {
+  string trainer_id = 1;    // trainer 实例标识（trainers 表主键）
+  string variant = 2;       // 必须与服务端 VARIANT 一致，否则拒绝登记（防串变体）
+  DataKind kind = 3;        // 消费的数据类别（与 ListEpisodes 的 kind 过滤同源）
+  // 已消费水位：最后一条被训练线程取走的记录所属的 episode 对象键。
+  // 空串 = 尚无消费进度（fresh-start）；服务端映射 episodes.id 计算积压。
+  string consumed_key = 4;
+  int64 samples_consumed = 5;  // 训练线程累计取走的记录数（单调递增 = 消费在推进）
+  int32 backlog = 6;           // 消费管道积压估计（已列出未消费 + 就绪缓冲，qsize 口径）
+  int32 buffered = 7;          // 就绪缓冲中等待训练线程取走的记录数（prefetch 高水位观测）
+  // 进程内健康状态（banqi_training.health）：ok | degraded | fatal。空 = 旧客户端。
+  string health_status = 8;
+  // 最近一次降级/致命摘要（空 = 无）
+  string last_error = 9;
+  // 训练节奏快照（JSON，trainer 侧 NnueTrainer.progress()）：round / new_samples /
+  // target / last_round_ts / export_every / next_export_round / baseline_holdout_mse /
+  // last_gate 等。空 = 旧客户端。调度器只透传落库，不做结构解析（WebUI 展示用）。
+  string progress_json = 10;
+}
+
+message TrainerHeartbeatReply {
+  bool pause_self_play = 1;     // 生效暂停（人工 || 自动）：采集端不应再拿到 selfplay 任务
+  bool auto_paused = 2;         // 处于自动暂停（balance 策略触发；诊断/展示用）
+  string auto_pause_reason = 3; // 自动暂停原因（未自动暂停时为空）
+  string message = 4;           // 拒绝登记等原因说明（正常心跳为空）
+}
+
+// trainer 拉取运行时可调训练配置：启动时拉一次做 bootstrap（覆盖本地 YAML 中的
+// 对应字段），运行中按 SHOULD_STOP_POLL_SECONDS 周期拉取以热更新训练动力学参数。
+//
+// overrides 是「字段名 → 值」映射，字段名与 banqi_training.config.Config 的字段
+// 一一对应；未出现的字段保持 trainer 本地配置值（未下发 ≠ 设为零值）。可调字段
+// 白名单与取值校验由调度器权威裁定（banqi-scheduler/internal/scheduler/
+// trainconfig.go），故本消息不做字段级 proto 定义：新增可调项不必改契约。
+message GetTrainConfigRequest {
+  string variant = 1;      // 必须与服务端 VARIANT 一致，否则拒绝（防串变体）
+  string trainer_id = 2;   // 提交方标识（日志用）
+}
+
+message GetTrainConfigReply {
+  // false = 拒绝下发（变体不符等），overrides 为空；trainer 记日志后继续用本地配置。
+  bool accepted = 1;
+  string message = 2;
+  map<string, string> overrides = 3;
+}
+
+// ============================================================================
+// 训练数据记录（episode 对象载荷）— v2
+//
+// worker 把一批对局编码为 EpisodeBatch → gzip → 直传 R2，对象键
+// `episodes/<network_sha>/<data_id>.epb.gz`。本组消息是训练数据的唯一字段
+// 契约；调度器只登记元数据、不解析对象内容。
+//
+// v2 架构（破坏性变更，schema_version=2，不兼容 v1 记录）：
+// - GameRecord 是对局真源：局面快照（PositionSnapshot）+ 动作序列 + 终局 +
+//   搜索标签，**不含任何模型输入特征**。每步带产方归属（producers），同一条
+//   记录可承载对局双方（A/B）的行动步（规则/随机对手步 producers=0xFF）。
+// - 模型输入特征由 FeaturePack 派生工件承载，对象键与记录同目录：
+//   `episodes/<network_sha>/<data_id>.pack.v<n>.fpb.gz`。特征由 collector 侧
+//   banqi-core 特征编码器生成（唯一实现）；特征格式升级只派生新版本工件，
+//   记录本体不变。特征包与记录通过 record_sha256 硬绑定。
+//
+// 约定：
+// - 字段号只增不改；任何破坏性变更必须提升 schema_version，消费端遇到不认识
+//   的版本直接拒绝（不静默降级）。
+// - 所有 bytes 字段是「稠密小端缓冲区」，训练端用 np.frombuffer 零拷贝还原，
+//   不做逐元素文本解析。
+// - 步级数组（players/actions/producers/value_labels/...）长度必须等于 steps，
+//   snapshots 数必须等于 steps，解码端严格校验（错位宁可拒批）。
+// - 位打包（boards_bits / action_masks_bits，仅 FeaturePack.ResNetFeatures）：
+//   字节内高位对应较小下标（numpy.unpackbits(bitorder='big') 一致），尾部补 0；
+//   棋盘布局为 [步][通道][位置字节]（每通道独立字节对齐），掩码布局为 [步][动作字节]。
+// ============================================================================
+
+message EpisodeBatch {
+  uint32 schema_version = 1;             // = 2（v2）
+  string variant = 2;                    // 4x8 / 4x4 / 4x2（消费端据此校验变体一致）
+  DataKind kind = 5;                     // 产线栈标识（v2 起记录类型统一，仅路由用）
+  repeated GameRecord records = 3;       // 对局真源记录（双方行动步，逐步产方归属）
+  reserved 4;                            // 曾用于 nnue_episodes（v1 两类记录互斥），v2 删除
+}
+
+// 对局真源记录：双方行动步 + 搜索标签 + 诊断，无模型输入特征。
+// 字段分三段：对局真源（环境事实）/ 产方归属（谁在何时搜索）/ 标签与诊断
+//（搜索产物）。ResNet 与 NNUE 栈各自填写自己的标签槽位，未用的段留空。
+message GameRecord {
+  uint32 steps = 1;              // 记录步数（下述步级数组的第 0 维）
+
+  // —— 对局真源 ——
+  // 本局开局种子（缺省 = 未设种子）。种子 → 确定性洗牌 → 初始布局，
+  // 实际翻子按真实布局进行；搜索仍按袋模型概率枚举。
+  optional uint64 game_seed = 2;
+  // 初始真实布局紧凑字节：total_positions × u8，每字节 = player_idx<<3 | piece_type_idx
+  // （与 banqi-core env::layout::decode_layout_bytes 对应）。
+  bytes initial_layout = 3;
+  bytes players = 4;             // steps × i8（1 红 / -1 黑）
+  bytes actions = 5;             // steps × u16（动作索引）
+  // steps 个步前局面快照（banqi_core::core::env::PositionSnapshot::encode，
+  // 约 110-135 字节/步；v2 必填）。对局真源：训练/回放/重搜/特征派生一律以此为准。
+  repeated bytes snapshots = 6;
+  optional int32 winner = 7;     // 1 红 / -1 黑 / 0 平；缺省 = 本局作废
+  uint32 termination_reason = 8; // 0=未指定 1=Decisive 2=QuietDraw 3=MaxSteps 4=Aborted
+  // 终局分差（红方视角，归一化 [-1,1]）。消费端按行棋方取号替代 ±1 胜负项。
+  optional float terminal_margin = 9;
+  // 终局血量差（红方视角）。缺省 = 未启用血量。
+  optional float health_diff_red = 10;
+
+  // —— 产方归属 ——
+  // 产方搜索配置 hash 表（FNV-1a，同 v1 search_config_hash 语义）。纯自对弈
+  // 单产方 = 1 项；混入对打（candidate + best）= 2 项。规则/随机对手步不引用。
+  repeated uint64 producer_hashes = 11;
+  // steps × u8，索引指向 producer_hashes；0xFF = 无搜索步（规则/随机对手落子）。
+  bytes producers = 12;
+  uint32 search_config_version = 13;  // 搜索参数语义版本（字段集/默认值变更时递增）
+
+  // —— 价值标签（行棋方视角）——
+  // 主价值标签：ResNet = MCTS 根值；NNUE = 教师值（启用标注器时）或产方根值。
+  // 无搜索步 = 教师值（该步跑了标注器）或 0（消费端按 producers 判定语义）。
+  bytes value_labels = 14;   // steps × f32
+  // 产方自身搜索值（诊断）：ResNet = completed_q；NNUE = player_values。
+  bytes own_values = 15;     // steps × f32
+  bytes root_visits = 16;    // steps × u32（ResNet 根访问数；NNUE 空）
+  bytes is_full_search = 17; // steps × u8 0/1（ResNet 算力随机化标记；NNUE 空 = 恒全搜索）
+
+  // —— 策略标签 ——
+  // ResNet 改进策略（pi_target，稠密）；NNUE 恒空（蒸馏走教师根策略）。
+  bytes policies = 18;               // steps × action_space × f32
+  // 教师标注器 argmax 动作（决策一致性观测）。0xFFFFFFFF = 该步无教师动作。
+  bytes labeler_actions = 19;        // steps × u32
+  // 教师根策略（policy 蒸馏）：每步标注器根 (action, value) 对——合法动作集 +
+  // 软分布（softmax(values/τ)）。offsets 为 steps+1 前缀和。NNUE 栈专用。
+  bytes labeler_policy_actions = 20; // u32 flat
+  bytes labeler_policy_values = 21;  // f32 flat（行棋方视角）
+  bytes labeler_policy_offsets = 22; // steps+1 × u32 前缀和
+  bytes labeler_fallbacks = 23;      // steps × u8（1 = 教师搜索失败，标签回退产方自身值）
+
+  // —— 诊断（产方搜索过程可观测性）——
+  bytes search_depths = 24;     // steps × u8（产方引擎每步完成层）
+  bytes search_nodes = 25;      // steps × u32（每步消耗节点）
+  bytes hidden_counts = 26;     // steps × u32（步前暗子数）
+  bytes chosen_value_gaps = 27; // steps × f32（探索采样步：root max − chosen；argmax 步 = 0）
+  // steps × u8 0/1（1 = 该步动作因探索采样（温度 softmax over 根值）而偏离产方
+  // 搜索 argmax，即 chosen ≠ argmax；与 chosen_value_gaps > 0 同口径）。仅
+  // Expectimax 探索采样路径产生；MCTS / 重搜 / 探索未启用 / 规则对手步恒 0。
+  // 旧版 collector 不填（空 = 恒 0）。
+  bytes expl_random = 28;
+}
+
+// NNUE 特征布局元信息（由 env.config 推导，消费端免硬编码还原维度）。
+// v3：新增威胁特征段（NNUE_THREAT_BUCKETS 桶 × 双视角 × 每格）。
+message NnueMeta {
+  uint32 feature_dim = 1;
+  uint32 states_per_square = 2;
+  uint32 bag_stride = 3;
+  uint32 num_active = 4;
+  uint32 total_positions = 5;
+  uint32 threat_buckets = 6;
+}
+
+// 每步双视角稀疏特征索引：按步顺序把 mover 段与 opponent 段拼进 indices，
+// offsets 为前缀和（长度 2*steps+1），第 i 步：
+//   mover    = indices[offsets[2i]   : offsets[2i+1]]
+//   opponent = indices[offsets[2i+1] : offsets[2i+2]]
+message NnueFeatures {
+  NnueMeta meta = 1;
+  bytes indices = 2;   // 全部索引（u32）顺序拼接
+  bytes offsets = 3;   // (2*steps+1) × u32 前缀和
+}
+
+// ResNet 输入特征（稠密位平面 + 标量；动作掩码随包存储，与快照派生值一致）。
+message ResNetFeatures {
+  uint32 board_channels = 1;   // = 变体 board_channels
+  uint32 board_rows = 2;
+  uint32 board_cols = 3;
+  uint32 scalar_count = 4;
+  uint32 action_space = 5;
+  // steps × board_channels × ceil(rows*cols/8) 的 0/1 位平面。
+  bytes boards_bits = 6;
+  bytes scalars = 7;             // steps × scalar_count f32
+  // steps × ceil(action_space/8) 的 0/1 位图（合法动作掩码）。
+  bytes action_masks_bits = 8;
+}
+
+// 模型输入特征派生工件：由记录批次（EpisodeBatch）按 GameRecord 逐步快照
+// 派生，与记录通过 record_sha256 硬绑定。特征由 collector 侧 banqi-core
+// 特征编码器生成（全仓唯一实现，禁止在训练端复刻编码逻辑）。
+message FeaturePack {
+  uint32 pack_version = 1;    // 特征格式版本（NNUE/ResNet 布局演进时递增）
+  string variant = 2;
+  DataKind kind = 3;          // 特征类别（与来源批次的产线栈一致）
+  uint32 steps = 4;           // 批内全部记录的总步数（各记录 steps 之和）
+  bytes record_sha256 = 5;    // 来源记录批次对象（.epb.gz 原始字节）的 sha256 摘要（32 字节）
+  NnueFeatures nnue = 6;      // kind=DATA_NNUE 时必填
+  ResNetFeatures resnet = 7;  // kind=DATA_RESNET 时必填
+}
+
+// worker 上报特征包元数据 → 服务端登记 + 签发预签名 PUT。
+// 在线自对弈路径与 TASK_DERIVE_FEATURES 补派路径共用本 RPC。
+message FeaturePackMeta {
+  string worker_id = 1;
+  string task_id = 2;
+  string episode_object_key = 3;  // 来源记录批次对象键
+  uint32 pack_version = 4;
+  int64 content_length = 5;       // 待上传对象大小
+  string content_sha256 = 6;      // 对象 sha256（R2 强校验）
+}
+
+message FeaturePackAck {
+  bool accepted = 1;
+  string message = 2;
+  string upload_url = 3;        // 预签名 PUT URL；accepted=false 时为空
+  string object_key = 4;        // 特征包对象键
+}
+
+// trainer 请求为某记录批次补派特征包（记录在、包缺失时调用；异步入队，
+// 由任意 worker 以 TASK_DERIVE_FEATURES 领取执行）。
+message FeaturePackRequest {
+  string requester = 1;             // 提交方标识（日志用）
+  string episode_object_key = 2;    // 目标记录批次对象键
+  uint32 pack_version = 3;          // 目标特征格式版本
+}
+
+message FeaturePackReply {
+  bool accepted = 1;
+  string message = 2;
+  // ready=true 时下发：特征包已存在，可直接下载（等价于「get or enqueue」语义）
+  bool ready = 3;
+  string object_key = 4;
+  string download_url = 5;      // 预签名 GET URL（ready=true 时有效）
+}
+
+service SchedulerService {
+  rpc GetInfo (GetInfoRequest) returns (GetInfoReply);
+  rpc GetTask (TaskRequest) returns (TaskResponse);
+  rpc ReportEpisode (EpisodeMeta) returns (EpisodeAck);
+  rpc GetNetwork (NetworkRequest) returns (NetworkInfo);
+  rpc RegisterNetwork (RegisterNetworkRequest) returns (RegisterNetworkAck);
+  rpc ReportMatchResult (MatchResult) returns (MatchResultAck);
+  rpc Heartbeat (HeartbeatRequest) returns (HeartbeatReply);
+  rpc SignNetworkUpload (SignNetworkUploadRequest) returns (SignNetworkUploadAck);
+  rpc ListEpisodes (ListEpisodesRequest) returns (ListEpisodesReply);
+  // trainer 提交局面重搜任务（异步：入队后由 GetTask 分发给任意 worker）
+  rpc SubmitReanalysis (SubmitReanalysisRequest) returns (SubmitReanalysisReply);
+  // trainer 拉取运行时可调训练配置（启动 bootstrap + 运行中热更）
+  rpc GetTrainConfig (GetTrainConfigRequest) returns (GetTrainConfigReply);
+  // trainer 消费心跳（生成-消费平衡：调度器据消费水位判定停滞并自动调整派发）
+  rpc TrainerHeartbeat (TrainerHeartbeatRequest) returns (TrainerHeartbeatReply);
+  // worker 上报特征包元数据并领取预签名 PUT（在线自对弈与 TASK_DERIVE_FEATURES 共用）
+  rpc ReportFeaturePack (FeaturePackMeta) returns (FeaturePackAck);
+  // trainer 请求补派特征包（记录在、包缺失；调度器入队 TASK_DERIVE_FEATURES）
+  rpc RequestFeaturePack (FeaturePackRequest) returns (FeaturePackReply);
+}

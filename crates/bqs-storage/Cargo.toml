@@ -1,0 +1,20 @@
+[package]
+name = "bqs-storage"
+version.workspace = true
+edition.workspace = true
+description = "banqi-scheduler 存储适配器：S3 兼容对象存储的 SigV4 预签名 + 存储Profile 热切换"
+
+[dependencies]
+bqs-core = { workspace = true }
+bqs-config = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+ureq = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
