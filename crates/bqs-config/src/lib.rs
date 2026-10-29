@@ -127,7 +127,7 @@ pub struct StorageSection {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct SelfplaySection {
-    /// 下发给 worker/trainer 的变体 id（须在 variants.json 中登记）
+    /// 下发给 worker/trainer 的变体 id（须在 bq-env 变体表中登记）
     pub variant: String,
     /// selfplay 每次下发的局数
     pub games_per_task: i32,

@@ -146,7 +146,7 @@ impl Server {
         // 旧版训练端忽略该字段）。
         let variant = &self.cfg.selfplay.variant;
         let meta = variants::lookup(variant).ok_or_else(|| {
-            CoreError::Internal(format!("变体 {variant} 未在 variants.json 登记（应启动即失败）"))
+            CoreError::Internal(format!("变体 {variant} 未在 bq-env 变体表登记（应启动即失败）"))
         })?;
         let (should_stop, stop_reason) = self.ctl.should_stop();
         Ok(GetInfoReply {

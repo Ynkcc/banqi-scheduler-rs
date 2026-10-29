@@ -46,6 +46,9 @@ sha2 = "0.10"
 hex = "0.4"
 # HeadBucket 连通性校验（唯一网络调用点；scheduler 本身无 TLS 监听）
 ureq = { version = "2", default-features = false, features = ["tls"] }
+# 跨仓库依赖：banqi-core 领域核心（仅取 bq-env 环境层作为变体元数据唯一真源，
+# 不引入搜索/NNUE 等重量级 crate；路径指向上级仓库 banqi-core workspace）
+bq-env = { path = "../banqi-core/crates/bq-env" }
 
 # 内部 crate
 bqs-proto = { path = "crates/bqs-proto" }

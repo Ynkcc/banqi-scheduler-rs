@@ -276,7 +276,7 @@ message SubmitReanalysisReply {
 // 调度器全局信息（trainer 启动时获取变体，无需命令行传入）
 message GetInfoRequest {}
 
-// 变体对局元信息（单一真源：banqi-core::Variant，调度器经 variants.json 持有）。
+// 变体对局元信息（单一真源：banqi-core::Variant，调度器经 bq-env path 依赖编译期直取）。
 // 只下发训练真正需要的对局元数据；网络结构等训练专属字段由训练端本地维护。
 message VariantMeta {
   string id = 1;                            // 稳定标识（Variant::as_str()）

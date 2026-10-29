@@ -93,5 +93,5 @@ cargo test --workspace        # 全部单测（判定向量 / 迁移链 / 子系
   `networks/<sha>.<onnx|pt|nnue>`（三端各有一份派生实现）；
 - 评估对手标识 ↔ collector `rule_opponents.rs`；
 - 训练超参白名单 ↔ `banqi_training/config.py` 的 `TRAIN_CONFIG_OVERRIDABLE`；
-- `variants.json` 由 `banqi-core` 生成（`cargo run -p banqi-core --bin variants_meta`），
-  新增变体后须重新生成到 `crates/bqs-core/resources/variants.json`。
+- 变体元数据经跨仓库 path 依赖直取 `banqi-core/crates/bq-env`（编译期构建，
+  无手工拷贝；`bqs-core` 的 `variants.rs` 是唯一消费点），新增变体后重编译即生效。

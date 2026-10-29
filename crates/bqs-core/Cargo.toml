@@ -8,6 +8,7 @@ description = "banqi-scheduler 领域内核：ports（端口 trait）+ 各独立
 bqs-proto = { workspace = true }
 bqs-config = { workspace = true }
 bqs-judgment = { workspace = true }
+bq-env = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
