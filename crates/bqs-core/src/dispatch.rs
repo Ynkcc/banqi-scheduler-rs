@@ -86,6 +86,9 @@ pub struct RunningTask {
     /// Assigned 状态的超期时间点（Unix 秒）；超期由 prune 迁移到 Expired。
     /// eval 认领路径经 `register_in_flight` 绕过通用 deadline（见 Go 版 F4-P1）。
     pub deadline: i64,
+    /// 所属统一 Job 的 id（collect / selfplay / eval 任务非空；其余任务为空串）。
+    /// 抢占取消（按 job 取消在飞）与派发记账的内存依据；上报聚合依据落库（job_tasks）。
+    pub job_id: String,
 }
 
 impl Default for RunningTask {
@@ -104,6 +107,7 @@ impl Default for RunningTask {
             opponent_spec: String::new(),
             games: 0,
             deadline: 0,
+            job_id: String::new(),
         }
     }
 }
@@ -117,10 +121,12 @@ impl RunningTask {
 
 /// 按任务类别给出「已下发 → 超期」的期限秒数。
 /// eval / reanalysis 沿用 15 分钟口径（与 `EVAL_TASK_STALE_AFTER` 同值——两者本就是
-/// 同一语义「超时未上报即让位重下发」）。
+/// 同一语义「超时未上报即让位重下发」）；collect 走 `COLLECT_TASK_DEADLINE`
+///（含搜索的采集对打更慢）。
 fn deadline_secs(kind: TaskKind) -> i64 {
     match kind {
         TaskKind::TaskEval | TaskKind::TaskReanalysis => consts::EVAL_TASK_STALE_AFTER.as_secs() as i64,
+        TaskKind::TaskCollect => consts::COLLECT_TASK_DEADLINE.as_secs() as i64,
         _ => TASK_DEADLINE_DEFAULT.as_secs() as i64,
     }
 }
@@ -169,6 +175,20 @@ impl TaskDispatcher {
     /// 从任务表移除记录（eval 组装失败时释放在飞认领）。
     pub fn delete(&self, task_id: &str) {
         self.inner.lock().unwrap().tasks.remove(task_id);
+    }
+
+    /// 覆盖任务的超期时间点（登记后的调用方定制：如 [jobs].collect_deadline_seconds）。
+    pub fn override_deadline(&self, task_id: &str, deadline: i64) {
+        if let Some(t) = self.inner.lock().unwrap().tasks.get_mut(task_id) {
+            t.deadline = deadline;
+        }
+    }
+
+    /// 回填任务所属统一 Job 的 id（eval 认领路径先登记后映射时使用）。
+    pub fn set_task_job(&self, task_id: &str, job_id: &str) {
+        if let Some(t) = self.inner.lock().unwrap().tasks.get_mut(task_id) {
+            t.job_id = job_id.to_string();
+        }
     }
 
     /// 读取任务记录。返回**快照副本**（Go 版 F4-P1 教训：共享可变状态在锁外读

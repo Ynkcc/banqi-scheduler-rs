@@ -23,6 +23,7 @@
 
 pub mod handlers_control;
 pub mod handlers_episodes;
+pub mod handlers_jobs;
 pub mod handlers_eval;
 pub mod handlers_replay;
 pub mod handlers_status;
@@ -199,6 +200,9 @@ pub fn router(state: AppState) -> Router {
                 .delete(handlers_storage::profile_delete),
         )
         .route("/api/storage/activate", post(handlers_storage::activate))
+        // 统一 Job 机制（collect / selfplay / eval job 的提交 / 进度 / 控制）
+        .route("/api/jobs", get(handlers_jobs::list_jobs).post(handlers_jobs::submit_job))
+        .route("/api/jobs/{id}/{action}", post(handlers_jobs::control_job))
         // 控制
         .route("/api/control", post(handlers_control::control))
         .layer(DefaultBodyLimit::max(MAX_BODY_LIMIT))

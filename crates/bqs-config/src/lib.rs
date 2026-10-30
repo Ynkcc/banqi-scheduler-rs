@@ -74,6 +74,8 @@ pub struct Config {
     pub reanalysis: ReanalysisSection,
     pub balance: BalanceSection,
     pub eval: EvalSection,
+    /// 统一 Job 机制：采集 job 派发参数 + 默认优先级
+    pub jobs: JobsSection,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -262,6 +264,32 @@ impl Default for EvalSection {
             rollback_eps: 0.04,
             floor_win_rate: 0.0,
             stop_win_rate: 0.0,
+        }
+    }
+}
+
+/// 统一 Job 机制配置（[jobs] 段）：采集 job 派发参数 + 默认优先级。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct JobsSection {
+    /// 采集 job（JOB_COLLECT）单任务局数额度；0 = 回落 selfplay.games_per_task
+    pub collect_games_per_task: i64,
+    /// 采集任务超期期限（秒；0 = 用内置默认 1800）
+    pub collect_deadline_seconds: i64,
+    /// 默认优先级（SubmitJob priority=0 时按 kind 回落）
+    pub priority_selfplay: i64,
+    pub priority_collect: i64,
+    pub priority_eval: i64,
+}
+
+impl Default for JobsSection {
+    fn default() -> Self {
+        Self {
+            collect_games_per_task: 0,
+            collect_deadline_seconds: 1800,
+            priority_selfplay: 0,
+            priority_collect: 50,
+            priority_eval: 100,
         }
     }
 }

@@ -30,6 +30,7 @@ use crate::{
     evalcoord::EvalCoordinator,
     featurepack::{feature_pack_key, DeriveQueue, PendingDerive, DEFAULT_FEATURE_PACK_VERSION},
     gatekeeper::Gatekeeper,
+    jobs::{JobManager, JobSpecJson},
     ports::{Clock, ObjectSigner, Ports},
     reanalysis::{PendingReanalysis, ReanaQueue},
     reports::{lookup_report_task, ReportRouter},
@@ -55,6 +56,7 @@ pub struct Server {
     pub balance: Arc<BalanceMonitor>,
     pub reana: Arc<ReanaQueue>,
     pub derive: Arc<DeriveQueue>,
+    pub jobs: Arc<JobManager>,
     pub ctl: Arc<Control>,
 
     // 任务组装层（无状态读 + 签名）
@@ -90,6 +92,16 @@ impl Server {
         let balance = Arc::new(BalanceMonitor::new(&ports, cfg.clone(), clock.clone(), ctl.clone()));
         let reana = Arc::new(ReanaQueue::new(&ports, cfg.clone(), clock.clone()));
         let derive = Arc::new(DeriveQueue::new(&ports, cfg.clone(), clock.clone()));
+        let jobs = Arc::new(JobManager::new(
+            ports.jobs.clone(),
+            disp.clone(),
+            ports.networks.clone(),
+            ctl.clone(),
+            cfg.clone(),
+            clock.clone(),
+        ));
+        // evalcoord 是评估轮发起方：作业入队成功时同步创建 JOB_EVAL job（Weak 注入防环）
+        evalc.set_job_hook(&jobs);
 
         let asm = Arc::new(TaskAssembler::new(
             ports.networks.clone(),
@@ -97,8 +109,9 @@ impl Server {
             cfg.clone(),
             ctl.clone(),
         ));
-        let router = Arc::new(ReportRouter::new(evalc.clone(), gate.clone(), disp.clone()));
+        let router = Arc::new(ReportRouter::new(evalc.clone(), gate.clone(), disp.clone(), jobs.clone()));
         let sources = Sources::assemble(
+            jobs.clone(),
             evalc.clone(),
             reana.clone(),
             derive.clone(),
@@ -113,6 +126,12 @@ impl Server {
         // 启动补齐：当前 best 若有未评测的对手（新增评测配置 / 上次被中断）立即入队
         //（Go 版 New() 末尾的 ensureBestEvaluated；restore 已在 EvalCoordinator::new 内完成）。
         evalc.ensure_best_evaluated();
+        // 统一 Job 机制引导：确保持续型 selfplay job（total=0）存在；running job
+        // 的行已在库（重启恢复重新载入），在飞任务视为丢失（deadline 兜底）。
+        // 引导失败 = 存储故障，拒绝启动（与 Control::new 的 panic 约定一致）。
+        if let Err(e) = jobs.ensure_selfplay_job() {
+            panic!("[jobs] selfplay job 引导失败，拒绝启动: {e}");
+        }
 
         Arc::new(Self {
             cfg,
@@ -125,6 +144,7 @@ impl Server {
             balance,
             reana,
             derive,
+            jobs,
             ctl,
             asm,
             router,
@@ -229,7 +249,9 @@ impl Server {
                 });
             }
         };
-        if task.network_sha != meta.network_sha {
+        // 归属校验：collect 任务（JOB_COLLECT）无单一主网络（双方棋手各自加载），
+        // network_sha 为空即放宽比对；其余任务保持严格一致。
+        if !task.network_sha.is_empty() && task.network_sha != meta.network_sha {
             return Ok(EpisodeAck {
                 accepted: false,
                 message: format!(
@@ -286,6 +308,12 @@ impl Server {
         );
         // 状态机：上报即完成（Assigned → Completed）；幂等重发同样标记完成
         self.disp.mark_done(&meta.task_id);
+        // 统一 Job 机制：collect / selfplay job 的完成口径聚合（ReportEpisode 的
+        // game_count；先落库后更新计数，映射在 job_tasks）。无映射（rating /
+        // reanalysis / derive 等）静默忽略。
+        if let Err(e) = self.jobs.record_report(&meta.task_id, meta.game_count as i64) {
+            tracing::warn!("[job] ⚠️ episode 上报聚合失败 task={}: {e}", meta.task_id);
+        }
         Ok(EpisodeAck {
             accepted: true,
             upload_url: url,
@@ -327,7 +355,90 @@ impl Server {
         if let Some(best) = best {
             reply.best_network = best.sha;
         }
+        // 统一 Job 机制：在途取消下发（job 收敛/抢占/取消时加入的取消集合；
+        // 下发即移除，worker 收到后尽快终止任务，已完成部分照常上报）。
+        reply.cancel_task_ids = self.jobs.cancel_task_ids_for_worker(&req.worker_id);
+        if !reply.cancel_task_ids.is_empty() {
+            tracing::info!(
+                "[job] 心跳下发在途取消 worker={} tasks={:?}",
+                req.worker_id, reply.cancel_task_ids
+            );
+        }
         Ok(reply)
+    }
+
+    // -----------------------------------------------------------------------
+    // 统一 Job 管理（SubmitJob / ListJobs / ControlJob）
+    // -----------------------------------------------------------------------
+
+    /// 提交 job（priority=0 = 按 kind 默认；规格校验失败 accepted=false 附原因）。
+    /// JOB_EVAL 额外登记 eval_queue 流式作业（聚合与派发统一走 evalcoord），
+    /// 登记失败回滚 job 行——否则 job 永远无任务可派发。
+    pub fn submit_job(&self, req: SubmitJobRequest) -> CoreResult<SubmitJobReply> {
+        let (accepted, message, job_id) = self.jobs.submit(&req)?;
+        if accepted && req.kind == JobKind::JobEval as i32 {
+            if let Some(e) = &req.eval {
+                let sha = if e.network_sha.is_empty() {
+                    self.ports
+                        .networks
+                        .get_best()?
+                        .map(|b| b.sha)
+                        .unwrap_or_default()
+                } else {
+                    e.network_sha.clone()
+                };
+                if let Err(err) =
+                    self.evalc
+                        .ensure_pending(&sha, &e.opponent_kind, &e.opponent_network_sha)
+                {
+                    self.jobs.control(&job_id, "cancel")?;
+                    return Err(err);
+                }
+            }
+        }
+        Ok(SubmitJobReply { accepted, message, job_id })
+    }
+
+    /// job 进度列表（completed_games 为上报口径，不含在飞；规格回显）。
+    pub fn list_jobs(&self, req: ListJobsRequest) -> CoreResult<ListJobsReply> {
+        let kind = req.kind_filter.map(|k| k as i64);
+        let rows = self.jobs.list(
+            if req.state_filter.is_empty() { None } else { Some(req.state_filter.as_str()) },
+            kind,
+        )?;
+        let jobs = rows.iter().map(|r| self.job_status(r)).collect();
+        Ok(ListJobsReply { jobs })
+    }
+
+    /// pause / resume / cancel（终态不可再控制）。
+    pub fn control_job(&self, req: JobControlRequest) -> CoreResult<JobControlReply> {
+        let (accepted, message, state) = self.jobs.control(&req.job_id, &req.control)?;
+        Ok(JobControlReply { accepted, message, state })
+    }
+
+    /// JobRow → proto JobStatus（规格回显解析失败时留空——落库数据损坏的防御）。
+    fn job_status(&self, r: &crate::ports::JobRow) -> JobStatus {
+        let kind = JobKind::try_from(r.kind as i32).unwrap_or(JobKind::JobCollect);
+        let (collect, selfplay, eval) = match JobSpecJson::parse(&r.spec_json) {
+            Some(JobSpecJson::Collect(c)) => (Some(c.to_proto()), None, None),
+            Some(JobSpecJson::SelfPlay(s)) => (None, Some(s.to_proto()), None),
+            Some(JobSpecJson::Eval(e)) => (None, None, Some(e.to_proto())),
+            None => (None, None, None),
+        };
+        JobStatus {
+            job_id: r.job_id.clone(),
+            kind: kind as i32,
+            priority: r.priority as u32,
+            state: r.state.clone(),
+            total_games: r.total_games as u64,
+            completed_games: r.completed_games as u64,
+            dispatched_games: r.dispatched_games as u64,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+            collect,
+            selfplay,
+            eval,
+        }
     }
 
     /// sha 或 best → 对象键 + 预签名 GET（空 download_url = 缺席）。

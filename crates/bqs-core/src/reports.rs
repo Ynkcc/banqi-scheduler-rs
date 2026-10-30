@@ -15,6 +15,7 @@ use crate::{
     dispatch::{RunningTask, TaskDispatcher, TaskState},
     evalcoord::EvalCoordinator,
     gatekeeper::Gatekeeper,
+    jobs::JobManager,
     CoreResult,
 };
 
@@ -49,6 +50,8 @@ pub struct ReportRouter {
     pub evalc: Arc<EvalCoordinator>,
     pub gate: Arc<Gatekeeper>,
     pub disp: Arc<TaskDispatcher>,
+    /// 统一 Job 机制：eval 上报的 job 完成口径聚合（completed += games）。
+    pub jobs: Arc<JobManager>,
 }
 
 impl ReportRouter {
@@ -56,8 +59,9 @@ impl ReportRouter {
         evalc: Arc<EvalCoordinator>,
         gate: Arc<Gatekeeper>,
         disp: Arc<TaskDispatcher>,
+        jobs: Arc<JobManager>,
     ) -> Self {
-        Self { evalc, gate, disp }
+        Self { evalc, gate, disp, jobs }
     }
 
     fn already_reported(task_id: &str) -> MatchResultAck {
@@ -78,7 +82,16 @@ impl ReportRouter {
         if task.state != TaskState::Assigned {
             return Ok(Some(Self::already_reported(&req.task_id)));
         }
-        Ok(Some(self.evalc.report_eval_result(task, req)?))
+        let ack = self.evalc.report_eval_result(task, req)?;
+        // 统一 Job 机制：eval job 的完成口径聚合（按 job_tasks 映射；无映射的
+        // 非 job 任务静默忽略）。先聚合（eval_queue 累加已在 report_eval_result
+        // 内落库），失败不回滚任务终态（job 计数行缺失时映射行已删，无双计）。
+        if ack.accepted {
+            if let Err(e) = self.jobs.record_report(&req.task_id, req.games as i64) {
+                tracing::warn!("[job] ⚠️ eval 上报聚合失败 task={}: {e}", req.task_id);
+            }
+        }
+        Ok(Some(ack))
     }
 
     /// gateSink：参与 gatekeeper 聚合的两种任务——显式 TASK_RATING（滚动升级

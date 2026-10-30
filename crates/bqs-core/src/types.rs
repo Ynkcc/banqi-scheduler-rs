@@ -56,6 +56,9 @@ impl Match {
 pub struct EvalQueueEntry {
     pub network_sha: String,
     pub opponent_spec: String,
+    /// 模型类对手的网络 sha（expectimax_nnue / mcts_resnet / policy_resnet）；
+    /// 规则类对手恒空串。
+    pub opponent_sha: String,
     pub target_games: i64,
     pub per_task_games: i64,
     pub attempts: i64,

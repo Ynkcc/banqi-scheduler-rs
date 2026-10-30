@@ -78,11 +78,13 @@ pub trait MatchStore: Send + Sync {
 /// best 谱系的写权（晋级 / 标记拒绝）不在此接口——回滚副作用经 `BestMutator` 注入。
 pub trait EvalStore: SettingsStore {
     fn load_eval_queue(&self) -> CoreResult<Vec<EvalQueueEntry>>;
-    /// 入队评估作业；返回 false = 已存在（幂等）
+    /// 入队评估作业；返回 false = 已存在（幂等）。
+    /// opponent_sha：模型类对手的网络 sha，规则类对手传空串。
     fn enqueue_eval_job(
         &self,
         network_sha: &str,
         spec: &str,
+        opponent_sha: &str,
         target_games: i64,
         per_task_games: i64,
     ) -> CoreResult<bool>;
@@ -243,6 +245,57 @@ pub struct FeaturePackDraft {
 }
 
 // ---------------------------------------------------------------------------
+// jobs / job_tasks 表：统一 Job 机制（collect / selfplay / eval）持久层
+// ---------------------------------------------------------------------------
+
+/// job 行（jobs 表投影；state: running | paused | completed | cancelled）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct JobRow {
+    pub job_id: String,
+    /// JobKind 的 i64 表示（0=collect 1=selfplay 2=eval）
+    pub kind: i64,
+    pub priority: i64,
+    pub state: String,
+    /// 目标局数；0 = 持续型
+    pub total_games: i64,
+    /// 已收到的真实上报局数（不含在飞）
+    pub completed_games: i64,
+    /// 已派发局数（含在飞）
+    pub dispatched_games: i64,
+    /// 规格回显（JobManager 的 spec JSON，结构见 bqs_core::jobs）
+    pub spec_json: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    /// job 级单调任务序号计数器（种子派生的可复现依据）
+    pub next_seq: i64,
+}
+
+/// task → job 映射行（job_tasks 表；上报聚合的跨重启依据）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobTaskLink {
+    pub task_id: String,
+    pub job_id: String,
+    pub games: i64,
+}
+
+pub trait JobStore: Send + Sync {
+    fn insert_job(&self, row: JobRow) -> CoreResult<()>;
+    fn get_job(&self, job_id: &str) -> CoreResult<Option<JobRow>>;
+    /// state/kind 过滤（None = 不过滤），按 priority DESC、created_at ASC 排序。
+    fn list_jobs(&self, state: Option<&str>, kind: Option<i64>) -> CoreResult<Vec<JobRow>>;
+    /// 状态迁移（终态迁移是否允许由调用方裁定）；返回是否发生迁移。
+    fn update_job_state(&self, job_id: &str, state: &str, now: i64) -> CoreResult<bool>;
+    /// 派发记账：dispatched_games += games 且任务序号 +1（单事务）。
+    fn incr_job_dispatched(&self, job_id: &str, games: i64, now: i64) -> CoreResult<JobRow>;
+    /// 完成聚合：completed_games += games（单事务读改写，返回聚合后的行）。
+    fn incr_job_completed(&self, job_id: &str, games: i64, now: i64) -> CoreResult<JobRow>;
+    fn insert_job_task(&self, task_id: &str, job_id: &str, games: i64) -> CoreResult<()>;
+    fn get_job_task(&self, task_id: &str) -> CoreResult<Option<JobTaskLink>>;
+    /// 聚合完成后删除映射（CAS 已防双计；控制映射表体积）。
+    fn delete_job_task(&self, task_id: &str) -> CoreResult<()>;
+}
+
+// ---------------------------------------------------------------------------
 // 对象签名（预签名 URL；凭据只在调度器持有，worker/trainer 零存储配置）
 // ---------------------------------------------------------------------------
 
@@ -290,6 +343,7 @@ pub struct Ports {
     pub workers: Arc<dyn WorkerStore>,
     pub trainer_registry: Arc<dyn TrainerRegistryStore>,
     pub feature_packs: Arc<dyn FeaturePackStore>,
+    pub jobs: Arc<dyn JobStore>,
 }
 
 // ---------------------------------------------------------------------------

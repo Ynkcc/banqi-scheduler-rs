@@ -78,16 +78,16 @@ mod tests {
             .unwrap();
         }
 
-        // Rust 版打开 Go 版旧库：补跑 v1..v8 全链。
+        // Rust 版打开 Go 版旧库：补跑 v1..v9 全链。
         let store = crate::Store::open(path.to_str().unwrap()).unwrap();
 
         let conn = store.conn.lock().unwrap();
-        // 记账表 v1..v8 全部登记
+        // 记账表 v1..v9 全部登记
         let versions: Vec<i64> = {
             let mut stmt = conn.prepare("SELECT version FROM schema_migrations ORDER BY version").unwrap();
             stmt.query_map([], |r| r.get(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap()
         };
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 
         // 列探测补列终态：逐表抽查 v2/v4/v5/v6/v8 补的列
         for (table, col) in [

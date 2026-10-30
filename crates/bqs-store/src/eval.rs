@@ -13,10 +13,11 @@ use rusqlite::OptionalExtension;
 const EVAL_RESULT_COLUMNS: &str = "id, network_sha, opponent_spec, wins, draws, losses, \
      red_wins, black_wins, draw_no_capture, draw_truncation, num_games, avg_moves, created_at";
 
-/// eval_queue 全列序（对照 Go 版 LoadEvalQueue 的 14 列）。
+/// eval_queue 全列序（对照 Go 版 LoadEvalQueue 的 14 列 + v10 追加的 opponent_sha）。
 const EVAL_QUEUE_FULL_COLUMNS: &str = "network_sha, opponent_spec, target_games, \
      per_task_games, attempts, wins, draws, losses, \
-     red_wins, black_wins, draw_no_capture, draw_truncation, num_games, created_at";
+     red_wins, black_wins, draw_no_capture, draw_truncation, num_games, created_at, \
+     opponent_sha";
 
 fn scan_queue_full(row: &rusqlite::Row<'_>) -> rusqlite::Result<EvalQueueEntry> {
     Ok(EvalQueueEntry {
@@ -34,6 +35,7 @@ fn scan_queue_full(row: &rusqlite::Row<'_>) -> rusqlite::Result<EvalQueueEntry> 
         draw_truncation: row.get(11)?,
         num_games: row.get(12)?,
         created_at: row.get(13)?,
+        opponent_sha: row.get(14)?,
     })
 }
 
@@ -77,6 +79,7 @@ impl EvalStore for Store {
         &self,
         network_sha: &str,
         spec: &str,
+        opponent_sha: &str,
         target_games: i64,
         per_task_games: i64,
     ) -> CoreResult<bool> {
@@ -85,9 +88,9 @@ impl EvalStore for Store {
             let n = conn
                 .execute(
                     "INSERT OR IGNORE INTO eval_queue
-						(network_sha, opponent_spec, target_games, per_task_games, attempts, created_at)
-					 VALUES (?,?,?,?,0,?)",
-                    rusqlite::params![network_sha, spec, target_games, per_task_games, now],
+						(network_sha, opponent_spec, target_games, per_task_games, attempts, created_at, opponent_sha)
+					 VALUES (?,?,?,?,0,?,?)",
+                    rusqlite::params![network_sha, spec, target_games, per_task_games, now, opponent_sha],
                 )
                 .map_err(StoreError::from)?;
             Ok(n > 0)
@@ -181,6 +184,7 @@ impl EvalStore for Store {
                         Ok(EvalQueueEntry {
                             network_sha: network_sha.to_string(),
                             opponent_spec: spec.to_string(),
+                            opponent_sha: String::new(),
                             target_games: row.get(0)?,
                             per_task_games: row.get(1)?,
                             attempts: row.get(2)?,
@@ -223,6 +227,7 @@ impl EvalStore for Store {
                     Ok(EvalQueueEntry {
                         network_sha: network_sha.to_string(),
                         opponent_spec: spec.to_string(),
+                        opponent_sha: String::new(),
                         target_games: row.get(0)?,
                         per_task_games: row.get(1)?,
                         attempts: row.get(2)?,
@@ -390,8 +395,8 @@ mod tests {
         let (_dir, s) = crate::testutil::open_temp_store();
 
         // 入队幂等
-        assert!(ES::enqueue_eval_job(&*s, "n1", "rule:x", 100, 20).unwrap());
-        assert!(!ES::enqueue_eval_job(&*s, "n1", "rule:x", 100, 20).unwrap());
+        assert!(ES::enqueue_eval_job(&*s, "n1", "rule:x", "", 100, 20).unwrap());
+        assert!(!ES::enqueue_eval_job(&*s, "n1", "rule:x", "", 100, 20).unwrap());
 
         // 累加增量（attempts 清零）
         ES::inc_eval_job_attempts(&*s, "n1", "rule:x").unwrap();
@@ -421,8 +426,8 @@ mod tests {
         ES::delete_eval_job(&*s, "n1", "rule:x").unwrap();
 
         // load 排序：created_at, sha, spec
-        ES::enqueue_eval_job(&*s, "b", "rule", 10, 5).unwrap();
-        ES::enqueue_eval_job(&*s, "a", "rule", 10, 5).unwrap();
+        ES::enqueue_eval_job(&*s, "b", "rule", "", 10, 5).unwrap();
+        ES::enqueue_eval_job(&*s, "a", "rule", "", 10, 5).unwrap();
         let all = ES::load_eval_queue(&*s).unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].network_sha, "a");

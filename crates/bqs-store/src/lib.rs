@@ -18,6 +18,9 @@
 mod episodes;
 mod eval;
 mod featurepacks;
+mod jobs;
+#[cfg(test)]
+mod jobs_tests;
 mod matches;
 mod networks;
 mod trainers;
@@ -39,6 +42,8 @@ pub enum StoreError {
     Sqlite(#[from] rusqlite::Error),
     #[error("migration v{version} ({name}): {message}")]
     Migration { version: i64, name: &'static str, message: String },
+    #[error("unexpected state: {0}")]
+    Unexpected(String),
 }
 
 impl From<StoreError> for CoreError {
@@ -101,7 +106,8 @@ const _: () = {
                 + ports::EpisodeStore
                 + ports::WorkerStore
                 + ports::TrainerRegistryStore
-                + ports::FeaturePackStore,
+                + ports::FeaturePackStore
+                + ports::JobStore,
         {
         }
         assert_impl::<Store>();

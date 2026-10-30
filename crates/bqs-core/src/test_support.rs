@@ -11,9 +11,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::{
     ports::{
-        Clock, EpisodeStore, EvalStore, FeaturePackDraft, FeaturePackStore, MatchStore,
-        NetworkStore, ObjectSigner, Ports, SettingsStore, TrainerRegistryStore, TrainerStore,
-        WorkerStore,
+        Clock, EpisodeStore, EvalStore, FeaturePackDraft, FeaturePackStore, JobRow, JobStore,
+        JobTaskLink, MatchStore, NetworkStore, ObjectSigner, Ports, SettingsStore,
+        TrainerRegistryStore, TrainerStore, WorkerStore,
     },
     types::{
         Episode, EpisodeDraft, EvalDelta, EvalQueueEntry, EvalResult, FeaturePack, Match, Network,
@@ -419,10 +419,11 @@ impl FakeEval {
         &self,
         network_sha: &str,
         spec: &str,
+        opponent_sha: &str,
         target_games: i64,
         per_task_games: i64,
     ) -> CoreResult<bool> {
-        EvalStore::enqueue_eval_job(self, network_sha, spec, target_games, per_task_games)
+        EvalStore::enqueue_eval_job(self, network_sha, spec, opponent_sha, target_games, per_task_games)
     }
 
     pub fn delete_eval_job(&self, network_sha: &str, spec: &str) -> CoreResult<()> {
@@ -506,6 +507,7 @@ impl EvalStore for FakeEval {
         &self,
         network_sha: &str,
         spec: &str,
+        opponent_sha: &str,
         target_games: i64,
         per_task_games: i64,
     ) -> CoreResult<bool> {
@@ -519,6 +521,7 @@ impl EvalStore for FakeEval {
         g.queue.push(EvalQueueEntry {
             network_sha: network_sha.to_string(),
             opponent_spec: spec.to_string(),
+            opponent_sha: opponent_sha.to_string(),
             target_games,
             per_task_games,
             attempts: 0,
@@ -947,6 +950,112 @@ impl FeaturePackStore for FakePacks {
     }
 }
 
+// ---------------------------------------------------------------------------
+// jobs（统一 Job 机制）
+// ---------------------------------------------------------------------------
+
+/// jobs 表内存 fake（完整实现，供 JobManager 单测与装配束使用）。
+#[derive(Debug, Default)]
+pub struct FakeJobs {
+    inner: Mutex<FakeJobsInner>,
+}
+
+#[derive(Debug, Default)]
+struct FakeJobsInner {
+    jobs: HashMap<String, JobRow>,
+    tasks: HashMap<String, JobTaskLink>,
+    next_id: i64,
+}
+
+impl JobStore for FakeJobs {
+    fn insert_job(&self, row: JobRow) -> CoreResult<()> {
+        self.inner.lock().unwrap().jobs.insert(row.job_id.clone(), row);
+        Ok(())
+    }
+
+    fn get_job(&self, job_id: &str) -> CoreResult<Option<JobRow>> {
+        Ok(self.inner.lock().unwrap().jobs.get(job_id).cloned())
+    }
+
+    fn list_jobs(&self, state: Option<&str>, kind: Option<i64>) -> CoreResult<Vec<JobRow>> {
+        let inner = self.inner.lock().unwrap();
+        let mut rows: Vec<JobRow> = inner
+            .jobs
+            .values()
+            .filter(|j| state.is_none_or(|s| j.state == s) && kind.is_none_or(|k| j.kind == k))
+            .cloned()
+            .collect();
+        rows.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.created_at.cmp(&b.created_at)));
+        Ok(rows)
+    }
+
+    fn update_job_state(&self, job_id: &str, state: &str, now: i64) -> CoreResult<bool> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.jobs.get_mut(job_id) {
+            Some(j) => {
+                j.state = state.to_string();
+                j.updated_at = now;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn incr_job_dispatched(&self, job_id: &str, games: i64, now: i64) -> CoreResult<JobRow> {
+        let mut inner = self.inner.lock().unwrap();
+        let j = inner
+            .jobs
+            .get_mut(job_id)
+            .ok_or_else(|| CoreError::Store(format!("job {job_id} not found")))?;
+        j.dispatched_games += games;
+        j.next_seq += 1;
+        j.updated_at = now;
+        Ok(j.clone())
+    }
+
+    fn incr_job_completed(&self, job_id: &str, games: i64, now: i64) -> CoreResult<JobRow> {
+        let mut inner = self.inner.lock().unwrap();
+        let j = inner
+            .jobs
+            .get_mut(job_id)
+            .ok_or_else(|| CoreError::Store(format!("job {job_id} not found")))?;
+        j.completed_games += games;
+        j.updated_at = now;
+        Ok(j.clone())
+    }
+
+    fn insert_job_task(&self, task_id: &str, job_id: &str, games: i64) -> CoreResult<()> {
+        self.inner.lock().unwrap().tasks.insert(
+            task_id.to_string(),
+            JobTaskLink { task_id: task_id.to_string(), job_id: job_id.to_string(), games },
+        );
+        Ok(())
+    }
+
+    fn get_job_task(&self, task_id: &str) -> CoreResult<Option<JobTaskLink>> {
+        Ok(self.inner.lock().unwrap().tasks.get(task_id).cloned())
+    }
+
+    fn delete_job_task(&self, task_id: &str) -> CoreResult<()> {
+        self.inner.lock().unwrap().tasks.remove(task_id);
+        Ok(())
+    }
+}
+
+impl FakeJobs {
+    /// 预置一个 job 行（测试种子数据）。
+    pub fn seed_job(&self, row: JobRow) {
+        self.inner.lock().unwrap().jobs.insert(row.job_id.clone(), row);
+    }
+
+    /// 自增 id 生成器（测试构造 job_id 用）。
+    pub fn next_id(&self) -> i64 {
+        let mut inner = self.inner.lock().unwrap();
+        inner.next_id += 1;
+        inner.next_id
+    }
+}
+
 /// 预签名 URL fake：`put:<key>` / `get:<key>`（测试断言对象键即可）。
 #[derive(Debug, Default)]
 pub struct FakeSigner;
@@ -979,6 +1088,7 @@ pub struct Fakes {
     pub episodes: Arc<FakeEpisodes>,
     pub workers: Arc<FakeWorkers>,
     pub packs: Arc<FakePacks>,
+    pub jobs: Arc<FakeJobs>,
     pub signer: Arc<FakeSigner>,
 }
 
@@ -1000,6 +1110,7 @@ impl Fakes {
             episodes: Arc::new(FakeEpisodes::default()),
             workers: Arc::new(FakeWorkers::default()),
             packs: Arc::new(FakePacks::default()),
+            jobs: Arc::new(FakeJobs::default()),
             signer: Arc::new(FakeSigner),
         }
     }
@@ -1015,6 +1126,7 @@ impl Fakes {
             workers: self.workers.clone(),
             trainer_registry: self.registry.clone(),
             feature_packs: self.packs.clone(),
+            jobs: self.jobs.clone(),
         }
     }
 }

@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use bqs_config::Config;
-use bqs_proto::{DataKind, SelfPlayParams, TaskKind, TaskRequest, TaskResponse};
+use bqs_proto::{CollectionJobSpec, DataKind, SelfPlayParams, TaskKind, TaskRequest, TaskResponse};
 
 use crate::{
     consts,
@@ -388,6 +388,7 @@ impl TaskAssembler {
     /// 组装评估任务：被测网络 vs 指定对手标识。
     ///
     /// 对手为规则/内建策略时不存在网络文件，故不签发 opponent_key / opponent_url；
+    /// 模型类对手（pending.opponent_sha 非空）签发对手网络下载（同 rating 口径）。
     /// 搜索模式由 params.mcts_sims 表达（0 = 纯策略 argmax，>0 = MCTS 模拟数）。
     /// 分片局数已由 EvalCoordinator.claim_eval_task 按净剩余与线程缩放截断
     /// （登记进 dispatcher 任务表，games 由调用方从任务快照回查）。
@@ -423,6 +424,25 @@ impl TaskAssembler {
             ..Default::default()
         };
         self.with_network_download(req, &mut resp, &job.network_sha, &key)?;
+        // 模型类对手：签发对手网络对象键与下载 URL（worker 经 opponent_sha 加载）。
+        if !job.opponent_sha.is_empty() {
+            let opp = self
+                .nets
+                .get_network(&job.opponent_sha)?
+                .ok_or_else(|| {
+                    CoreError::Internal(format!(
+                        "eval opponent network not found sha={}",
+                        job.opponent_sha
+                    ))
+                })?;
+            let opp_key = network_key(&opp.sha, &opp.format);
+            resp.opponent_sha = opp.sha.clone();
+            resp.opponent_key = opp_key.clone();
+            match self.signer.presign_get(&opp_key, self.ttl_secs()) {
+                Ok(url) => resp.opponent_url = url,
+                Err(e) => tracing::warn!("预签名对手 URL 失败 key={opp_key}: {e}"),
+            }
+        }
         Ok(resp)
     }
 
@@ -463,6 +483,36 @@ impl TaskAssembler {
         };
         self.with_network_download(req, &mut resp, &best.sha, &key)?;
         Ok(resp)
+    }
+
+    /// 组装参数化采集任务（TASK_COLLECT，JOB_COLLECT 的下发形态）：规格经
+    /// collect_spec 原样透传，承担局数与开局种子由调用方（JobSource）按 job
+    /// 规格与 worker 线程解析。采集任务无单一主网络（双方棋手各自按 spec 加载）：
+    /// network_sha / network_key / network_url 恒空；ReportEpisode 的 network_sha
+    /// 归属校验对 collect 任务放宽（task.network_sha 为空即跳过比对，见
+    /// Server::report_episode）。extra_config 透传课程参数（与 selfplay 同口径）。
+    pub fn collect_task(
+        &self,
+        task_id: &str,
+        spec: &CollectionJobSpec,
+        games: u64,
+        seed: u64,
+    ) -> TaskResponse {
+        TaskResponse {
+            task_id: task_id.to_string(),
+            kind: TaskKind::TaskCollect as i32,
+            games: games as i32,
+            collect_spec: Some(spec.clone()),
+            collect_games: games,
+            collect_seed: seed,
+            params: Some(SelfPlayParams {
+                variant: spec.variant.clone(),
+                extra_config: self.extra_config(),
+                data_kind: spec.data_kind,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
     }
 
     /// 组装特征包补派任务响应（记录批次下载 URL 恒签发）。

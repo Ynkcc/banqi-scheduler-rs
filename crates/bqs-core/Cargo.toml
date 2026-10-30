@@ -9,6 +9,7 @@ bqs-proto = { workspace = true }
 bqs-config = { workspace = true }
 bqs-judgment = { workspace = true }
 bq-env = { workspace = true }
+bq-policy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

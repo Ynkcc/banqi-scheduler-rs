@@ -32,6 +32,7 @@ pub mod evalcoord;
 pub mod evalopponents;
 pub mod featurepack;
 pub mod gatekeeper;
+pub mod jobs;
 pub mod reanalysis;
 pub mod reports;
 pub mod sources;

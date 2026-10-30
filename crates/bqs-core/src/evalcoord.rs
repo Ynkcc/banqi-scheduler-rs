@@ -28,7 +28,7 @@
 //! 登记 disp 在飞任务」三步；「上报收尾」在 inner 锁内完成「完成在飞任务 + 更新
 //! 作业 + 达标即收尾聚合」，对齐「移出待办与置 Done 同锁」的原子语义。
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use bqs_config::Config;
 use bqs_judgment::judgment::{consecutive_no_progress, judge_rollback, judge_stop, RollbackVerdict};
@@ -120,6 +120,8 @@ impl BestMutator for StoreBestMutator {
 pub struct PendingEval {
     pub network_sha: String,
     pub opponent_spec: String,
+    /// 模型类对手的网络 sha（规则类对手恒空串）。
+    pub opponent_sha: String,
     pub target_games: i64,
     pub per_task_games: i64,
     pub attempts: i64,
@@ -209,6 +211,9 @@ pub struct EvalCoordinator {
     disp: Arc<TaskDispatcher>,
     mutator: Box<dyn BestMutator>,
     inner: Mutex<Inner>,
+    /// 统一 Job 机制钩子（装配后注入，Weak 防 Arc 环）：评估作业入队成功时
+    /// 同步创建对应 JOB_EVAL job（评估轮 = 每对手一个 job，派发经统一 Job 机制）。
+    job_hook: Mutex<Option<Weak<crate::jobs::JobManager>>>,
 }
 
 impl EvalCoordinator {
@@ -229,6 +234,7 @@ impl EvalCoordinator {
             disp,
             mutator: Box::new(StoreBestMutator::new(ports.networks.clone())),
             inner: Mutex::new(Inner::default()),
+            job_hook: Mutex::new(None),
         };
         this.restore_queue();
         this
@@ -293,6 +299,63 @@ impl EvalCoordinator {
         }
     }
 
+    // ---- 统一 Job 机制钩子 ---------------------------------------------------
+
+    /// 装配根在 JobManager 构造后注入（Weak：JobManager 持 evalc 引用，防环）。
+    pub fn set_job_hook(&self, jobs: &Arc<crate::jobs::JobManager>) {
+        *self.job_hook.lock().unwrap() = Some(Arc::downgrade(jobs));
+    }
+
+    /// 评估作业入队成功后同步创建 JOB_EVAL job（evalcoord 是评估轮的发起方）。
+    /// 钩子失败只告警不回滚（评估作业仍在 eval_queue，派发通道降级为不可用，
+    /// 不影响聚合判据链的正确性）。
+    fn notify_job_created(&self, sha: &str, spec: &str, opponent_sha: &str) {
+        let hook = self.job_hook.lock().unwrap().clone();
+        if let Some(jobs) = hook.and_then(|w| w.upgrade()) {
+            if let Err(e) = jobs.create_eval_job(sha, spec, opponent_sha) {
+                tracing::warn!("[eval] ⚠️ 创建 JOB_EVAL job 失败 network={sha} opponent={spec}: {e}");
+            }
+        }
+    }
+
+    /// 手动 JOB_EVAL 提交的配套登记：确保 (network, spec) 在 eval_queue 有流式
+    /// 作业行（聚合与判据链统一走 evalcoord）。已存在时幂等返回 false。
+    /// opponent_sha：模型类对手的网络 sha，规则类对手传空串。
+    pub fn ensure_pending(
+        &self,
+        network_sha: &str,
+        opponent_spec: &str,
+        opponent_sha: &str,
+    ) -> CoreResult<bool> {
+        let games = self.eval_games();
+        let mut per_task = self.cfg.eval.games_per_task;
+        if per_task <= 0 {
+            per_task = games;
+        }
+        let mut inner = self.inner.lock().unwrap();
+        if inner
+            .evals
+            .iter()
+            .any(|j| j.network_sha == network_sha && j.opponent_spec == opponent_spec)
+        {
+            return Ok(false);
+        }
+        let created =
+            self.eval
+                .enqueue_eval_job(network_sha, opponent_spec, opponent_sha, games, per_task)?;
+        if created {
+            inner.evals.push(PendingEval {
+                network_sha: network_sha.to_string(),
+                opponent_spec: opponent_spec.to_string(),
+                opponent_sha: opponent_sha.to_string(),
+                target_games: games,
+                per_task_games: per_task,
+                ..Default::default()
+            });
+        }
+        Ok(created)
+    }
+
     // ---- 启动恢复 ----------------------------------------------------------
 
     /// 启动时把上次进程退出前未收尾的 eval 待办从 DB 拉回内存。
@@ -323,6 +386,7 @@ impl EvalCoordinator {
                 per_task_games: if en.per_task_games <= 0 { fallback_per_task } else { en.per_task_games },
                 network_sha: en.network_sha,
                 opponent_spec: en.opponent_spec,
+                opponent_sha: en.opponent_sha,
                 target_games: en.target_games,
                 attempts: en.attempts,
                 wins: en.wins,
@@ -356,7 +420,7 @@ impl EvalCoordinator {
             {
                 continue;
             }
-            match self.eval.enqueue_eval_job(sha, spec, games, per_task) {
+            match self.eval.enqueue_eval_job(sha, spec, "", games, per_task) {
                 Ok(true) => {
                     inner.evals.push(PendingEval {
                         network_sha: sha.to_string(),
@@ -365,6 +429,7 @@ impl EvalCoordinator {
                         per_task_games: per_task,
                         ..Default::default()
                     });
+                    self.notify_job_created(sha, spec, "");
                     n += 1;
                 }
                 // DB 行已存在时不重入队列——留给启动恢复 loadEvalQueue 拉回来

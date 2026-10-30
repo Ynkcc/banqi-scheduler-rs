@@ -17,7 +17,7 @@ crates/
   bqs-config/     类型化配置树：未知键/未知 section 拒绝启动（serde deny_unknown_fields）
   bqs-judgment/   判定引擎（纯函数，无 I/O）：六桶 GSPRT + 停机/回滚/对打判据
   bqs-core/       领域内核：ports（端口 trait）+ 8 个独立持锁子系统 + RPC 编排门面
-  bqs-store/      适配器：SQLite（rusqlite/WAL）+ 版本化迁移链 v1..v8（可直接打开 Go 版库）
+  bqs-store/      适配器：SQLite（rusqlite/WAL）+ 版本化迁移链 v1..v9（可直接打开 Go 版库）
   bqs-storage/    适配器：S3 SigV4 预签名（手写实现 + 已知答案向量单测）+ 存储Profile 热切换
   bqs-api/        WebUI JSON API（axum，字段名与 Go 版逐字段一致，前端零改动可用）
   bqs-server/     二进制：装配根 + tonic 传输层 + 双监听 + 优雅停机
@@ -81,10 +81,42 @@ cargo test --workspace        # 全部单测（判定向量 / 迁移链 / 子系
 
 ## WebUI 路由摘要
 
-只读：`/api/status|networks|matches|eval|eval-config|workers|trainers|episodes|data-stats|tasks|task-stats|train-config|storage(/active|/profiles/{name})`
+只读：`/api/status|networks|matches|eval|eval-config|workers|trainers|episodes|data-stats|tasks|task-stats|train-config|storage(/active|/profiles/{name})`、
+`GET /api/jobs?state=&kind=`（统一 Job 进度列表，completedGames 为上报口径不含在飞）
 控制：`POST /api/networks/{sha}/promote`、`/api/eval/trigger`、`/api/control`、
-`/api/storage/activate`；`PUT /api/eval-config|train-config|workers/{id}/note|storage/profiles/{name}`；
+`/api/storage/activate`、`POST /api/jobs`（提交 job）、`POST /api/jobs/{id}/{pause|resume|cancel}`；
+`PUT /api/eval-config|train-config|workers/{id}/note|storage/profiles/{name}`；
 `DELETE /api/storage/profiles/{name}`。
+
+## 统一 Job 机制（collect / selfplay / eval 三类 job）
+
+契约见 `proto/scheduler.proto` 文件头「统一 Job 机制」注释段（`SubmitJob /
+ListJobs / ControlJob`、`JobStatus` 规格回显、`HeartbeatReply.cancel_task_ids`）。
+调度器侧核心语义：
+
+- **训练闭环全部走 job**：selfplay 由 `[selfplay]` 配置在启动时引导一个持续型
+  job（total_games=0）；eval 由 evalcoord 在评估轮开始时为每个对手自动建 job
+  （total 取 `[eval] games`），也可手动 `SubmitJob`。rating / reanalysis /
+  derive 保持既有通道。
+- **完成口径不含在飞**：completed_games 只按已收到的真实上报聚合（collect /
+  selfplay 按 `ReportEpisode.game_count`，eval 按 `ReportMatchResult.games`），
+  task→job 映射落库（`job_tasks` 表），先落库后更新计数——重启后迟到上报仍聚合。
+- **派发不受在飞封顶**：可派发 job（running 且 completed<total 或 total=0）按
+  优先级（priority DESC、created_at ASC）选源，按 worker 线程缩放局数（collect
+  向上取偶成对），允许在飞远超剩余需求。
+- **完成收敛 + 在途取消**：completed ≥ total（total>0）即置 completed，并把该
+  job 全部在飞任务经 `HeartbeatReply.cancel_task_ids` 下发取消（已上报部分不回滚）。
+- **优先级抢占**：更高优先级 job 变为可派发（提交/恢复）时立即取消全部更低
+  优先级 job 的在飞任务；GetTask 路径按 `JOB_PREEMPT_INTERVAL` 节流惰性兜底。
+  默认优先级 selfplay=0 / collect=50 / eval=100（`[jobs]` 段可配）。
+- **暂停/恢复/取消**：pause 停派发在飞做完；resume 恢复派发；cancel 停派发 +
+  取消全部在飞 + 终态 cancelled；终态不可再控制。
+- **提交校验**：variant ∈ {4x8, 4x8-fast, 4x4}；collect / eval 的 total_games
+  ≥2 偶数；player kind 白名单；模型类棋手 / eval 对手 network_sha 必须已在
+  网络存储登记。
+- **种子策略**（collect job）：fixed / random / incremental / range 逐任务由
+  job 级单调任务序号确定性解析（`bqs_core::jobs::resolve_seed`），经
+  `collect_seed` 下发，保证可复现。
 
 ## 跨端耦合备忘（改动必须三端同步）
 

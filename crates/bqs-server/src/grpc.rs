@@ -1,4 +1,4 @@
-//! tonic 传输层：14 个 RPC 逐一 decode → `tokio::task::spawn_blocking`（内核同步）
+//! tonic 传输层：17 个 RPC 逐一 decode → `tokio::task::spawn_blocking`（内核同步）
 //! → `CoreError` 映射 `Status::internal`。
 //!
 //! 业务拒绝不走 Err（accepted=false / message 在回包字段里，与 Go 版语义一致）；
@@ -147,6 +147,32 @@ impl SchedulerService for SchedulerSvc {
         request: tonic::Request<FeaturePackRequest>,
     ) -> Result<tonic::Response<FeaturePackReply>, tonic::Status> {
         let reply = forward!(self.0, request.into_inner(), request_feature_pack)?;
+        Ok(tonic::Response::new(reply))
+    }
+
+    // ---- 统一 Job 管理（collect / selfplay / eval）----
+
+    async fn submit_job(
+        &self,
+        request: tonic::Request<SubmitJobRequest>,
+    ) -> Result<tonic::Response<SubmitJobReply>, tonic::Status> {
+        let reply = forward!(self.0, request.into_inner(), submit_job)?;
+        Ok(tonic::Response::new(reply))
+    }
+
+    async fn list_jobs(
+        &self,
+        request: tonic::Request<ListJobsRequest>,
+    ) -> Result<tonic::Response<ListJobsReply>, tonic::Status> {
+        let reply = forward!(self.0, request.into_inner(), list_jobs)?;
+        Ok(tonic::Response::new(reply))
+    }
+
+    async fn control_job(
+        &self,
+        request: tonic::Request<JobControlRequest>,
+    ) -> Result<tonic::Response<JobControlReply>, tonic::Status> {
+        let reply = forward!(self.0, request.into_inner(), control_job)?;
         Ok(tonic::Response::new(reply))
     }
 }

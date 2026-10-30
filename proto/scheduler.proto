@@ -2,10 +2,13 @@
 // scheduler.proto — 全仓唯一真源（M3 schema 窗口收敛；本文件即单一来源，
 // 此前三仓各持副本，collector 副本已实际落后缺 VariantMeta）。
 //
+// 真源位置：banqi-scheduler-rs/proto/scheduler.proto（旧 Go 版 banqi-scheduler
+// 已退役归档至 archive/banqi-scheduler，契约不再挂其名下）。
+//
 // 各端引用方式（禁止再复制本文件）：
-// - banqi-scheduler: `make proto`（protoc --proto_path=proto proto/scheduler.proto）
-// - banqi-collector: build.rs compile_protos("../banqi-scheduler/proto/scheduler.proto")
-// - banqi-training:  `python gen_proto.py`（grpc_tools + import 改写）
+// - banqi-scheduler-rs: crates/bqs-proto/build.rs（../../proto/scheduler.proto）
+// - banqi-collector:    crates/bqc-proto/build.rs（../../../banqi-scheduler-rs/proto/scheduler.proto）
+// - banqi-training:     `python gen_proto.py`（grpc_tools + import 改写）
 //
 // 字段号只增不改；破坏性变更必须提升 schema_version，训练端遇到不认识的版本直接拒绝。
 // ============================================================================
@@ -54,10 +57,18 @@ message TaskResponse {
   string episode_object_key = 15;
   // 上述记录批次的预签名 GET URL（worker 下载记录批次用）；空 = 无。
   string episode_url = 16;
+  // 参数化采集任务（TASK_COLLECT）规格：变体/场景/种子策略/双方棋手/特征类别。
+  CollectionJobSpec collect_spec = 17;
+  // TASK_COLLECT：本任务承担的完整对局数（恒为偶数——按换色配对成对派发）。
+  uint64 collect_games = 18;
+  // TASK_COLLECT：本任务的开局种子（服务端按 job 的 SeedStrategy 逐任务解析后
+  // 下发；collector 以此派生 pair 种子，无需感知策略细节）。
+  uint64 collect_seed = 19;
 }
 
 enum TaskKind {
   TASK_NONE = 0;      // 无任务，按 message 退避轮询
+  // 训练闭环自对弈（由 JOB_SELFPLAY job 驱动派发；完成口径/抢占见文件头说明）
   TASK_SELFPLAY = 1;
   TASK_RATING = 2;    // gatekeeper / rating 对打
   // 局面重搜（reanalysis）：用当前 best 网络对下发的历史局面重跑搜索
@@ -67,11 +78,17 @@ enum TaskKind {
   // 绝对强度评估（eval）：指定网络 vs 规则/内建对手，只统计胜负、不产 episode、
   // 不参与 gatekeeper 晋级（结果落 eval_results，仅用于趋势观测与停机判据）。
   // 对手由 TaskResponse.opponent_spec 指定；评估模式由 SelfPlayParams.mcts_sims 决定。
+  // （由 JOB_EVAL job 驱动派发。）
   TASK_EVAL = 4;
   // 特征包补派（derive features）：下载指定记录批次（GameRecord v2），用
   // banqi-core 特征编码器派生 FeaturePack 并经 ReportFeaturePack 上传。
   // 目标批次由 TaskResponse.episode_object_key / episode_url 指定。
   TASK_DERIVE_FEATURES = 5;
+  // 参数化采集任务（collection）：按 CollectionJobSpec 执行双方自由组合的对打
+  // /自对弈，产出 data_kind 指定类别的训练记录与特征包（走 ReportEpisode 常规
+  // 通道）。规格经 TaskResponse.collect_spec 下发；承担局数与开局种子见
+  // collect_games / collect_seed。
+  TASK_COLLECT = 6;
 }
 
 // 产线栈标识：决定 worker 用哪套搜索栈产数据、trainer 消费哪类特征包。
@@ -218,6 +235,9 @@ message HeartbeatReply {
   float temperature = 3;
   bool playout_cap_random = 4;
   string best_network = 5;      // 当前 best sha（供 worker 判断是否换网）
+  // 需要立即中止的在飞任务 id（如所属采集 job 已被取消）。worker 收到后应尽快
+  // 终止对应任务；已完成的部分照常走 ReportEpisode 上报（取消≠作废）。
+  repeated string cancel_task_ids = 6;
 }
 
 // trainer 请求签发网络上传预签名 PUT（R2 凭据只在调度器持有，trainer 零配置）
@@ -539,6 +559,184 @@ message FeaturePackReply {
   string download_url = 5;      // 预签名 GET URL（ready=true 时有效）
 }
 
+// ============================================================================
+// 统一 Job 机制（训练数据生产 / 评估统一建模）
+//
+// 使用方（WebUI / 运维 CLI）经 SubmitJob 提交一份 job（种类 + 规格 + 优先级 +
+// 目标局数），调度器登记后复用既有任务拆分/分发逻辑（按 worker 线程缩放局数、
+// 偶数成对、deadline 超期回收重派）逐批下发对应 TaskKind 的任务：
+//   JOB_COLLECT  → TASK_COLLECT   参数化采集（双方自由组合对打/自对弈）
+//   JOB_SELFPLAY → TASK_SELFPLAY  训练闭环自对弈数据生产（total_games=0 = 持续产数）
+//   JOB_EVAL     → TASK_EVAL      绝对强度评估（只统计胜负，不产训练数据）
+//
+// 完成口径（关键约定）：
+// - completed_games 只按「已收到的真实上报」聚合（collect/selfplay 走
+//   ReportEpisode 局数；eval 走 ReportMatchResult 局数），不含在飞；
+// - 派发不受在飞封顶：只要 completed < total（或 total=0 持续型）就继续按
+//   worker 线程缩放派发，允许在飞远超剩余需求局数；
+// - completed ≥ total 即置 completed，并立即取消该 job 全部在飞任务
+//   （HeartbeatReply.cancel_task_ids），因此实际收集数量只多不少。
+//
+// 优先级抢占：priority 数值越大越优先。同一时刻至多允许「当前最高可派发优先
+// 级」的 job 占用在飞任务；更高优先级 job 变为可派发（提交/恢复）时，立即取消
+// 全部更低优先级 job 的在飞任务（在途取消，已完成上报照常计入）。同优先级按
+// created_at 先到先派。默认优先级：selfplay=0（训练闭环兜底）、collect=50、
+// eval=100（提交时 priority=0 表示用该 kind 的默认值）。
+//
+// 暂停（pause）：不再派发新任务，在飞任务做完收尾；恢复（resume）后继续派发。
+// 取消（cancel）：立即停止派发 + 取消全部在飞；已上报部分计入 completed，终态
+// 为 cancelled。终态（completed/cancelled）job 不可再控制。
+// ============================================================================
+
+// job 种类（对应 TaskKind：COLLECT→TASK_COLLECT / SELFPLAY→TASK_SELFPLAY /
+// EVAL→TASK_EVAL；rating / reanalysis / derive 仍走既有通道，不 job 化）
+enum JobKind {
+  JOB_COLLECT = 0;    // 参数化采集（双方自由组合对打/自对弈，产训练数据）
+  JOB_SELFPLAY = 1;   // 训练闭环自对异数据生产（默认持续型）
+  JOB_EVAL = 2;       // 绝对强度评估（不产训练数据）
+}
+
+// job 运行状态
+// running | paused | completed | cancelled（pending 不落库，提交即 running）
+
+// 开局场景
+enum OpeningScenario {
+  SCENARIO_STANDARD = 0;      // 标准开局（正常洗牌与翻子）
+  SCENARIO_ALL_REVEALED = 1;  // 全明子开局（开局即全部翻开）
+}
+
+// 开局种子策略（服务端按 job 逐任务解析为具体种子，经 collect_seed 下发）
+enum SeedStrategyKind {
+  SEED_FIXED = 0;       // 固定：全部任务同一种子
+  SEED_RANDOM = 1;      // 随机：base_seed 为偏移基值，逐任务随机派生
+  SEED_INCREMENTAL = 2; // 递增：从 base_seed 起逐任务递增
+  SEED_RANGE = 3;       // 区间：逐任务在 [min_seed, max_seed] 内取值
+}
+
+message SeedStrategy {
+  SeedStrategyKind kind = 1;
+  uint64 fixed_seed = 2;  // FIXED
+  uint64 base_seed = 3;   // RANDOM / INCREMENTAL 起点
+  uint64 min_seed = 4;    // RANGE 下界
+  uint64 max_seed = 5;    // RANGE 上界（含）
+}
+
+// 单方棋手规格。kind 词表单一真源 = banqi-core bq-policy::player_kind
+//（调度器与 collector 均引用，本注释仅文档化；接受别名 rule:material_expectimax）：
+//   "random"               均匀随机合法动作（无参数）
+//   "rule:capture_first"   优先吃子规则策略（无参数）
+//   "rule:reveal_first"    优先翻棋规则策略（无参数）
+//   "expectimax_rule"      Expectimax + 规则材料评估器
+//   "expectimax_nnue"      Expectimax + NNUE 网络（须给 network_sha）
+//   "mcts_resnet"          Gumbel MCTS + ResNet 网络（须给 network_sha）
+//   "policy_resnet"        ResNet 策略头 argmax，不搜索（须给 network_sha）
+// 模型类棋手的 network_sha 必须已在调度器存储登记，提交时校验，否则拒绝。
+message CollectPlayerSpec {
+  string kind = 1;
+  string network_sha = 2;          // 模型类必填；random / rule:* 必须为空
+  CollectSearchParams search = 3;  // 搜索类可选；未填字段（0 值）回落 worker 本地默认
+}
+
+// 搜索参数（仅搜索类棋手生效；字段与 collector [selfplay] 配置同名同义，
+// 0 值 = 用 worker 本地默认，便于不下发细参）
+message CollectSearchParams {
+  uint32 mcts_sims = 1;                    // mcts_resnet：Gumbel MCTS 模拟数
+  uint32 mcts_max_considered_actions = 2;
+  double mcts_c_scale = 3;
+  double mcts_gumbel_scale = 4;
+  float temperature = 5;
+  bool playout_cap_random = 6;
+  uint64 expectimax_node_budget = 7;       // expectimax_*：节点预算
+  uint32 expectimax_max_depth = 8;         // expectimax_*：最大深度
+}
+
+// 采集需求规格（JOB_COLLECT 载荷；派发时随 TaskResponse.collect_spec 原样透传）
+message CollectionJobSpec {
+  // 合法值单一真源 = banqi-core bq-env VARIANT_IDS（全部暗棋变体）：
+  // 4x8 / 4x4 / 4x2 / 4x8-fast / 4x8-rook-fast（提交时校验）
+  string variant = 1;
+  OpeningScenario scenario = 2;
+  SeedStrategy seed_strategy = 3;
+  CollectPlayerSpec player_a = 4;  // 配对第一方（成对两局互换执子，保证公平）
+  CollectPlayerSpec player_b = 5;
+  DataKind data_kind = 6;          // 产出特征类型：DATA_RESNET | DATA_NNUE
+  uint64 total_games = 7;          // 目标完整对局数（≥2，偶数）
+}
+
+// 训练闭环自对弈规格（JOB_SELFPLAY 载荷）
+message SelfPlayJobSpec {
+  string variant = 1;              // "4x8" | "4x8-fast" | "4x4"
+  DataKind data_kind = 2;          // DATA_RESNET | DATA_NNUE
+  string network_sha = 3;          // 产数网络；空 = 当前 best（"rule" 哨兵冷启动语义沿用）
+  string opponent_sha = 4;         // 混入对打对手网络；空 = 无混入
+  double mix_ratio = 5;            // 混入比例；0 = 用 worker/调度器配置默认
+  CollectSearchParams search = 6;  // 产数搜索参数覆盖；未填（0 值）回落 worker 本地默认
+  uint64 total_games = 7;          // 目标局数；0 = 持续产数（训练闭环默认），仅完成口径计聚合
+}
+
+// 绝对强度评估规格（JOB_EVAL 载荷；结果走 ReportMatchResult → eval_results，
+// 不产 episode）
+message EvalJobSpec {
+  string variant = 1;              // "4x8" | "4x8-fast" | "4x4"
+  string network_sha = 2;          // 被评估网络；空 = 当前 best
+  string opponent_kind = 3;        // 同 CollectPlayerSpec.kind（词表见 CollectPlayerSpec 注释）
+  string opponent_network_sha = 4; // 对手为模型类时必填；提交时校验存在性
+  CollectSearchParams search = 5;  // 双方（评估方 + 搜索类对手）共用搜索参数；0 值回落本地默认
+  uint64 total_games = 6;          // 评估总局数（≥2，偶数；eval 任务粒度上限沿用既有 consts）
+}
+
+// 提交 job（priority=0 = 用 JobKind 对应默认值，见文件头「优先级抢占」）
+message SubmitJobRequest {
+  string requester = 1;            // 提交方标识（日志/展示用）
+  JobKind kind = 2;
+  uint32 priority = 3;
+  CollectionJobSpec collect = 4;   // kind=JOB_COLLECT 必填
+  SelfPlayJobSpec selfplay = 5;    // kind=JOB_SELFPLAY 必填
+  EvalJobSpec eval = 6;            // kind=JOB_EVAL 必填
+}
+message SubmitJobReply {
+  bool accepted = 1;
+  string message = 2;              // 校验失败原因（规格非法 / 模型未登记等）
+  string job_id = 3;               // accepted=true 时返回
+}
+
+// job 状态（进度查询：completed_games 为「已收到上报」口径，不含在飞）
+message JobStatus {
+  string job_id = 1;
+  JobKind kind = 2;
+  uint32 priority = 3;
+  string state = 4;                // running | paused | completed | cancelled
+  uint64 total_games = 5;          // 目标局数；0 = 持续型
+  uint64 completed_games = 6;      // 已聚合的真实完成局数（上报口径）
+  uint64 dispatched_games = 7;     // 已派发局数（含在飞；completed ≤ dispatched）
+  int64 created_at = 8;            // unix 秒
+  int64 updated_at = 9;            // unix 秒
+  CollectionJobSpec collect = 10;  // kind=JOB_COLLECT 时返回
+  SelfPlayJobSpec selfplay = 11;   // kind=JOB_SELFPLAY 时返回
+  EvalJobSpec eval = 12;           // kind=JOB_EVAL 时返回
+}
+
+message ListJobsRequest {
+  // 状态过滤：空 = 全部；取值同 JobStatus.state
+  string state_filter = 1;
+  // 种类过滤（optional：未设置 = 不过滤）
+  optional JobKind kind_filter = 2;
+}
+message ListJobsReply {
+  repeated JobStatus jobs = 1;
+}
+
+// 暂停 / 恢复 / 取消
+message JobControlRequest {
+  string job_id = 1;
+  string control = 2;              // "pause" | "resume" | "cancel"
+}
+message JobControlReply {
+  bool accepted = 1;
+  string message = 2;              // 非法控制（job 不存在 / 终态再控制等）原因
+  string state = 3;                // 控制后的状态
+}
+
 service SchedulerService {
   rpc GetInfo (GetInfoRequest) returns (GetInfoReply);
   rpc GetTask (TaskRequest) returns (TaskResponse);
@@ -559,4 +757,8 @@ service SchedulerService {
   rpc ReportFeaturePack (FeaturePackMeta) returns (FeaturePackAck);
   // trainer 请求补派特征包（记录在、包缺失；调度器入队 TASK_DERIVE_FEATURES）
   rpc RequestFeaturePack (FeaturePackRequest) returns (FeaturePackReply);
+  // ---- 统一 Job 管理（collect / selfplay / eval）----
+  rpc SubmitJob (SubmitJobRequest) returns (SubmitJobReply);
+  rpc ListJobs (ListJobsRequest) returns (ListJobsReply);
+  rpc ControlJob (JobControlRequest) returns (JobControlReply);
 }

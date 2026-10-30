@@ -41,6 +41,10 @@ static MIGRATIONS: &[Migration] = &[
     Migration { version: 7, name: "feature packs", up: migrate_feature_packs },
     // v8 matches 表六桶化：新增 pair_wl（一胜一负混合对）。旧数据 WL 不可恢复，置 0。
     Migration { version: 8, name: "matches hexanomial", up: migrate_matches_hexanomial },
+    // v9 统一 Job 机制：jobs（collect/selfplay/eval job 台账）+ job_tasks（task→job
+    // 映射，撑住重启后 ReportEpisode/ReportMatchResult 的完成口径聚合）。
+    Migration { version: 9, name: "unified jobs", up: migrate_jobs },
+    Migration { version: 10, name: "eval model opponent sha", up: migrate_eval_opponent_sha },
 ];
 
 /// 列探测：查询表是否已含指定列（table-valued PRAGMA，SQLite 3.16+）。
@@ -366,6 +370,62 @@ fn migrate_matches_hexanomial(conn: &Connection) -> Result<(), StoreError> {
         "pair_wl",
         "ALTER TABLE matches ADD COLUMN pair_wl INTEGER NOT NULL DEFAULT 0",
     )
+}
+
+// ---------------------------------------------------------------------------
+// v9：统一 Job 机制（jobs + job_tasks）
+// ---------------------------------------------------------------------------
+
+/// v10：eval_queue 增加 opponent_sha——模型类评估对手（expectimax_nnue /
+/// mcts_resnet / policy_resnet）需要携带对手网络 sha 以签发下载 URL；
+/// 规则类对手恒空串。ALTER TABLE ADD COLUMN 对存量库无损。
+fn migrate_eval_opponent_sha(conn: &Connection) -> Result<(), StoreError> {
+    if column_exists(conn, "eval_queue", "opponent_sha")? {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "ALTER TABLE eval_queue ADD COLUMN opponent_sha TEXT NOT NULL DEFAULT '';",
+    )
+    .map_err(|e| StoreError::Migration {
+        version: 10,
+        name: "eval model opponent sha",
+        message: format!("add column: {e}"),
+    })
+}
+
+fn migrate_jobs(conn: &Connection) -> Result<(), StoreError> {
+    let stmts: &[&str] = &[
+        "CREATE TABLE IF NOT EXISTS jobs (
+			job_id TEXT PRIMARY KEY,
+			kind INTEGER NOT NULL,
+			priority INTEGER NOT NULL DEFAULT 0,
+			state TEXT NOT NULL DEFAULT 'running',
+			total_games INTEGER NOT NULL DEFAULT 0,
+			completed_games INTEGER NOT NULL DEFAULT 0,
+			dispatched_games INTEGER NOT NULL DEFAULT 0,
+			spec_json TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			next_seq INTEGER NOT NULL DEFAULT 0
+		)",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state, priority DESC, created_at)",
+        // task→job 映射：上报路径按 task_id 反查所属 job 聚合完成局数
+        //（重启后内存任务表丢失，聚合依据只能落库）。
+        "CREATE TABLE IF NOT EXISTS job_tasks (
+			task_id TEXT PRIMARY KEY,
+			job_id TEXT NOT NULL,
+			games INTEGER NOT NULL
+		)",
+        "CREATE INDEX IF NOT EXISTS idx_job_tasks_job ON job_tasks(job_id)",
+    ];
+    for q in stmts {
+        conn.execute_batch(q).map_err(|e| StoreError::Migration {
+            version: 9,
+            name: "unified jobs",
+            message: format!("exec {q:?}: {e}"),
+        })?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
