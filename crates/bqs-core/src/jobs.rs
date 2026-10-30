@@ -148,7 +148,7 @@ impl PlayerSpecJson {
         }
     }
 
-    fn to_proto(&self) -> CollectPlayerSpec {
+    pub fn to_proto(&self) -> CollectPlayerSpec {
         CollectPlayerSpec {
             kind: self.kind.clone(),
             network_sha: self.network_sha.clone(),
@@ -309,6 +309,10 @@ impl EvalSpecJson {
 
 /// JOB_RATING 规格回显（match_id 为调度器运行时回写字段：提交时解析对手并
 /// 建对打后记录，取消/聚合据此定位对打行；不在 proto 契约内）。
+///
+/// side_a / side_b 为提交时归一化后的双方棋手（kind 规范化 + 模型类 sha 冻结：
+/// 空 = 提交时解析为当前 best 的具体 sha）。旧版 spec_json（sides 未落库）经
+/// `resolved_sides()` 按旧字段语义还原，运行时统一只看 sides。
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct RatingSpecJson {
@@ -320,6 +324,8 @@ pub struct RatingSpecJson {
     pub sprt_elo1: f64,
     pub sprt_alpha: f64,
     pub sprt_beta: f64,
+    pub side_a: PlayerSpecJson,
+    pub side_b: PlayerSpecJson,
     pub match_id: i64,
 }
 
@@ -334,11 +340,51 @@ impl RatingSpecJson {
             sprt_elo1: s.sprt_elo1,
             sprt_alpha: s.sprt_alpha,
             sprt_beta: s.sprt_beta,
+            side_a: PlayerSpecJson::default(),
+            side_b: PlayerSpecJson::default(),
             match_id: 0,
         }
     }
 
+    /// 运行时统一入口：归一化后的双方棋手。旧版 spec_json（sides 未落库）按
+    /// 旧字段语义还原——candidate_sha/opponent_sha → expectimax_nnue（网络对象
+    /// sha 以对发行 m.candidate/m.opponent 的冻结值为准；此处的 sha 仅供 kind
+    /// 判定与回显，空不影响派发）。
+    pub fn resolved_sides(&self) -> (PlayerSpecJson, PlayerSpecJson) {
+        if self.side_a.kind.is_empty() && self.side_b.kind.is_empty() {
+            self.legacy_fallback_sides()
+        } else {
+            (self.side_a.clone(), self.side_b.clone())
+        }
+    }
+
+    /// 旧版 spec_json（sides 未落库）的双方棋手还原（旧字段路径两侧恒为网络类）。
+    pub fn legacy_fallback_sides(&self) -> (PlayerSpecJson, PlayerSpecJson) {
+        (
+            PlayerSpecJson {
+                kind: "expectimax_nnue".into(),
+                network_sha: self.candidate_sha.clone(),
+                search: None,
+            },
+            PlayerSpecJson {
+                kind: "expectimax_nnue".into(),
+                network_sha: self.opponent_sha.clone(),
+                search: None,
+            },
+        )
+    }
+
+    /// 双方是否为网络类棋手（旧版还原路径恒 (true, true)）。
+    pub fn sides_are_model(&self) -> (bool, bool) {
+        let (a, b) = self.resolved_sides();
+        (
+            bq_policy::player_kind::requires_model(&a.kind),
+            bq_policy::player_kind::requires_model(&b.kind),
+        )
+    }
+
     pub fn to_proto(&self) -> RatingJobSpec {
+        let (side_a, side_b) = self.resolved_sides();
         RatingJobSpec {
             variant: self.variant.clone(),
             candidate_sha: self.candidate_sha.clone(),
@@ -348,6 +394,8 @@ impl RatingSpecJson {
             sprt_elo1: self.sprt_elo1,
             sprt_alpha: self.sprt_alpha,
             sprt_beta: self.sprt_beta,
+            side_a: Some(side_a.to_proto()),
+            side_b: Some(side_b.to_proto()),
         }
     }
 }
@@ -541,31 +589,28 @@ impl JobManager {
                 let Some(r) = &req.rating else {
                     return Ok((false, "rating spec required for JOB_RATING".into(), String::new()));
                 };
-                // 校验 → 解析对手（空 = 当前 best）→ 建对打行（六桶聚合载体）。
-                if let Err(m) = self.validate_rating(r) {
-                    return Ok((false, m, String::new()));
-                }
-                let opponent_sha = if r.opponent_sha.is_empty() {
-                    match self.nets.get_best()? {
-                        Some(b) => b.sha,
-                        None => {
-                            return Ok((false, "no_best_network_registered（对手空 = 当前 best，但尚无 best 网络）".into(), String::new()))
-                        }
-                    }
-                } else {
-                    r.opponent_sha.clone()
+                // 共享校验 → sides 解析/归一化（模型类空 sha = 当前 best，冻结；
+                // 旧 candidate/opponent 路径归一化为 expectimax_nnue 两侧）→
+                // 建对打行（六桶聚合载体；网络对象 sha 以冻结值入行）。
+                let (side_a, side_b) = match self.validate_and_resolve_rating(r) {
+                    Ok(v) => v,
+                    Err(m) => return Ok((false, m, String::new())),
                 };
                 let mut spec = RatingSpecJson::from_proto(r.clone());
+                spec.side_a = side_a.clone();
+                spec.side_b = side_b.clone();
                 // 对打目标（换色成对数）= 局数上限的一半；0 = 仅由 SPRT 判停。
+                // 非网络类 side 的 sha 为空串入行（仅观测路径，无网络对象）。
                 let match_id = self.matches.create_match(
-                    &r.candidate_sha,
-                    &opponent_sha,
+                    &side_a.network_sha,
+                    &side_b.network_sha,
                     (spec.total_games / 2) as i64,
                 )?;
                 spec.match_id = match_id;
                 tracing::info!(
-                    "[job] rating match created match={} candidate={} opponent={} target_pairs={}",
-                    match_id, spec.candidate_sha, opponent_sha, spec.total_games / 2
+                    "[job] rating match created match={} side_a={}:{} side_b={}:{} target_pairs={}",
+                    match_id, side_a.kind, side_a.network_sha, side_b.kind, side_b.network_sha,
+                    spec.total_games / 2
                 );
                 JobSpecJson::Rating(spec)
             }
@@ -685,36 +730,24 @@ impl JobManager {
         Ok(())
     }
 
-    fn validate_rating(&self, r: &RatingJobSpec) -> Result<(), String> {
+    /// rating 提交校验 + sides 解析/归一化（纯校验不落库）：
+    /// - 共享校验：variant（空 = 回落 selfplay.variant）、total_games（0 或 ≥2
+    ///   偶数）、sprt_*（0 回落 [sprt] 配置，非 0 校验取值范围）；
+    /// - sides 形态（side_a/side_b 任一填写时优先生效，必须成对）：kind 规范化
+    ///   （词表校验）、模型类空 sha = 当前 best（提交时解析冻结，后续 best 变化
+    ///   不影响进行中对打）、模型类非空 sha 须已登记、非模型类 sha 必须为空；
+    /// - 旧字段路径（side_a/side_b 均未填）：candidate_sha 必填须登记 →
+    ///   side_a=expectimax_nnue(sha)；opponent_sha 空 = 当前 best（解析冻结）/
+    ///   非空须登记 → side_b=expectimax_nnue(sha)。
+    ///
+    /// 返回归一化后的双方棋手（网络类 sha 已冻结为具体值；非网络类 sha 为空）。
+    fn validate_and_resolve_rating(
+        &self,
+        r: &RatingJobSpec,
+    ) -> Result<(PlayerSpecJson, PlayerSpecJson), String> {
         // 变体空 = 回落调度器 selfplay.variant；非空必须合法。
         if !r.variant.is_empty() {
             validate_variant(&r.variant)?;
-        }
-        if r.candidate_sha.is_empty() {
-            return Err("rating.candidate_sha required（被测网络必填）".into());
-        }
-        let registered = self
-            .nets
-            .get_network(&r.candidate_sha)
-            .map_err(|err| format!("查询网络登记失败: {err}"))?;
-        if registered.is_none() {
-            return Err(format!(
-                "network_not_registered sha={}（rating 候选网络必须已登记）",
-                r.candidate_sha
-            ));
-        }
-        // 对手空 = 当前 best（提交时解析）；非空必须已登记。
-        if !r.opponent_sha.is_empty() {
-            let registered = self
-                .nets
-                .get_network(&r.opponent_sha)
-                .map_err(|err| format!("查询网络登记失败: {err}"))?;
-            if registered.is_none() {
-                return Err(format!(
-                    "network_not_registered sha={}（rating 对手网络必须已登记）",
-                    r.opponent_sha
-                ));
-            }
         }
         // 局数上限：0 = 仅由 SPRT 判停；否则 ≥2 偶数。
         if r.total_games != 0 && (r.total_games < 2 || r.total_games % 2 != 0) {
@@ -735,7 +768,107 @@ impl JobManager {
                 r.sprt_elo1, r.sprt_elo0
             ));
         }
-        Ok(())
+        if r.side_a.is_some() || r.side_b.is_some() {
+            let Some(sa) = r.side_a.as_ref() else {
+                return Err("rating.side_a/side_b 必须成对填写（sides 形态）".into());
+            };
+            let Some(sb) = r.side_b.as_ref() else {
+                return Err("rating.side_a/side_b 必须成对填写（sides 形态）".into());
+            };
+            let a = self.normalize_rating_side("side_a", sa)?;
+            let b = self.normalize_rating_side("side_b", sb)?;
+            return Ok((a, b));
+        }
+        // ---- 旧字段路径（向后兼容，行为不变）----
+        if r.candidate_sha.is_empty() {
+            return Err("rating.candidate_sha required（被测网络必填）".into());
+        }
+        let registered = self
+            .nets
+            .get_network(&r.candidate_sha)
+            .map_err(|err| format!("查询网络登记失败: {err}"))?;
+        if registered.is_none() {
+            return Err(format!(
+                "network_not_registered sha={}（rating 候选网络必须已登记）",
+                r.candidate_sha
+            ));
+        }
+        // 对手空 = 当前 best（提交时解析冻结）；非空必须已登记。
+        let opponent_sha = if r.opponent_sha.is_empty() {
+            match self.nets.get_best().map_err(|e| format!("查询 best 网络失败: {e}"))? {
+                Some(b) => b.sha,
+                None => {
+                    return Err(
+                        "no_best_network_registered（对手空 = 当前 best，但尚无 best 网络）".into(),
+                    )
+                }
+            }
+        } else {
+            let registered = self
+                .nets
+                .get_network(&r.opponent_sha)
+                .map_err(|err| format!("查询网络登记失败: {err}"))?;
+            if registered.is_none() {
+                return Err(format!(
+                    "network_not_registered sha={}（rating 对手网络必须已登记）",
+                    r.opponent_sha
+                ));
+            }
+            r.opponent_sha.clone()
+        };
+        let mk = |sha: &str| PlayerSpecJson {
+            kind: "expectimax_nnue".into(),
+            network_sha: sha.to_string(),
+            search: None,
+        };
+        Ok((mk(&r.candidate_sha), mk(&opponent_sha)))
+    }
+
+    /// 单方棋手规格归一化（rating sides 形态）：kind 规范化 + 模型类 sha 解析
+    /// （空 = 当前 best 并冻结；非空须已登记）/ 非模型类 sha 必须为空。
+    fn normalize_rating_side(
+        &self,
+        label: &str,
+        p: &CollectPlayerSpec,
+    ) -> Result<PlayerSpecJson, String> {
+        let Some(kind) = bq_policy::player_kind::canonical(&p.kind) else {
+            return Err(format!(
+                "rating.{label} invalid_player_kind=\"{}\"（可选 {}）",
+                p.kind,
+                bq_policy::player_kind::PLAYER_KINDS.join("/")
+            ));
+        };
+        let mut out = PlayerSpecJson::from_proto(Some(p.clone()));
+        out.kind = kind.to_string();
+        if bq_policy::player_kind::requires_model(kind) {
+            if out.network_sha.is_empty() {
+                // 空 = 当前 best：提交时解析为具体 sha 并冻结进对发行/派发。
+                match self.nets.get_best().map_err(|e| format!("查询 best 网络失败: {e}"))? {
+                    Some(b) => out.network_sha = b.sha,
+                    None => {
+                        return Err(format!(
+                            "no_best_network_registered（rating.{label} 模型类 sha 空 = 当前 best，但尚无 best 网络）"
+                        ))
+                    }
+                }
+            } else {
+                let registered = self
+                    .nets
+                    .get_network(&out.network_sha)
+                    .map_err(|err| format!("查询网络登记失败: {err}"))?;
+                if registered.is_none() {
+                    return Err(format!(
+                        "network_not_registered sha={}（rating.{label} 模型类网络必须已登记）",
+                        out.network_sha
+                    ));
+                }
+            }
+        } else if !out.network_sha.is_empty() {
+            return Err(format!(
+                "rating.{label} player_kind={kind} 的 network_sha 必须为空"
+            ));
+        }
+        Ok(out)
     }
 
     // ---- 查询 / 控制 -------------------------------------------------------

@@ -18,7 +18,6 @@ use crate::{
     gatekeeper::Gatekeeper,
     jobs::{JobManager, RatingSpecJson},
     ports::{MatchStore, NetworkStore},
-    types::network_status,
     CoreError, CoreResult,
 };
 
@@ -109,8 +108,8 @@ impl ReportRouter {
     /// 普通纯自对弈 selfplay（MatchID == 0）没有五项计数，不消费（交链尾）。
     ///
     /// rating job 派发的 TASK_RATING（task.job_id 有映射）走 rating 专属分支：
-    /// SPRT 参数来自 job spec（0 回落 [sprt] 配置），对手非当前 best 时仅观测
-    /// 统计不晋级/不标 rejected。
+    /// SPRT 参数来自 job spec（0 回落 [sprt] 配置），纯相对强度测量 + SPRT
+    /// 判停（不晋级、不标 rejected——晋级只属于 gatekeeper 既有判据链）。
     fn gate_sink(&self, task: &RunningTask, req: &MatchResult) -> CoreResult<Option<MatchResultAck>> {
         let is_gating = task.kind == TaskKind::TaskRating
             || (task.kind == TaskKind::TaskSelfplay && task.match_id != 0);
@@ -164,8 +163,13 @@ impl ReportRouter {
     /// rating job 聚合分支：六桶累加进对发行（多 worker 并发贡献，SQL 原子）→
     /// 每报必跑 SPRT（打满局数上限由 total_games 截停，不用 judge_match 的
     /// 预算强制拒绝——rating 的停机口径是「SPRT 出结论 或 局数达上限」）→
-    /// 出结论即条件结转：对手为当前 best 时走既有晋级行（accept → promote +
-    /// eval 入队；reject → 标记 rejected），否则仅观测统计。
+    /// 出结论即结转（仅判停收尾）。
+    ///
+    /// 手动 SPRT/job 对打**永不触发晋级判定**（promoted 恒 false，不调用
+    /// promote/eval 入队，也不标 rejected）——晋级只属于训练闭环自身的
+    /// gatekeeper 流程（无 job 映射的旧版 TASK_RATING 走 gate.accept_report
+    /// 既有判据链，行为不变）。rating job = 纯相对强度测量 + SPRT 动态判停，
+    /// 无论对手是否为当前 best 均仅观测统计。
     ///
     /// 判停/达上限即收敛 job（completed + 取消在飞）；对打已 cancelled（job 被
     /// cancel）的上报经 add_match_games 的 running 闸门拒绝。
@@ -202,24 +206,13 @@ impl ReportRouter {
             .map_err(|e| CoreError::Internal(format!("rating sprt judge match={} : {e}", m.id)))?;
         let cap_reached = spec.total_games > 0 && agg.num_games >= spec.total_games as i64;
         let mut concluded = false;
-        let mut promoted = false;
-        let mut best_sha = self.best_sha()?;
+        // 手动 SPRT/job 对打不参与晋级：accept/reject 仅判停结转（观测统计），
+        // promoted 恒 false；best_sha 回显当前值。
+        let promoted = false;
+        let best_sha = self.best_sha()?;
         if verdict != Verdict::Continue || cap_reached {
-            // 条件结转（CAS）：并发双判停只有一个调用方执行晋级/标记副作用。
+            // 结转（CAS）：并发双判停只有一个调用方执行结转副作用。
             concluded = self.matches.conclude_match(m.id)?;
-            if concluded {
-                // 晋级资格以「对手 = 当前 best」为准：指定对手的对打仅观测统计。
-                if verdict == Verdict::AcceptH1 && m.opponent == best_sha && m.candidate != best_sha {
-                    self.nets.promote_best(&m.candidate)?;
-                    promoted = true;
-                    best_sha = m.candidate.clone();
-                    if let Err(e) = self.evalc.on_new_best(&m.candidate) {
-                        tracing::warn!(sha = %m.candidate, error = %e, "rating 晋级后评估入队失败");
-                    }
-                } else if verdict == Verdict::RejectH0 && m.opponent == best_sha {
-                    self.nets.update_network_status(&m.candidate, network_status::REJECTED)?;
-                }
-            }
         }
         if concluded {
             self.jobs.complete_rating_job(&task.job_id)?;
@@ -379,17 +372,20 @@ mod tests {
     }
 
     #[test]
-    fn rating_accept_promotes_when_opponent_is_best() {
+    fn rating_accept_never_promotes_even_vs_best() {
         let e = env();
         let (job_id, match_id) = seed_rating_job(&e, 0, "");
         assign_rating_task(&e, "rt1", &job_id, match_id, "w1");
-        // 100 对全 WW → LLR 大幅上穿接受界 → 晋级（对手 = 当前 best）
+        // 100 对全 WW → LLR 大幅上穿接受界 → 判停结转，但不晋级（手动 SPRT/job
+        // 对打永不触发晋级判定；晋级只属于 gatekeeper 既有判据链）
         // 另一个 worker 的在飞任务先登记（上报任务自身已完成，不在取消集合）
         assign_rating_task(&e, "rt0", &job_id, match_id, "w2");
         let ack = e.router.route(&rating_result("w1", "rt1", [0, 0, 0, 0, 0, 100], 200)).unwrap();
-        assert!(ack.accepted && ack.match_concluded && ack.promoted);
-        assert_eq!(ack.best_sha, "cand");
-        assert_eq!(e.f.networks.best_sha().as_deref(), Some("cand"));
+        assert!(ack.accepted && ack.match_concluded);
+        assert!(!ack.promoted, "rating job 永不晋级");
+        assert_eq!(ack.best_sha, "best", "best 不变");
+        assert_eq!(e.f.networks.best_sha().as_deref(), Some("best"));
+        assert_eq!(e.f.networks.status_of("cand").as_deref(), Some("candidate"), "候选不被标记");
         // job 收敛 + 在飞取消（上报任务自身已 Completed，仅其余在飞被取消）
         assert_eq!(e.jobs.get(&job_id).unwrap().unwrap().state, "completed");
         assert_eq!(e.jobs.cancel_task_ids_for_worker("w2"), vec!["rt0".to_string()]);
@@ -402,15 +398,15 @@ mod tests {
     }
 
     #[test]
-    fn rating_reject_marks_candidate_when_opponent_is_best() {
+    fn rating_reject_observes_only_never_marks() {
         let e = env();
         let (job_id, match_id) = seed_rating_job(&e, 0, "");
         assign_rating_task(&e, "rt1", &job_id, match_id, "w1");
-        // 100 对全 LL → 显著劣势 → 标记 rejected（既有晋级行），不晋级
+        // 100 对全 LL → 显著劣势 → 仅判停结转，不标 rejected、不晋级（观测统计）
         let ack = e.router.route(&rating_result("w1", "rt1", [100, 0, 0, 0, 0, 0], 200)).unwrap();
         assert!(ack.accepted && ack.match_concluded && !ack.promoted);
         assert_eq!(e.f.networks.best_sha().as_deref(), Some("best"));
-        assert_eq!(e.f.networks.status_of("cand").as_deref(), Some("rejected"));
+        assert_eq!(e.f.networks.status_of("cand").as_deref(), Some("candidate"));
         assert_eq!(e.jobs.get(&job_id).unwrap().unwrap().state, "completed");
     }
 

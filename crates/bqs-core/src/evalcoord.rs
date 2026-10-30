@@ -690,10 +690,23 @@ impl EvalCoordinator {
         req: &MatchResult,
     ) -> CoreResult<MatchResultAck> {
         let spec_hint = req.opponent_spec.trim().to_string();
+        // 统一六桶上报兼容：collector 按「换色成对」口径上报时 wins/losses/draws
+        // 为 0 而六桶非零——从六桶还原三分类（互斥对型 [LL, LD, DD, WL, DW, WW]，
+        // 每对两局；WL 混合对按 1 胜 1 负拆分）。
+        let pair_wins = (req.pair_dw + req.pair_ww + req.pair_wl) as i64;
+        let pair_losses = (req.pair_ll + req.pair_ld + req.pair_wl) as i64;
+        let pair_draws = (req.pair_dd + req.pair_ld + req.pair_dw) as i64;
+        let (wins, losses, draws) = if req.wins == 0 && req.losses == 0 && req.draws == 0
+            && (pair_wins > 0 || pair_losses > 0 || pair_draws > 0)
+        {
+            (pair_wins, pair_losses, pair_draws)
+        } else {
+            (req.wins as i64, req.losses as i64, req.draws as i64)
+        };
         let delta = EvalDelta {
-            wins: req.wins as i64,
-            draws: req.draws as i64,
-            losses: req.losses as i64,
+            wins,
+            draws,
+            losses,
             games: req.games as i64,
             red_wins: req.red_wins as i64,
             black_wins: req.black_wins as i64,
@@ -1139,8 +1152,39 @@ mod tests {
     }
 
     #[test]
-    fn ensure_best_evaluated_fills_missing_opponents() {
+    fn report_eval_result_derives_wld_from_pair_buckets() {
+        // 统一六桶上报兼容：wins/losses/draws 全零而六桶非零时，从互斥对型
+        // [LL, LD, DD, WL, DW, WW] 还原三分类（每对两局，WL = 1 胜 1 负）。
         let e = env(enabled_cfg());
+        e.f.networks.seed_network("n", None, "onnx");
+        e.evalc.on_new_best("n").unwrap();
+        let c = e.evalc.claim_task("w1", 4).unwrap();
+        let task = e.disp.lookup(&c.task_id).unwrap();
+        let req = MatchResult {
+            worker_id: "w1".into(),
+            task_id: c.task_id.clone(),
+            kind: TaskKind::TaskEval as i32,
+            games: 8,
+            // 六桶：LL=1, LD=1, DD=1, WL=1, DW=1, WW=1 → 4 对 8 局
+            pair_ll: 1,
+            pair_ld: 1,
+            pair_dd: 1,
+            pair_wl: 1,
+            pair_dw: 1,
+            pair_ww: 1,
+            ..Default::default()
+        };
+        let ack = e.evalc.report_eval_result(&task, &req).unwrap();
+        assert!(ack.accepted, "{}", ack.message);
+        // 还原：wins = DW+WW+WL = 3, losses = LL+LD+WL = 3, draws = DD+LD+DW = 3
+        // （eval_results 仅在作业收尾时落行；此处查 eval_queue 聚合行）
+        let row = e.f.eval.get_eval_job("n", "random").unwrap().expect("应有聚合行");
+        assert_eq!(row.num_games, 8);
+        assert_eq!((row.wins, row.losses, row.draws), (3, 3, 3));
+    }
+
+    #[test]
+    fn ensure_best_evaluated_fills_missing_opponents() {        let e = env(enabled_cfg());
         e.f.networks.seed_network("best1", None, "onnx");
         e.f.networks.promote_best("best1");
         // random 已有结果：只补其余 3 个对手

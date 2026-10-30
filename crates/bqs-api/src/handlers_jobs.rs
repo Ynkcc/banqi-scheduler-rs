@@ -310,14 +310,19 @@ impl EvalBody {
 }
 
 /// JOB_RATING 规格请求体（手动 SPRT 对打）。
+///
+/// 双方棋手自由组合：sideA/sideB（结构与 collect 的 playerA/playerB 一致，
+/// 模型类 networkSha 空 = 当前 best，非网络类必须为空）任一填写时优先生效；
+/// 旧字段 candidateSha/opponentSha 保持工作（归一化为 expectimax_nnue 两侧）。
+/// 手动 SPRT 对打永不触发晋级判定（纯相对强度测量 + SPRT 判停）。
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct RatingBody {
     /// 空 = 调度器 selfplay.variant
     pub variant: String,
-    /// 被测网络（必填，须已登记）
+    /// 被测网络（旧字段路径必填，须已登记）
     pub candidate_sha: String,
-    /// 对手网络；空 = 当前 best（结论可晋级）
+    /// 对手网络；空 = 当前 best
     pub opponent_sha: String,
     /// 局数上限（≥2 偶数；0 = 仅由 SPRT 判停）
     pub total_games: u64,
@@ -326,6 +331,10 @@ pub struct RatingBody {
     pub sprt_elo1: f64,
     pub sprt_alpha: f64,
     pub sprt_beta: f64,
+    /// 主视角方（sides 形态，与 sideB 成对填写）
+    pub side_a: Option<PlayerBody>,
+    /// 对手方
+    pub side_b: Option<PlayerBody>,
 }
 
 impl RatingBody {
@@ -339,10 +348,13 @@ impl RatingBody {
             sprt_elo1: self.sprt_elo1,
             sprt_alpha: self.sprt_alpha,
             sprt_beta: self.sprt_beta,
+            side_a: self.side_a.as_ref().map(|p| p.to_proto()),
+            side_b: self.side_b.as_ref().map(|p| p.to_proto()),
         }
     }
 
     fn from_json(r: &RatingSpecJson) -> Self {
+        let (side_a, side_b) = r.resolved_sides();
         Self {
             variant: r.variant.clone(),
             candidate_sha: r.candidate_sha.clone(),
@@ -352,6 +364,8 @@ impl RatingBody {
             sprt_elo1: r.sprt_elo1,
             sprt_alpha: r.sprt_alpha,
             sprt_beta: r.sprt_beta,
+            side_a: Some(PlayerBody::from_json(&side_a)),
+            side_b: Some(PlayerBody::from_json(&side_b)),
         }
     }
 }
@@ -383,6 +397,9 @@ pub struct RatingStatsView {
     pub ww: i64,
     pub num_games: i64,
     pub match_status: String,
+    /// 双方棋手 kind 摘要（归一化后的 sides；旧版行按旧字段还原）
+    pub side_a_kind: String,
+    pub side_b_kind: String,
 }
 
 /// GET /api/jobs 条目视图。
@@ -565,15 +582,20 @@ pub async fn list_jobs(
                     .get_match(rt.match_id)
                     .ok()
                     .flatten()
-                    .map(|m| RatingStatsView {
-                        ll: m.pairs.0[0],
-                        ld: m.pairs.0[1],
-                        dd: m.pairs.0[2],
-                        wl: m.pairs.0[3],
-                        dw: m.pairs.0[4],
-                        ww: m.pairs.0[5],
-                        num_games: m.num_games,
-                        match_status: m.status,
+                    .map(|m| {
+                        let (sa, sb) = rt.resolved_sides();
+                        RatingStatsView {
+                            ll: m.pairs.0[0],
+                            ld: m.pairs.0[1],
+                            dd: m.pairs.0[2],
+                            wl: m.pairs.0[3],
+                            dw: m.pairs.0[4],
+                            ww: m.pairs.0[5],
+                            num_games: m.num_games,
+                            match_status: m.status,
+                            side_a_kind: sa.kind.clone(),
+                            side_b_kind: sb.kind.clone(),
+                        }
                     }),
                 _ => None,
             };

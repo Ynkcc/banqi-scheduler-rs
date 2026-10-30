@@ -64,6 +64,12 @@ message TaskResponse {
   // TASK_COLLECT：本任务的开局种子（服务端按 job 的 SeedStrategy 逐任务解析后
   // 下发；collector 以此派生 pair 种子，无需感知策略细节）。
   uint64 collect_seed = 19;
+  // TASK_RATING（sides 形态）双方棋手规格：kind / 冻结后的 network_sha / 各自
+  // 搜索参数（CollectSearchParams 含 labeler/expl，未填字段回落 worker 本地
+  // 默认）。网络对象仍经 network_key / opponent_key 下发；非网络类 side 无网络
+  // 对象，对应字段（network_sha/key/url 或 opponent_sha/key/url）留空。
+  CollectPlayerSpec rating_side_a = 20;
+  CollectPlayerSpec rating_side_b = 21;
 }
 
 enum TaskKind {
@@ -715,6 +721,19 @@ message RatingJobSpec {
   double sprt_elo1 = 6;
   double sprt_alpha = 7;
   double sprt_beta = 8;
+  // ---- 双方棋手自由组合（sides 形态；任一填写时优先生效，运行时只看 sides）----
+  // side_a = 主视角方（SPRT 结算以本方计）；side_b = 对手方。结构与 collect 的
+  // player_a/player_b 一致（kind 词表同 CollectPlayerSpec 注释）。旧
+  // candidate_sha/opponent_sha 路径保留：提交时归一化为
+  // side_a=expectimax_nnue(candidate_sha)、side_b=expectimax_nnue(opponent_sha，
+  // 空 = 当前 best)。
+  // 模型类 side（expectimax_nnue / mcts_resnet / policy_resnet）network_sha 为空
+  // = 当前 best（提交时解析为具体 sha 并冻结进对发行/派发，后续 best 变化不
+  // 影响进行中对打）。side_b 为非网络类（random / rule:* / expectimax_rule）时
+  // 对打仅观测统计。手动 SPRT 对打（JOB_RATING）永不触发晋级判定——晋级只属
+  // 于训练闭环自身的 gatekeeper 流程。
+  CollectPlayerSpec side_a = 9;
+  CollectPlayerSpec side_b = 10;
 }
 
 // 提交 job（priority=0 = 用 JobKind 对应默认值，见文件头「优先级抢占」）

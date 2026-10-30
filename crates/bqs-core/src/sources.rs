@@ -243,11 +243,37 @@ impl JobSource {
         if !m.running() {
             return Ok(None);
         }
-        let Some(cand) = self.nets.get_network(&m.candidate)? else {
-            tracing::warn!("[task] rating 候选网络登记记录缺失 sha={}，跳过", m.candidate);
-            return Ok(None);
+        // 双方棋手（spec.sides 落库或旧字段还原）：网络类 side 的网络对象以
+        // 对发行的冻结 sha（m.candidate / m.opponent）加载——模型类 side 空 sha
+        // 在提交时已解析为当前 best 并冻结进对发行，后续 best 变化不影响在打。
+        // 非网络类 side 无网络对象（m.candidate/m.opponent 对应位为空串）。
+        let (side_a, side_b) = spec.resolved_sides();
+        let (a_model, b_model) = spec.sides_are_model();
+        let a_net = if a_model {
+            match self.nets.get_network(&m.candidate)? {
+                Some(n) => Some(n),
+                None => {
+                    tracing::warn!("[task] rating side_a 网络登记记录缺失 sha={}，跳过", m.candidate);
+                    return Ok(None);
+                }
+            }
+        } else {
+            None
         };
-        let opp = self.nets.get_network(&m.opponent)?;
+        let b_net = if b_model {
+            match self.nets.get_network(&m.opponent)? {
+                Some(n) => Some(n),
+                None => {
+                    tracing::warn!(
+                        "[task] rating side_b 网络登记记录缺失 sha={}，本批不下发对手网络",
+                        m.opponent
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
         // 变体空 = 回落调度器 selfplay.variant（提交校验已保证非空值合法）。
         let variant = if spec.variant.is_empty() {
             self.cfg.selfplay.variant.clone()
@@ -272,22 +298,34 @@ impl JobSource {
             }
         }
         let task_id = new_id();
-        let resp = self.asm.rating_task(&task_id, &variant, &cand, opp.as_ref(), games, req)?;
+        let side_a_spec = side_a.to_proto();
+        let side_b_spec = side_b.to_proto();
+        let resp = self.asm.rating_task(
+            &task_id,
+            &variant,
+            &side_a_spec,
+            &side_b_spec,
+            a_net.as_ref(),
+            b_net.as_ref(),
+            games,
+            req,
+        )?;
         self.jobs.note_dispatch(
             &task_id,
             &job.job_id,
             games,
             &req.worker_id,
             TaskKind::TaskRating,
-            &cand.sha,
+            &m.candidate,
             &m.opponent,
             "",
             m.id,
             None,
         )?;
         tracing::info!(
-            "[task] rating assigned worker={} task={} job={} match={} candidate={} opponent={} games={}",
-            req.worker_id, task_id, job.job_id, m.id, cand.sha, m.opponent, games
+            "[task] rating assigned worker={} task={} job={} match={} side_a={}:{} side_b={}:{} games={}",
+            req.worker_id, task_id, job.job_id, m.id,
+            side_a.kind, m.candidate, side_b.kind, m.opponent, games
         );
         Ok(Some(resp))
     }
@@ -678,6 +716,71 @@ mod tests {
         ).unwrap();
         assert!(out.is_none(), "对打已结转不再派发");
         let _ = job_id;
+    }
+
+    #[test]
+    fn rating_dispatch_with_sides_and_non_network_opponent() {
+        // sides 形态：side_a=expectimax_nnue(cand, 独立搜索参数)、
+        // side_b=rule:capture_first（非网络类，无网络对象字段）
+        let e = env();
+        e.f.networks.seed_network("best", None, "onnx");
+        e.f.networks.promote_best("best").unwrap();
+        e.f.networks.seed_network("cand", None, "onnx");
+        let (ok, msg, _id) = e
+            .jobs
+            .submit(&SubmitJobRequest {
+                requester: "test".into(),
+                kind: JobKind::JobRating as i32,
+                priority: 0,
+                rating: Some(RatingJobSpec {
+                    side_a: Some(bqs_proto::CollectPlayerSpec {
+                        kind: "expectimax_nnue".into(),
+                        network_sha: "cand".into(),
+                        search: Some(bqs_proto::CollectSearchParams {
+                            expectimax_node_budget: 4000,
+                            labeler_mode: "best".into(),
+                            ..Default::default()
+                        }),
+                    }),
+                    side_b: Some(bqs_proto::CollectPlayerSpec {
+                        kind: "rule:capture_first".into(),
+                        network_sha: String::new(),
+                        search: Some(bqs_proto::CollectSearchParams {
+                            expectimax_node_budget: 1000,
+                            ..Default::default()
+                        }),
+                    }),
+                    total_games: 20,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(ok, "{msg}");
+        let resp = e.src.dispatch_rating(
+            &e.jobs.dispatchable(JobKind::JobRating).unwrap().remove(0),
+            &req(4),
+        ).unwrap().unwrap();
+        assert_eq!(resp.kind, TaskKind::TaskRating as i32);
+        // 主网络 side 照常下发网络对象；非网络类对手无网络对象字段
+        assert_eq!(resp.network_sha, "cand");
+        assert_eq!(resp.network_key, "networks/cand.onnx");
+        assert_eq!(resp.opponent_sha, "");
+        assert_eq!(resp.opponent_key, "");
+        assert_eq!(resp.opponent_url, "");
+        // 双方规格独立透传（kind / 冻结 sha / 各自搜索参数，对照 collect 的
+        // player_a/player_b 承载方式）
+        let sa = resp.rating_side_a.unwrap();
+        assert_eq!(sa.kind, "expectimax_nnue");
+        assert_eq!(sa.network_sha, "cand");
+        assert_eq!(sa.search.unwrap().expectimax_node_budget, 4000);
+        let sb = resp.rating_side_b.unwrap();
+        assert_eq!(sb.kind, "rule:capture_first");
+        assert_eq!(sb.network_sha, "");
+        assert_eq!(sb.search.unwrap().expectimax_node_budget, 1000);
+        // 派发记账：对发行冻结 sha（非网络对手为空串）
+        let t = e.src.disp.lookup(&resp.task_id).unwrap();
+        assert_eq!(t.opponent_sha, "");
     }
 
     #[test]

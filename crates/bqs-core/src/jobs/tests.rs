@@ -575,6 +575,8 @@ fn rating_req(total: u64, candidate: &str, opponent: &str) -> SubmitJobRequest {
             sprt_elo1: 0.0,
             sprt_alpha: 0.0,
             sprt_beta: 0.0,
+            side_a: None,
+            side_b: None,
         }),
         ..Default::default()
     }
@@ -709,6 +711,136 @@ fn rating_complete_job_on_verdict_is_idempotent() {
     assert_eq!(e.jobs.get(&job_id).unwrap().unwrap().state, "completed");
     // 终态 job 不再可派发
     assert!(e.jobs.dispatchable(JobKind::JobRating).unwrap().is_empty());
+}
+
+// ---- rating job sides 形态（双方棋手自由组合）--------------------------------
+
+fn sides_rating_req(variant_sides: Option<(CollectPlayerSpec, CollectPlayerSpec)>, total: u64) -> SubmitJobRequest {
+    let (side_a, side_b) = match variant_sides {
+        Some(pair) => pair,
+        None => (nnue_side(""), nnue_side("")),
+    };
+    SubmitJobRequest {
+        requester: "test".into(),
+        kind: JobKind::JobRating as i32,
+        priority: 0,
+        rating: Some(RatingJobSpec {
+            side_a: Some(side_a),
+            side_b: Some(side_b),
+            total_games: total,
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+fn nnue_side(sha: &str) -> CollectPlayerSpec {
+    CollectPlayerSpec { kind: "expectimax_nnue".into(), network_sha: sha.into(), search: None }
+}
+
+#[test]
+fn rating_sides_submit_normalizes_and_freezes() {
+    let e = env("");
+    e.f.networks.seed_network("best", None, "onnx");
+    e.f.networks.promote_best("best").unwrap();
+    e.f.networks.seed_network("cand", None, "onnx");
+    // side_a 模型类空 sha = 当前 best（冻结为具体 sha）；side_b 非网络类
+    // 双方各自携带独立搜索参数（互不共享，对照 collect 的 player 承载）
+    let req = sides_rating_req(
+        Some((
+            CollectPlayerSpec {
+                kind: "expectimax_nnue".into(),
+                network_sha: String::new(),
+                search: Some(bqs_proto::CollectSearchParams {
+                    expectimax_node_budget: 4000,
+                    labeler_mode: "best".into(),
+                    ..Default::default()
+                }),
+            },
+            CollectPlayerSpec {
+                kind: "expectimax_rule".into(),
+                network_sha: String::new(),
+                search: Some(bqs_proto::CollectSearchParams {
+                    expectimax_node_budget: 1000,
+                    ..Default::default()
+                }),
+            },
+        )),
+        20,
+    );
+    let (ok, msg, id) = e.jobs.submit(&req).unwrap();
+    assert!(ok, "{msg}");
+    let row = e.jobs.get(&id).unwrap().unwrap();
+    let JobSpecJson::Rating(spec) = JobSpecJson::parse(&row.spec_json).unwrap() else {
+        panic!("rating spec json");
+    };
+    // kind 规范化 + 空 sha 冻结为当前 best
+    assert_eq!(spec.side_a.kind, "expectimax_nnue");
+    assert_eq!(spec.side_a.network_sha, "best", "模型类空 sha 冻结为当前 best");
+    assert_eq!(spec.side_b.kind, "expectimax_rule");
+    assert_eq!(spec.side_b.network_sha, "", "非网络类 sha 为空");
+    // 双方搜索参数独立保留
+    assert_eq!(spec.side_a.search.as_ref().unwrap().expectimax_node_budget, 4000);
+    assert_eq!(spec.side_a.search.as_ref().unwrap().labeler_mode, "best");
+    assert_eq!(spec.side_b.search.as_ref().unwrap().expectimax_node_budget, 1000);
+    // 对发行以冻结 sha 入行（非网络类 side 为空串）
+    let m = e.f.matches.get_match(spec.match_id).unwrap().unwrap();
+    assert_eq!(m.candidate, "best");
+    assert_eq!(m.opponent, "");
+}
+
+#[test]
+fn rating_sides_validation_rejects() {
+    let e = env("");
+    e.f.networks.seed_network("best", None, "onnx");
+    e.f.networks.promote_best("best").unwrap();
+    e.f.networks.seed_network("cand", None, "onnx");
+    // 只填一侧 → 拒绝
+    let mut req = sides_rating_req(None, 20);
+    req.rating.as_mut().unwrap().side_a = Some(nnue_side("cand"));
+    req.rating.as_mut().unwrap().side_b = None;
+    let (ok, msg, _) = e.jobs.submit(&req).unwrap();
+    assert!(!ok);
+    assert!(msg.contains("成对填写"), "{msg}");
+    // 非法 kind → 拒绝
+    let mut bad = nnue_side("cand");
+    bad.kind = "chess_engine".into();
+    let (ok, msg, _) = e.jobs.submit(&sides_rating_req(Some((bad, nnue_side(""))), 20)).unwrap();
+    assert!(!ok);
+    assert!(msg.contains("invalid_player_kind"), "{msg}");
+    // 模型类 sha 未登记 → 拒绝
+    let (ok, msg, _) = e
+        .jobs
+        .submit(&sides_rating_req(Some((nnue_side("ghost"), nnue_side(""))), 20))
+        .unwrap();
+    assert!(!ok);
+    assert!(msg.contains("network_not_registered"), "{msg}");
+    // 非网络类带 sha → 拒绝（对照 collect 校验口径）
+    let mut rule = nnue_side("");
+    rule.kind = "random".into();
+    rule.network_sha = "cand".into();
+    let (ok, msg, _) = e
+        .jobs
+        .submit(&sides_rating_req(Some((nnue_side("cand"), rule)), 20))
+        .unwrap();
+    assert!(!ok);
+    assert!(msg.contains("network_sha 必须为空"), "{msg}");
+    // 模型类空 sha 但无 best → 拒绝
+    let e2 = env("");
+    e2.f.networks.seed_network("cand", None, "onnx");
+    let (ok, msg, _) = e2
+        .jobs
+        .submit(&sides_rating_req(Some((nnue_side(""), nnue_side(""))), 20))
+        .unwrap();
+    assert!(!ok);
+    assert!(msg.contains("no_best_network"), "{msg}");
+    // sides 形态下奇数局数 → 拒绝（共享校验不变）
+    let (ok, msg, _) = e
+        .jobs
+        .submit(&sides_rating_req(Some((nnue_side("cand"), nnue_side(""))), 3))
+        .unwrap();
+    assert!(!ok);
+    assert!(msg.contains("total_games"), "{msg}");
 }
 
 #[test]
