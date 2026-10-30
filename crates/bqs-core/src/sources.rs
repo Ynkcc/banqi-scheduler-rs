@@ -221,7 +221,16 @@ impl JobSource {
     /// selfplay job 派发：沿用既有 selfplay 生产路径，派发记账挂 job。
     /// 返回 Some(TASK_NONE) = 请求已被处理（空转等待，与旧 SelfplaySource 一致）。
     fn dispatch_selfplay(&self, req: &TaskRequest) -> CoreResult<Option<TaskResponse>> {
-        // 自动暂停时返回等待（selfplay 是数据生产主通道，停它即止血）。
+        // 人工 / 自动暂停时返回等待（selfplay 是数据生产主通道，停它即止血）。
+        // collect / eval job 是显式提交的任务，不受全局暂停拦截（job 自带
+        // pause / cancel 粒度控制，见 ControlJob）。
+        if self.ctl.manual_paused() {
+            return Ok(Some(TaskResponse {
+                kind: TaskKind::TaskNone as i32,
+                message: "self_play_paused".into(),
+                ..Default::default()
+            }));
+        }
         if self.ctl.auto_paused() {
             return Ok(Some(TaskResponse {
                 kind: TaskKind::TaskNone as i32,

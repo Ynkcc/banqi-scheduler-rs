@@ -215,20 +215,21 @@ impl Server {
             );
         }
 
-        // 人工暂停（生效暂停 = manual || auto，自动暂停由 selfplay 源按自动口径回包）
-        if self.ctl.manual_paused() {
-            return Ok(none("self_play_paused"));
-        }
-
         // 生成-消费平衡：惰性评估 trainer 消费健康度（内部按节流间隔重算）。
         // 自动暂停只拦数据生产（selfplay / 可配的 reanalysis），eval 恒放行——
         // 它不产 episode 且是绝对强度停机判据的来源。
+        // 人工暂停同样只拦 selfplay（在 selfplay 派发处生效）；collect / eval
+        // job 是显式提交的任务（job 自带 pause / cancel），不受全局暂停拦截。
         self.balance.evaluate(self.clock.now());
 
         for src in &self.sources {
             if let Some(resp) = src.try_task(&req)? {
                 return Ok(resp);
             }
+        }
+        // 源链全空且人工暂停：回旧语义消息，运维停机状态对 worker 可见。
+        if self.ctl.manual_paused() {
+            return Ok(none("self_play_paused"));
         }
         // 不可达（selfplay 源恒处理请求）：防御性兜底，让 worker 空转等待而非报错。
         Ok(none("no_task_available"))
@@ -278,7 +279,14 @@ impl Server {
             });
         }
         let obj_id = crate::sources::new_id();
-        let key = episode_key(&meta.network_sha, &obj_id);
+        // collect 任务（随机/规则棋手）可无任何模型产方 → network_sha 为空；
+        // 对象键用 anonymous 占位，避免 episodes// 双斜杠键破坏消费端解析。
+        let sha_for_key = if meta.network_sha.is_empty() {
+            "anonymous"
+        } else {
+            &meta.network_sha
+        };
+        let key = episode_key(sha_for_key, &obj_id);
         let url = self.signer.presign_put(&key, self.ttl_secs())?;
         let draft = EpisodeDraft {
             worker_id: meta.worker_id.clone(),
