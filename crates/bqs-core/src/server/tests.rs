@@ -26,6 +26,18 @@ fn default_server() -> (Arc<Server>, crate::test_support::Fakes) {
     server_with("")
 }
 
+fn resp_generation(resp: &TaskResponse) -> GenerationSpec {
+    resp.generation
+        .clone()
+        .expect("任务响应应携带 generation（无任务时为 None）")
+}
+
+fn resp_behavior(resp: &TaskResponse) -> generation_spec::Behavior {
+    resp_generation(resp)
+        .behavior
+        .expect("generation 应携带 behavior")
+}
+
 #[test]
 fn get_network_absent_returns_empty_url() {
     let (s, _) = default_server();
@@ -392,16 +404,15 @@ fn report_episode_idempotent_duplicate_replays_key() {
 #[test]
 fn report_match_result_gate_rejections() {
     let (s, _) = default_server();
-    let result = |task_id: &str, worker: &str, kind: i32| MatchResult {
+    let result = |task_id: &str, worker: &str| MatchResult {
         worker_id: worker.into(),
         task_id: task_id.into(),
-        kind,
         games: 2,
         pair_ll: 1,
         ..Default::default()
     };
 
-    let r = s.report_match_result(result("nope", "w1", 1)).unwrap();
+    let r = s.report_match_result(result("nope", "w1")).unwrap();
     assert!(!r.accepted);
     assert_eq!(r.message, "unknown_task_id:nope");
 
@@ -412,13 +423,11 @@ fn report_match_result_gate_rejections() {
             ..RunningTask::new(bqs_proto::TaskKind::TaskSelfplay)
         },
     );
-    let r = s.report_match_result(result("t1", "w2", 1)).unwrap();
+    let r = s.report_match_result(result("t1", "w2")).unwrap();
     assert!(!r.accepted);
     assert!(r.message.contains("worker_mismatch"), "{}", r.message);
 
-    let r = s
-        .report_match_result(result("t1", "w1", TaskKind::TaskSelfplay as i32))
-        .unwrap();
+    let r = s.report_match_result(result("t1", "w1")).unwrap();
     assert!(!r.accepted);
     assert_eq!(r.message, "task_is_not_gating");
 }
@@ -432,6 +441,7 @@ fn report_match_result_completed_short_circuit() {
         RunningTask {
             worker_id: "w1".into(),
             match_id: 7,
+            gating: true,
             ..RunningTask::new(bqs_proto::TaskKind::TaskSelfplay)
         },
     );
@@ -440,7 +450,6 @@ fn report_match_result_completed_short_circuit() {
         .report_match_result(MatchResult {
             worker_id: "w1".into(),
             task_id: "t1".into(),
-            kind: TaskKind::TaskSelfplay as i32,
             ..Default::default()
         })
         .unwrap();
@@ -458,6 +467,7 @@ fn report_match_result_routes_to_gatekeeper() {
         RunningTask {
             worker_id: "w1".into(),
             match_id,
+            gating: true,
             ..RunningTask::new(bqs_proto::TaskKind::TaskSelfplay)
         },
     );
@@ -466,7 +476,6 @@ fn report_match_result_routes_to_gatekeeper() {
         .report_match_result(MatchResult {
             worker_id: "w1".into(),
             task_id: "t1".into(),
-            kind: TaskKind::TaskSelfplay as i32,
             games: 10,
             pair_dd: 5,
             ..Default::default()
@@ -493,6 +502,7 @@ fn report_match_result_match_not_running_is_business_rejection() {
         RunningTask {
             worker_id: "w1".into(),
             match_id,
+            gating: true,
             ..RunningTask::new(bqs_proto::TaskKind::TaskRating)
         },
     );
@@ -500,7 +510,6 @@ fn report_match_result_match_not_running_is_business_rejection() {
         .report_match_result(MatchResult {
             worker_id: "w1".into(),
             task_id: "t1".into(),
-            kind: TaskKind::TaskRating as i32,
             games: 2,
             pair_ll: 1,
             ..Default::default()
@@ -599,7 +608,7 @@ fn get_task_returns_none_when_paused() {
             ..Default::default()
         })
         .unwrap();
-    assert_eq!(resp.kind, TaskKind::TaskNone as i32);
+    assert!(resp.generation.is_none(), "无任务不应携带 generation");
     assert_eq!(resp.message, "self_play_paused");
 }
 
@@ -626,7 +635,10 @@ fn get_task_auto_paused_stops_selfplay_but_not_reanalysis() {
             ..Default::default()
         })
         .unwrap();
-    assert_eq!(resp.kind, TaskKind::TaskReanalysis as i32);
+    assert!(matches!(
+        resp_behavior(&resp),
+        generation_spec::Behavior::Reanalysis(_)
+    ));
 
     let (s2, f2) = server_with(
         "[reanalysis]\ninterval_tasks = 1\nmax_queue = 10\n[balance]\nenabled = false\npause_reanalysis = true\n",
@@ -649,7 +661,7 @@ fn get_task_auto_paused_stops_selfplay_but_not_reanalysis() {
             ..Default::default()
         })
         .unwrap();
-    assert_eq!(resp.kind, TaskKind::TaskNone as i32);
+    assert!(resp.generation.is_none());
     assert!(
         resp.message.contains("self_play_auto_paused"),
         "{}",
@@ -677,7 +689,7 @@ fn get_task_client_version_gate() {
             ..Default::default()
         })
         .unwrap();
-    assert_eq!(resp.kind, TaskKind::TaskNone as i32);
+    assert!(resp.generation.is_none());
     assert_eq!(resp.message, "client_version_too_old");
 
     let resp = s
@@ -701,7 +713,7 @@ fn get_task_priority_chain() {
     };
 
     let none = s.get_task(req.clone()).unwrap();
-    assert_eq!(none.kind, TaskKind::TaskNone as i32);
+    assert!(none.generation.is_none());
     assert_eq!(none.message, "no_best_network_registered");
 
     f.networks.seed_network("best", None, "onnx");
@@ -715,9 +727,8 @@ fn get_task_priority_chain() {
     })
     .unwrap();
     let resp = s.get_task(req.clone()).unwrap();
-    assert_eq!(
-        resp.kind,
-        TaskKind::TaskSelfplay as i32,
+    assert!(
+        matches!(resp_behavior(&resp), generation_spec::Behavior::Plays(_)),
         "节流未满足：先 selfplay"
     );
     assert_eq!(resp.network_sha, "best");
@@ -725,8 +736,11 @@ fn get_task_priority_chain() {
     assert_eq!(resp.network_url, "", "current_network == best 不签下载 URL");
 
     let resp = s.get_task(req.clone()).unwrap();
-    assert_eq!(resp.kind, TaskKind::TaskReanalysis as i32);
-    assert_eq!(resp.games, 9, "games = 位置条数");
+    assert!(matches!(
+        resp_behavior(&resp),
+        generation_spec::Behavior::Reanalysis(_)
+    ));
+    assert_eq!(resp_generation(&resp).games, 9, "games = 位置条数");
     assert_eq!(s.reana.pending().1, 0);
 
     assert!(s.disp.lookup(&resp.task_id).is_some());
@@ -738,11 +752,19 @@ fn get_task_priority_chain() {
     })
     .unwrap();
     let resp = s.get_task(req.clone()).unwrap();
-    assert_eq!(resp.kind, TaskKind::TaskDeriveFeatures as i32);
-    assert_eq!(resp.episode_object_key, "episodes/best/x.epb.gz");
+    assert!(matches!(
+        resp_behavior(&resp),
+        generation_spec::Behavior::Derive(_)
+    ));
+    if let generation_spec::Behavior::Derive(d) = resp_behavior(&resp) {
+        assert_eq!(d.episode_object_key, "episodes/best/x.epb.gz");
+    }
 
     let resp = s.get_task(req).unwrap();
-    assert_eq!(resp.kind, TaskKind::TaskSelfplay as i32);
+    assert!(matches!(
+        resp_behavior(&resp),
+        generation_spec::Behavior::Plays(_)
+    ));
 }
 
 #[test]
@@ -772,9 +794,8 @@ fn get_task_rating_job_has_priority_over_selfplay() {
             ..Default::default()
         })
         .unwrap();
-    assert_eq!(
-        resp.kind,
-        TaskKind::TaskRating as i32,
+    assert!(
+        matches!(resp_behavior(&resp), generation_spec::Behavior::Plays(_)),
         "rating job 先于 selfplay 派发"
     );
     assert_eq!(resp.network_sha, "cand");

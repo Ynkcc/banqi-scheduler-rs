@@ -43,6 +43,8 @@ pub struct RunningTask {
 
     pub match_id: i64,
 
+    pub gating: bool,
+
     pub network_sha: String,
 
     pub opponent_sha: String,
@@ -67,6 +69,7 @@ impl Default for RunningTask {
             finished_at: 0,
             reported: false,
             match_id: 0,
+            gating: false,
             network_sha: String::new(),
             opponent_sha: String::new(),
             opponent_spec: String::new(),

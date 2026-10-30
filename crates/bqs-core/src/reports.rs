@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
 use bqs_config::Config;
-use bqs_judgment::{Hexanomial, Verdict, judge, new_bounds};
+use bqs_judgment::{judge, new_bounds, Hexanomial, Verdict};
 use bqs_proto::{MatchResult, MatchResultAck, TaskKind};
 
 use crate::{
-    CoreError, CoreResult,
     dispatch::{RunningTask, TaskDispatcher, TaskState},
     gatekeeper::Gatekeeper,
     jobs::{JobManager, RatingSpecJson},
     ports::{MatchStore, NetworkStore},
+    CoreError, CoreResult,
 };
 
 pub fn lookup_report_task(
@@ -80,8 +80,7 @@ impl ReportRouter {
         task: &RunningTask,
         req: &MatchResult,
     ) -> CoreResult<Option<MatchResultAck>> {
-        let is_gating = task.kind == TaskKind::TaskRating
-            || (task.kind == TaskKind::TaskSelfplay && task.match_id != 0);
+        let is_gating = task.gating;
         if !is_gating {
             return Ok(None);
         }
@@ -314,6 +313,7 @@ mod tests {
         t.opponent_sha = "best".into();
         t.games = 4;
         t.match_id = match_id;
+        t.gating = true;
         t.job_id = job_id.into();
         e.disp.register(task_id, t);
         e.jobs
@@ -336,7 +336,6 @@ mod tests {
         MatchResult {
             worker_id: worker.into(),
             task_id: task_id.into(),
-            kind: ProtoTaskKind::TaskRating as i32,
             network_sha: "cand".into(),
             opponent_sha: "best".into(),
             games: games as i32,
@@ -512,6 +511,7 @@ mod tests {
         let mut t2 = RunningTask::new(ProtoTaskKind::TaskRating);
         t2.worker_id = "w3".into();
         t2.match_id = match_id2;
+        t2.gating = true;
         t2.games = 12;
         e.disp.register("rt2", t2);
         let ack2 = e
@@ -519,6 +519,42 @@ mod tests {
             .route(&rating_result("w3", "rt2", [0, 0, 0, 0, 0, 6], 12))
             .unwrap();
         assert!(ack2.accepted && !ack2.match_concluded);
+    }
+
+    #[test]
+    fn gating_is_predetermined_by_registry_not_request() {
+        let e = env();
+        e.f.networks.seed_network("best", None, "onnx");
+        e.f.networks.promote_best("best").unwrap();
+        e.f.networks.seed_network("cand", None, "onnx");
+        let match_id = e.f.matches.seed_match("cand", "best", 10);
+
+        let mut t0 = RunningTask::new(ProtoTaskKind::TaskSelfplay);
+        t0.worker_id = "w0".into();
+        t0.games = 4;
+        e.disp.register("plain", t0);
+        let ack = e
+            .router
+            .route(&rating_result("w0", "plain", [0, 0, 2, 0, 0, 0], 4))
+            .unwrap();
+        assert!(!ack.accepted);
+        assert_eq!(ack.message, "task_is_not_gating");
+
+        let mut t1 = RunningTask::new(ProtoTaskKind::TaskSelfplay);
+        t1.worker_id = "w1".into();
+        t1.games = 4;
+        t1.match_id = match_id;
+        t1.gating = true;
+        e.disp.register("mix1", t1);
+        let ack = e
+            .router
+            .route(&rating_result("w1", "mix1", [0, 0, 2, 0, 0, 0], 4))
+            .unwrap();
+        assert!(ack.accepted, "{}", ack.message);
+        assert_eq!(
+            e.f.matches.get_match(match_id).unwrap().unwrap().num_games,
+            4
+        );
     }
 
     #[test]
@@ -532,6 +568,7 @@ mod tests {
         let mut t = RunningTask::new(ProtoTaskKind::TaskRating);
         t.worker_id = "w1".into();
         t.match_id = match_id;
+        t.gating = true;
         t.games = 20;
         e.disp.register("lt1", t);
 

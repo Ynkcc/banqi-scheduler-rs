@@ -1,9 +1,9 @@
 use bqs_proto::JobKind;
 
-use super::JobManager;
 use super::spec::JobSpecJson;
-use crate::CoreResult;
+use super::JobManager;
 use crate::consts;
+use crate::CoreResult;
 
 impl JobManager {
     pub fn control(&self, job_id: &str, action: &str) -> CoreResult<(bool, String, String)> {
@@ -86,6 +86,8 @@ impl JobManager {
         t.opponent_spec = opponent_spec.to_string();
         t.games = games;
         t.match_id = match_id;
+
+        t.gating = kind == bqs_proto::TaskKind::TaskRating || match_id != 0;
         t.job_id = job_id.to_string();
         self.disp.register(task_id, t);
         if let Some(extra) = deadline_secs_override {

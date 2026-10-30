@@ -35,7 +35,6 @@ impl Server {
         self.disp.prune();
 
         let none = |message: &str| TaskResponse {
-            kind: TaskKind::TaskNone as i32,
             message: message.to_string(),
             ..Default::default()
         };

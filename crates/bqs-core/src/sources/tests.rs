@@ -1,4 +1,4 @@
-use bqs_proto::{JobKind, RatingJobSpec, SubmitJobRequest, TaskKind, TaskRequest};
+use bqs_proto::{JobKind, RatingJobSpec, SubmitJobRequest, TaskRequest};
 
 use super::*;
 use crate::jobs::JobSpecJson;
@@ -97,13 +97,15 @@ fn rating_dispatch_builds_task_and_books_job() {
         )
         .unwrap()
         .unwrap();
-    assert_eq!(resp.kind, TaskKind::TaskRating as i32);
+    let g = resp.generation.clone().expect("generation");
+    let p = match g.behavior.expect("behavior") {
+        bqs_proto::generation_spec::Behavior::Plays(p) => p,
+        _ => panic!("expected plays"),
+    };
+    assert_eq!(p.player_a.unwrap().network_sha, "cand");
     assert_eq!(resp.network_sha, "cand");
     assert_eq!(resp.opponent_sha, "best", "对手空解析为当前 best");
-    assert_eq!(
-        resp.games, 8,
-        "games_per_task=8 缩放（threads=4/baseline=4）"
-    );
+    assert_eq!(g.games, 8, "games_per_task=8 缩放（threads=4/baseline=4）");
     assert_eq!(resp.network_key, "networks/cand.onnx");
     assert_eq!(
         resp.opponent_url, "get:networks/best.onnx",
@@ -114,6 +116,7 @@ fn rating_dispatch_builds_task_and_books_job() {
     assert_eq!(row.dispatched_games, 8);
     let t = e.src.disp.lookup(&resp.task_id).unwrap();
     assert_eq!(t.match_id, match_id);
+    assert!(t.gating, "rating 任务登记表 gating 预计算为 true");
     assert_eq!(t.job_id, job_id);
     assert!(e.jobs.rating_spec(&job_id).unwrap().is_some());
 }
@@ -131,7 +134,8 @@ fn rating_dispatch_clamps_to_remaining_games() {
         )
         .unwrap()
         .unwrap();
-    assert_eq!(resp.games, 8);
+    let g = resp.generation.clone().unwrap();
+    assert_eq!(g.games, 8);
 
     let resp2 = e
         .src
@@ -141,7 +145,7 @@ fn rating_dispatch_clamps_to_remaining_games() {
         )
         .unwrap()
         .unwrap();
-    assert_eq!(resp2.games, 2);
+    assert_eq!(resp2.generation.unwrap().games, 2);
 
     let next = e
         .src
@@ -215,19 +219,22 @@ fn rating_dispatch_with_sides_and_non_network_opponent() {
         )
         .unwrap()
         .unwrap();
-    assert_eq!(resp.kind, TaskKind::TaskRating as i32);
-
+    let g = resp.generation.clone().expect("generation");
+    let sides = match g.behavior.expect("behavior") {
+        bqs_proto::generation_spec::Behavior::Plays(p) => p,
+        _ => panic!("expected plays"),
+    };
     assert_eq!(resp.network_sha, "cand");
     assert_eq!(resp.network_key, "networks/cand.onnx");
     assert_eq!(resp.opponent_sha, "");
     assert_eq!(resp.opponent_key, "");
     assert_eq!(resp.opponent_url, "");
 
-    let sa = resp.rating_side_a.unwrap();
+    let sa = sides.player_a.unwrap();
     assert_eq!(sa.kind, "expectimax_nnue");
     assert_eq!(sa.network_sha, "cand");
     assert_eq!(sa.search.unwrap().expectimax_node_budget, 4000);
-    let sb = resp.rating_side_b.unwrap();
+    let sb = sides.player_b.unwrap();
     assert_eq!(sb.kind, "rule:capture_first");
     assert_eq!(sb.network_sha, "");
     assert_eq!(sb.search.unwrap().expectimax_node_budget, 1000);
@@ -246,4 +253,203 @@ fn selfplay_mix_skips_rating_match() {
     let pm = e.f.matches.pending_match().unwrap();
     let filtered = pm.filter(|m| !e.jobs.is_rating_match(m.id));
     assert!(filtered.is_none(), "rating match 应被过滤出混入查询");
+}
+
+fn plays_of(resp: &bqs_proto::TaskResponse) -> bqs_proto::Plays {
+    let g = resp.generation.clone().expect("generation");
+    match g.behavior.expect("behavior") {
+        bqs_proto::generation_spec::Behavior::Plays(p) => p,
+        _ => panic!("expected plays"),
+    }
+}
+
+fn submit_collect(env: &Env, total: u64) -> String {
+    env.f.networks.seed_network("n1", None, "onnx");
+    let (ok, msg, id) = env
+        .jobs
+        .submit(&SubmitJobRequest {
+            requester: "test".into(),
+            kind: JobKind::JobCollect as i32,
+            priority: 0,
+            collect: Some(bqs_proto::CollectionJobSpec {
+                variant: "4x8".into(),
+                scenario: bqs_proto::OpeningScenario::ScenarioAllRevealed as i32,
+                seed_strategy: Some(bqs_proto::SeedStrategy {
+                    kind: bqs_proto::SeedStrategyKind::SeedIncremental as i32,
+                    base_seed: 1000,
+                    ..Default::default()
+                }),
+                player_a: Some(bqs_proto::CollectPlayerSpec {
+                    kind: "mcts_resnet".into(),
+                    network_sha: "n1".into(),
+                    ..Default::default()
+                }),
+                player_b: Some(bqs_proto::CollectPlayerSpec {
+                    kind: "random".into(),
+                    ..Default::default()
+                }),
+                data_kind: bqs_proto::DataKind::DataResnet as i32,
+                total_games: total,
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(ok, "{msg}");
+    id
+}
+
+#[test]
+fn collect_dispatch_generation_snapshot() {
+    let e = env();
+    let job_id = submit_collect(&e, 100);
+    let resp = e.src.try_task(&req(4)).unwrap().expect("collect task");
+    let g = resp.generation.clone().expect("generation");
+    assert_eq!(g.variant, "4x8");
+    assert_eq!(
+        g.scenario,
+        bqs_proto::OpeningScenario::ScenarioAllRevealed as i32
+    );
+    assert_eq!(g.seed, Some(1000), "INCREMENTAL base_seed + seq=0");
+    assert_eq!(
+        g.games, 8,
+        "collect_games_per_task 缺省回落 games_per_task 缩放"
+    );
+    assert_eq!(
+        g.deadline_unix,
+        e.src.jobs.now() as u64 + e.src.cfg.jobs.collect_deadline_seconds as u64,
+        "collect deadline 换算为 unix 截止"
+    );
+    let p = plays_of(&resp);
+    let pa = p.player_a.unwrap();
+    let pb = p.player_b.unwrap();
+    assert_eq!(pa.kind, "mcts_resnet");
+    assert_eq!(pa.network_sha, "n1");
+    assert_eq!(pb.kind, "random");
+
+    let t = e.src.disp.lookup(&resp.task_id).unwrap();
+    assert!(!t.gating, "collect 任务不进 gating 通道");
+    let _ = job_id;
+}
+
+#[test]
+fn selfplay_pure_dispatch_generation_snapshot() {
+    let e = env();
+    e.f.networks.seed_network("best", None, "onnx");
+    e.f.networks.promote_best("best").unwrap();
+    let (ok, msg, _) = e
+        .jobs
+        .submit(&SubmitJobRequest {
+            requester: "test".into(),
+            kind: JobKind::JobSelfplay as i32,
+            priority: 0,
+            selfplay: Some(bqs_proto::SelfPlayJobSpec {
+                variant: "4x8".into(),
+                data_kind: bqs_proto::DataKind::DataResnet as i32,
+                search: Some(bqs_proto::CollectSearchParams {
+                    mcts_sims: 512,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(ok, "{msg}");
+
+    let resp = e.src.try_task(&req(4)).unwrap().expect("selfplay task");
+    let g = resp.generation.clone().expect("generation");
+    assert_eq!(g.variant, "4x8");
+    assert_eq!(g.data_kind, bqs_proto::DataKind::DataResnet as i32);
+    assert_eq!(g.games, 8);
+    assert_eq!(g.deadline_unix, 0, "非 collect 任务无超期");
+    let p = plays_of(&resp);
+    let pa = p.player_a.unwrap();
+    let pb = p.player_b.unwrap();
+    assert_eq!(pa.kind, "mcts_resnet");
+    assert_eq!(pa.network_sha, "best");
+    assert_eq!(pb.network_sha, "best", "纯自对弈双方同规格");
+    assert_eq!(
+        pa.search.as_ref().unwrap().mcts_sims,
+        512,
+        "job 规格的 mcts_sims 覆盖写入 per-player search"
+    );
+
+    let t = e.src.disp.lookup(&resp.task_id).unwrap();
+    assert!(!t.gating, "纯自对弈不进 gating 通道");
+}
+
+#[test]
+fn selfplay_gatekeeper_is_independent_plays_task() {
+    let e = env();
+    e.f.networks.seed_network("best", None, "nnue");
+    e.f.networks.promote_best("best").unwrap();
+    e.f.networks.seed_network("cand", None, "nnue");
+    let (ok, msg, job_id) = e
+        .jobs
+        .submit(&SubmitJobRequest {
+            requester: "test".into(),
+            kind: JobKind::JobSelfplay as i32,
+            priority: 0,
+            selfplay: Some(bqs_proto::SelfPlayJobSpec {
+                variant: "4x8".into(),
+                data_kind: bqs_proto::DataKind::DataNnue as i32,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(ok, "{msg}");
+
+    e.f.matches.seed_match("cand", "best", 400);
+    let resp = e.src.try_task(&req(4)).unwrap();
+    let resp = match resp {
+        Some(r) => r,
+        None => panic!("应派发 gatekeeper 任务"),
+    };
+    let p = plays_of(&resp);
+    let pa = p.player_a.unwrap();
+    let pb = p.player_b.unwrap();
+    assert_eq!(pa.network_sha, "cand", "player_a = 候选");
+    assert_eq!(pb.network_sha, "best", "player_b = 对手（best）");
+
+    let t = e.src.disp.lookup(&resp.task_id).unwrap();
+    assert!(t.gating, "gatekeeper 对打经登记表预计算进 gating 通道");
+    assert_ne!(t.match_id, 0, "对发行关联记入登记表");
+    let _ = job_id;
+}
+
+#[test]
+fn rating_dispatch_boundary_remaining_three_games() {
+    let e = env();
+    let (job_id, _) = submit_rating(&e, 10, "");
+
+    e.jobs
+        .note_dispatch(
+            "ghost-task",
+            &job_id,
+            7,
+            "wx",
+            bqs_proto::TaskKind::TaskCollect,
+            "",
+            "",
+            "",
+            0,
+            None,
+        )
+        .unwrap();
+    let resp = e
+        .src
+        .dispatch_rating(
+            &e.jobs.dispatchable(JobKind::JobRating).unwrap().remove(0),
+            &req(4),
+        )
+        .unwrap();
+    match resp {
+        Some(r) => assert_eq!(
+            r.generation.unwrap().games,
+            2,
+            "剩余 3 局（奇数）应成对化为 2"
+        ),
+        None => panic!("剩余 3 局应下发 2 局"),
+    }
 }

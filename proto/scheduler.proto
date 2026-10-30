@@ -28,50 +28,67 @@ message TaskRequest {
   string current_network = 5; // 本地已有网络 sha（空表示需要下载）
 }
 
+// 统一「生成行为」规格：收集器唯一认知的任务形态。
+// oneof 分支表达"行为差异"，不表达"任务意图"。
+// 任务意图（rating/collect/selfplay）与对发行关联（match_id）均为服务端内部
+// 概念，经 note_dispatch 登记表管理，不下发收集器。
+message GenerationSpec {
+  string variant = 1;
+  OpeningScenario scenario = 2;       // 开局场景（reanalysis/derive 忽略）
+  optional uint64 seed = 3;           // 开局种子（服务端解析 SeedStrategy 后下发；缺省 = 不固定）
+  DataKind data_kind = 4;             // 产出数据类别
+  uint64 games = 5;                   // 本批对局数 / 重搜位置条数
+  uint64 deadline_unix = 6;           // 收尾截止（0 = 无超期，需显式判断）
+  // 对弈任务一律产出棋谱（EpisodeBatch）+ 对局统计（MatchReport）。
+  oneof behavior {
+    Plays plays = 10;
+    Reanalysis reanalysis = 11;
+    DeriveFeatures derive = 12;
+  }
+}
+
+// 对弈行为：双方棋手规格（成对换色执行，保证六桶口径公平）。
+message Plays {
+  CollectPlayerSpec player_a = 1;
+  CollectPlayerSpec player_b = 2;
+}
+
+// 局面重搜行为：用指定网络对历史局面重跑搜索。
+message Reanalysis {
+  bytes payload = 1;                  // 版本化紧凑编码（encode_payload）
+}
+
+// 特征包派生行为：下载指定记录批次，派生 FeaturePack 上传。
+message DeriveFeatures {
+  string episode_object_key = 1;
+  string episode_url = 2;
+}
+
 // 任务响应
 message TaskResponse {
   string task_id = 1;
-  TaskKind kind = 2;
+  string variant = 2;
   string network_sha = 3;       // 主网络（训练网络）
-  string opponent_sha = 4;      // rating 对打时的对手网络；selfplay 为空
+  string opponent_sha = 4;      // 对手网络（有网络类 player_b 时）；否则为空
   string network_url = 5;       // R2 预签名下载 URL（主网络）；空 = 本地已有缓存
   string opponent_url = 6;      // 对手网络下载 URL
   string network_sha_remote = 7;  // 服务端当前 best sha（用于本地缓存比对）
-  int32 games = 8;              // 本批对局数
+  // 搜索/配置透传：reanalysis 的 mcts_sims 覆盖、对弈行为的 extra_config。
   SelfPlayParams params = 9;
   string message = 10;          // 无任务时的说明（task_waiting 等）
   // 网络对象键（networks/<sha>.<ext>）：恒下发，worker 的本地缓存路径即
   // cache_dir/<network_key>，扩展名即权重格式（onnx / pt / nnue）。
   string network_key = 11;
-  string opponent_key = 12;     // rating 任务的对手网络对象键
-  // 重搜任务（TASK_REANALYSIS）携带的历史局面载荷（版本化紧凑编码，格式见
-  // banqi-collector/src/pipeline/self_play/reanalysis.rs 的 encode_payload）。
-  // 其余任务为空。games 字段对重搜任务表示「位置条数」。
-  bytes reanalysis_payload = 13;
-  // 绝对强度评估（TASK_EVAL）的对手标识；空 = 用 opponent_sha / opponent_url 指定的网络。
-  // 取值形如 "rule:capture_first" / "rule:reveal_first" / "random"。
-  // 评估模式（纯策略 / 带搜索）由 params.mcts_sims 决定：0 = 纯策略 argmax，>0 = MCTS 模拟数。
-  string opponent_spec = 14;
-  // 特征包派生任务（TASK_DERIVE_FEATURES）的目标记录批次对象键
-  // （episodes/<network_sha>/<data_id>.epb.gz）。其余任务为空。
-  string episode_object_key = 15;
-  // 上述记录批次的预签名 GET URL（worker 下载记录批次用）；空 = 无。
-  string episode_url = 16;
-  // 参数化采集任务（TASK_COLLECT）规格：变体/场景/种子策略/双方棋手/特征类别。
-  CollectionJobSpec collect_spec = 17;
-  // TASK_COLLECT：本任务承担的完整对局数（恒为偶数——按换色配对成对派发）。
-  uint64 collect_games = 18;
-  // TASK_COLLECT：本任务的开局种子（服务端按 job 的 SeedStrategy 逐任务解析后
-  // 下发；collector 以此派生 pair 种子，无需感知策略细节）。
-  uint64 collect_seed = 19;
-  // TASK_RATING（sides 形态）双方棋手规格：kind / 冻结后的 network_sha / 各自
-  // 搜索参数（CollectSearchParams 含 labeler/expl，未填字段回落 worker 本地
-  // 默认）。网络对象仍经 network_key / opponent_key 下发；非网络类 side 无网络
-  // 对象，对应字段（network_sha/key/url 或 opponent_sha/key/url）留空。
-  CollectPlayerSpec rating_side_a = 20;
-  CollectPlayerSpec rating_side_b = 21;
+  string opponent_key = 12;     // 对手网络对象键（有网络类 player_b 时）
+  // 统一「生成行为」规格：任务唯一载体。generation 缺省 = 无任务（按 message 退避）。
+  GenerationSpec generation = 22;
+  // 删除：kind、games、reanalysis_payload、opponent_spec、episode_object_key/episode_url、
+  // collect_spec/collect_games/collect_seed、rating_side_a/b 等全部 kind 专属字段。
+  reserved 8, 13, 14, 15, 16, 17, 18, 19, 20, 21;
 }
 
+// 任务种类枚举：仅服务端内部使用（JobKind→TaskKind 映射、SPRT 路由、统计、
+// 日志），不再出现在任何下发给收集器的消息中（线上协议由 GenerationSpec 取代）。
 enum TaskKind {
   TASK_NONE = 0;      // 无任务，按 message 退避轮询
   // 训练闭环自对弈（由 JOB_SELFPLAY job 驱动派发；完成口径/抢占见文件头说明）
@@ -107,12 +124,12 @@ enum DataKind {
 }
 
 message SelfPlayParams {
+  // 非对弈行为（reanalysis）的搜索覆盖：0 = 用 worker 自对弈配置的默认值。
   int32 mcts_sims = 1;
-  float temperature = 2;
-  bool playout_cap_random = 3;
-  string variant = 4;           // 4x8 / 4x4 / 4x2
-  string extra_config = 5;      // JSON 透传
-  DataKind data_kind = 6;       // 本任务要产的数据类别（rating 任务不产数据，该字段无意义）
+  // JSON 透传（服务端动态配置：initial_revealed_pieces 等）。
+  string extra_config = 5;
+  reserved 2, 3, 4, 6;  // temperature / playout_cap_random / variant / data_kind
+  // 已并入 GenerationSpec（variant/data_kind）或 per-player CollectSearchParams。
 }
 
 // episode 元数据上报：服务端只收元数据 + 签发 R2 预签名 PUT，数据直传 R2
@@ -174,11 +191,11 @@ message RegisterNetworkAck {
   string match_task_hint = 3;   // 若已生成 gatekeeper 任务，附说明
 }
 
-// 对局结果上报（selfplay 汇总 / rating 单局）
+// 对局结果上报（plays 行为的统一回报）
 message MatchResult {
   string worker_id = 1;
   string task_id = 2;
-  TaskKind kind = 3;
+  reserved 3;                   // 原 kind（任务类型已无感，归属由服务端登记表裁决）
   string network_sha = 4;
   string opponent_sha = 5;
   int32 games = 6;              // 本批局数
@@ -186,20 +203,17 @@ message MatchResult {
   int32 losses = 8;
   int32 draws = 9;
   // 成对六桶计数（换色配对两局一组，互斥对型 [LL, LD, DD, WL, DW, WW]，
-  // WL = 一胜一负混合对）：rating 任务必填，selfplay 为 0。
-  // 旧版五桶的 pair_dd 聚合了 DD 与 WL，六桶拆开后逐桶无歧义。
+  // WL = 一胜一负混合对）：rating 类必填，纯自对弈为 0。
   int32 pair_ll = 10;
   int32 pair_ld = 11;
   int32 pair_dd = 12;
   int32 pair_wl = 21;           // 一胜一负混合对（旧五桶混在 pair_dd 中）
   int32 pair_dw = 13;
   int32 pair_ww = 14;
-  // 绝对强度评估（TASK_EVAL）：对手标识（与 TaskResponse.opponent_spec 同源，回显便于对账）。
-  // 其余任务为空。
-  string opponent_spec = 15;
-  // 平均对局步数（TASK_EVAL 统计用；rating / selfplay 未填时为 0）。
+  reserved 15;                  // 原 opponent_spec 回显（对账由服务端登记表完成）
+  // 平均对局步数（评估统计用；未填时为 0）。
   float avg_moves = 16;
-  // ---- 评估明细四分（TASK_EVAL 填写；旧版 collector 不填 = 0，调度器按聚合值兼容展示） ----
+  // ---- 评估明细四分（旧版 collector 不填 = 0，调度器按聚合值兼容展示） ----
   // 红方获胜局数（绝对色彩视角；与主网络视角 wins/losses 无换算关系，用于对称性诊断）
   int32 red_wins = 17;
   // 黑方获胜局数
@@ -235,7 +249,7 @@ message HeartbeatRequest {
 
 message HeartbeatReply {
   bool pause_self_play = 1;
-  int32 mcts_sims = 2;          // 覆盖值，0 表示不覆盖
+  reserved 2;                   // 原 mcts_sims 心跳覆盖（搜索参数改经 CollectPlayerSpec.search per-player 下发）
   float temperature = 3;
   bool playout_cap_random = 4;
   string best_network = 5;      // 当前 best sha（供 worker 判断是否换网）

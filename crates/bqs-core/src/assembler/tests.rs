@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
 use bqs_config::Config;
-use bqs_proto::{TaskKind, TaskRequest};
+use bqs_proto::TaskRequest;
 
 use crate::{
-    consts,
     control::Control,
     featurepack::PendingDerive,
     reanalysis::PendingReanalysis,
@@ -13,6 +12,18 @@ use crate::{
 };
 
 use super::*;
+
+fn plays(resp: &bqs_proto::TaskResponse) -> bqs_proto::Plays {
+    let g = resp.generation.clone().expect("generation 缺省");
+    match g.behavior.expect("behavior 缺省") {
+        bqs_proto::generation_spec::Behavior::Plays(p) => p,
+        _ => panic!("expected plays behavior"),
+    }
+}
+
+fn gen_spec(resp: &bqs_proto::TaskResponse) -> bqs_proto::GenerationSpec {
+    resp.generation.clone().expect("generation 缺省")
+}
 
 fn net(sha: &str, format: &str) -> Network {
     Network {
@@ -214,16 +225,14 @@ fn select_producer_unknown_data_kind_errors() {
     let best = net("s", "onnx");
     assert!(select_producer(Some(&best), None, None, None, 99).is_err());
 
-    assert!(
-        select_producer(
-            Some(&best),
-            None,
-            None,
-            None,
-            bqs_proto::DataKind::DataNone as i32
-        )
-        .is_err()
-    );
+    assert!(select_producer(
+        Some(&best),
+        None,
+        None,
+        None,
+        bqs_proto::DataKind::DataNone as i32
+    )
+    .is_err());
 }
 
 #[test]
@@ -276,16 +285,22 @@ fn reanalysis_task_follows_best_stack() {
     f.networks.seed_network("best", None, "onnx");
     f.networks.promote_best("best").unwrap();
     let resp = asm.reanalysis_task("t2", &item, &req).unwrap();
-    assert_eq!(resp.kind, TaskKind::TaskReanalysis as i32);
+    let g = gen_spec(&resp);
+    assert!(matches!(
+        g.behavior,
+        Some(bqs_proto::generation_spec::Behavior::Reanalysis(_))
+    ));
     assert_eq!(resp.network_sha, "best");
-    assert_eq!(resp.games, 3, "games = 位置条数");
-    assert_eq!(resp.reanalysis_payload, vec![9, 9]);
+    assert_eq!(g.games, 3, "games = 位置条数");
+    if let Some(bqs_proto::generation_spec::Behavior::Reanalysis(r)) = g.behavior {
+        assert_eq!(r.payload, vec![9, 9]);
+    }
     assert_eq!(resp.network_key, "networks/best.onnx");
     assert_eq!(resp.network_url, "get:networks/best.onnx");
     let p = resp.params.unwrap();
     assert_eq!(p.mcts_sims, 64, "取提交方指定值");
     assert_eq!(
-        p.data_kind,
+        g.data_kind,
         bqs_proto::DataKind::DataResnet as i32,
         "onnx → MCTS 栈"
     );
@@ -294,10 +309,7 @@ fn reanalysis_task_follows_best_stack() {
     f.networks.promote_best("best2").unwrap();
     let resp2 = asm.reanalysis_task("t3", &item, &req).unwrap();
     assert_eq!(resp2.network_key, "networks/best2.nnue");
-    assert_eq!(
-        resp2.params.unwrap().data_kind,
-        bqs_proto::DataKind::DataNnue as i32
-    );
+    assert_eq!(gen_spec(&resp2).data_kind, bqs_proto::DataKind::DataNnue as i32);
 
     f.networks.seed_network("best3", None, "pt");
     f.networks.promote_best("best3").unwrap();
@@ -323,74 +335,101 @@ fn derive_task_assembly() {
         created_at: 0,
     };
     let resp = asm.derive_task("t1", &item).unwrap();
-    assert_eq!(resp.kind, TaskKind::TaskDeriveFeatures as i32);
-    assert_eq!(resp.episode_object_key, "episodes/sha/x.epb.gz");
-    assert_eq!(
-        resp.episode_url, "get:episodes/sha/x.epb.gz",
-        "记录批次下载 URL 恒签发"
-    );
-    assert_eq!(resp.params.unwrap().variant, "4x8");
+    let g = gen_spec(&resp);
+    if let Some(bqs_proto::generation_spec::Behavior::Derive(d)) = g.behavior {
+        assert_eq!(d.episode_object_key, "episodes/sha/x.epb.gz");
+        assert_eq!(
+            d.episode_url, "get:episodes/sha/x.epb.gz",
+            "记录批次下载 URL 恒签发"
+        );
+    } else {
+        panic!("expected derive behavior");
+    }
+    assert_eq!(g.variant, "4x8");
 }
 
 #[test]
-fn selfplay_task_mixed_and_pure() {
+fn gatekeeper_task_independent_plays() {
     let f = Fakes::new();
-    f.networks.seed_network("best", None, "onnx");
+    f.networks.seed_network("cand", None, "nnue");
     f.networks.seed_network("opp", None, "onnx");
     let asm = assembler(&f);
+    let cand = f.networks.get_network("cand").unwrap().unwrap();
 
-    let sel = ProducerSelect {
-        mode: SelfplayMode::Mix,
-        producer: Some(net("cand", "nnue")),
-        m: Some(matcher(7, "opp")),
-        none_message: String::new(),
-    };
     let req = TaskRequest {
         threads: 4,
         current_network: "cand".into(),
         ..Default::default()
     };
-    let (resp, match_id) = asm.selfplay_task("t1", &req, &sel).unwrap();
-    assert_eq!(match_id, 7);
-    assert_eq!(resp.network_sha, "cand");
-    assert_eq!(resp.network_key, "networks/cand.nnue");
+    let resp = asm
+        .gatekeeper_task("t1", &req, &cand, "opp", Some(&net("opp", "onnx")), 8)
+        .unwrap();
+    let g = gen_spec(&resp);
+    let p = plays(&resp);
+    assert_eq!(g.games, 8);
+    assert_eq!(g.variant, "4x8", "默认 variant 来自配置");
     assert_eq!(
-        resp.params.unwrap().data_kind,
+        g.data_kind,
         bqs_proto::DataKind::DataNnue as i32,
-        "数据类别跟随产数据方（候选）架构"
+        "数据类别跟随候选架构"
     );
-    assert_eq!(resp.opponent_sha, "opp");
+    let pa = p.player_a.unwrap();
+    let pb = p.player_b.unwrap();
+    assert_eq!(pa.kind, "expectimax_nnue");
+    assert_eq!(pa.network_sha, "cand");
+    assert_eq!(pb.kind, "expectimax_nnue");
+    assert_eq!(pb.network_sha, "opp");
+    assert_eq!(resp.network_key, "networks/cand.nnue");
     assert_eq!(resp.opponent_key, "networks/opp.onnx");
     assert_eq!(
         resp.opponent_url, "get:networks/opp.onnx",
         "对手 URL 恒签发"
     );
     assert_eq!(resp.network_url, "", "worker 已有主网络不签 URL");
+}
 
-    let sel_missing = ProducerSelect {
-        mode: SelfplayMode::Mix,
-        producer: Some(net("cand", "nnue")),
-        m: Some(matcher(8, "ghost")),
-        none_message: String::new(),
-    };
-    let (resp2, mid2) = asm.selfplay_task("t2", &req, &sel_missing).unwrap();
-    assert_eq!(mid2, 0);
-    assert_eq!(resp2.opponent_sha, "");
+#[test]
+fn selfplay_task_pure_and_rule_opponent() {
+    let f = Fakes::new();
+    f.networks.seed_network("best", None, "onnx");
+    let asm = assembler(&f);
+    let producer = net("best", "onnx");
 
-    let sel_pure = ProducerSelect {
-        mode: SelfplayMode::Pure,
-        producer: Some(net("best", "onnx")),
-        m: None,
-        none_message: String::new(),
-    };
-    let req_fresh = TaskRequest {
+    let req = TaskRequest {
         threads: 4,
         current_network: String::new(),
         ..Default::default()
     };
-    let (resp3, mid3) = asm.selfplay_task("t3", &req_fresh, &sel_pure).unwrap();
-    assert_eq!(mid3, 0);
-    assert_eq!(resp3.network_url, "get:networks/best.onnx");
+    let resp = asm
+        .selfplay_task("t1", &req, &producer, "", None, 16)
+        .unwrap();
+    let g = gen_spec(&resp);
+    let p = plays(&resp);
+    assert_eq!(g.games, 16);
+    let pa = p.player_a.unwrap();
+    let pb = p.player_b.unwrap();
+    assert_eq!(pa.kind, "mcts_resnet");
+    assert_eq!(pa.network_sha, "best");
+    assert_eq!(pb.network_sha, "best", "纯自对弈双方同规格");
+    assert_eq!(resp.network_url, "get:networks/best.onnx");
+
+    let resp2 = asm
+        .selfplay_task("t2", &req, &producer, "rule:capture_first", None, 8)
+        .unwrap();
+    let pb2 = plays(&resp2).player_b.unwrap();
+    assert_eq!(pb2.kind, "rule:capture_first");
+    assert_eq!(pb2.network_sha, "");
+    assert_eq!(resp2.opponent_key, "");
+
+    let search = Some(bqs_proto::CollectSearchParams {
+        mcts_sims: 256,
+        ..Default::default()
+    });
+    let resp3 = asm
+        .selfplay_task("t3", &req, &producer, "", search, 8)
+        .unwrap();
+    let pa3 = plays(&resp3).player_a.unwrap();
+    assert_eq!(pa3.search.unwrap().mcts_sims, 256);
 }
 
 #[test]
@@ -429,7 +468,17 @@ fn rating_task_assembly() {
             &req,
         )
         .unwrap();
-    assert_eq!(resp.kind, TaskKind::TaskRating as i32);
+    let g = gen_spec(&resp);
+    assert_eq!(g.variant, "4x8");
+    assert_eq!(g.games, 8);
+    assert_eq!(
+        g.data_kind,
+        bqs_proto::DataKind::DataResnet as i32,
+        "data_kind 跟随候选架构"
+    );
+    let p = plays(&resp);
+    assert_eq!(p.player_a.unwrap().network_sha, "cand");
+    assert_eq!(p.player_b.unwrap().network_sha, "opp");
     assert_eq!(resp.network_sha, "cand");
     assert_eq!(resp.network_key, "networks/cand.onnx");
     assert_eq!(resp.network_url, "", "本地已有主网络不签 URL");
@@ -438,14 +487,6 @@ fn rating_task_assembly() {
     assert_eq!(
         resp.opponent_url, "get:networks/opp.nnue",
         "对手 URL 恒签发"
-    );
-    assert_eq!(resp.games, 8);
-    let p = resp.params.unwrap();
-    assert_eq!(p.variant, "4x8");
-    assert_eq!(
-        p.data_kind,
-        bqs_proto::DataKind::DataResnet as i32,
-        "data_kind 跟随候选架构"
     );
 
     let req2 = TaskRequest {
@@ -468,13 +509,23 @@ fn sentinel_task_is_nnue_without_network() {
         ..Default::default()
     };
     let resp = asm.sentinel_task("t1", &req);
-    assert_eq!(resp.kind, TaskKind::TaskSelfplay as i32);
-    assert_eq!(resp.network_sha, consts::RULE_SENTINEL_SHA);
-    assert_eq!(resp.network_key, "", "哨兵任务不签发任何权重对象键");
+    let g = gen_spec(&resp);
+    let p = plays(&resp);
     assert_eq!(
-        resp.params.unwrap().data_kind,
-        bqs_proto::DataKind::DataNnue as i32
+        g.games, 16,
+        "games_per_task=16 缩放（threads=4/baseline=4）"
     );
+    assert_eq!(
+        g.data_kind,
+        bqs_proto::DataKind::DataNnue as i32,
+        "哨兵产 NNUE 数据"
+    );
+    let pa = p.player_a.unwrap();
+    let pb = p.player_b.unwrap();
+    assert_eq!(pa.kind, "rule:capture_first", "哨兵编码为双方规则棋手");
+    assert_eq!(pb.kind, "rule:capture_first");
+    assert_eq!(pa.network_sha, "");
+    assert_eq!(resp.network_key, "", "哨兵任务不签发任何权重对象键");
 }
 
 #[test]
