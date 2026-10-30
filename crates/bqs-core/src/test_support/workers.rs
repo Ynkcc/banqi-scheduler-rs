@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::{CoreError, CoreResult, ports::WorkerStore, types::Worker};
+use crate::{ports::WorkerStore, types::Worker, CoreError, CoreResult};
 
 #[derive(Debug, Default)]
 pub struct FakeWorkers {

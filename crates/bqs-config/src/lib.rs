@@ -55,7 +55,6 @@ pub struct Config {
     pub sprt: SprtSection,
     pub reanalysis: ReanalysisSection,
     pub balance: BalanceSection,
-    pub eval: EvalSection,
 
     pub jobs: JobsSection,
 }
@@ -198,54 +197,6 @@ impl Default for BalanceSection {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
-pub struct EvalSection {
-    pub enabled: bool,
-
-    pub opponents: Vec<String>,
-
-    pub games: i64,
-
-    pub games_per_task: i64,
-
-    pub mcts_sims: i32,
-
-    pub every_n_promotions: i64,
-
-    pub no_progress_n: i64,
-    pub no_progress_eps: f64,
-
-    pub rollback_eps: f64,
-
-    pub floor_win_rate: f64,
-
-    pub stop_win_rate: f64,
-}
-
-impl Default for EvalSection {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            opponents: vec![
-                "random".into(),
-                "rule:reveal_first".into(),
-                "rule:capture_first".into(),
-                "rule:material_expectimax".into(),
-            ],
-            games: 1000,
-            games_per_task: 0,
-            mcts_sims: 0,
-            every_n_promotions: 1,
-            no_progress_n: 3,
-            no_progress_eps: 0.035,
-            rollback_eps: 0.04,
-            floor_win_rate: 0.0,
-            stop_win_rate: 0.0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, default)]
 pub struct JobsSection {
     pub collect_games_per_task: i64,
 
@@ -253,7 +204,6 @@ pub struct JobsSection {
 
     pub priority_selfplay: i64,
     pub priority_collect: i64,
-    pub priority_eval: i64,
 
     pub priority_rating: i64,
 }
@@ -265,7 +215,6 @@ impl Default for JobsSection {
             collect_deadline_seconds: 1800,
             priority_selfplay: 0,
             priority_collect: 50,
-            priority_eval: 100,
             priority_rating: 80,
         }
     }
@@ -314,9 +263,6 @@ impl Config {
                 sp.elo1, sp.elo0
             )));
         }
-        if self.eval.games <= 0 {
-            return Err(ConfigError::Invalid("eval.games 必须 > 0".into()));
-        }
         Ok(())
     }
 }
@@ -351,7 +297,6 @@ mod tests {
         let cfg = Config::parse(raw, "example").unwrap();
         cfg.validate().unwrap();
         assert_eq!(cfg.selfplay.mix_ratio, 0.25);
-        assert_eq!(cfg.eval.opponents.len(), 4);
         assert_eq!(cfg.balance.mode, BalanceMode::Warn);
     }
 

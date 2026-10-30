@@ -6,7 +6,7 @@ mod reana;
 mod tests;
 
 pub use derive::DeriveSource;
-pub use job::{JobPhase, JobSource};
+pub use job::JobSource;
 pub use reana::ReanaSource;
 
 use std::sync::Arc;
@@ -19,7 +19,6 @@ use crate::{
     assembler::TaskAssembler,
     control::Control,
     dispatch::TaskDispatcher,
-    evalcoord::EvalCoordinator,
     featurepack::DeriveQueue,
     jobs::JobManager,
     ports::{MatchStore, NetworkStore},
@@ -37,9 +36,9 @@ pub fn new_id() -> String {
 pub struct Sources;
 
 impl Sources {
+    #[allow(clippy::too_many_arguments)]
     pub fn assemble(
         jobs: Arc<JobManager>,
-        evalc: Arc<EvalCoordinator>,
         reana: Arc<ReanaQueue>,
         derive: Arc<DeriveQueue>,
         matches: Arc<dyn MatchStore>,
@@ -49,22 +48,7 @@ impl Sources {
         ctl: Arc<Control>,
         cfg: Arc<Config>,
     ) -> Vec<Box<dyn TaskSource>> {
-        let mk = |phase: JobPhase| {
-            Box::new(JobSource {
-                jobs: jobs.clone(),
-                evalc: evalc.clone(),
-                matches: matches.clone(),
-                nets: nets.clone(),
-                disp: disp.clone(),
-                reana: reana.clone(),
-                asm: asm.clone(),
-                ctl: ctl.clone(),
-                cfg: cfg.clone(),
-                phase,
-            }) as Box<dyn TaskSource>
-        };
         vec![
-            mk(JobPhase::High),
             Box::new(ReanaSource {
                 reana: reana.clone(),
                 disp: disp.clone(),
@@ -77,7 +61,16 @@ impl Sources {
                 disp: disp.clone(),
                 asm: asm.clone(),
             }),
-            mk(JobPhase::Low),
+            Box::new(JobSource {
+                jobs,
+                matches,
+                nets,
+                disp,
+                reana,
+                asm,
+                ctl,
+                cfg,
+            }),
         ]
     }
 }

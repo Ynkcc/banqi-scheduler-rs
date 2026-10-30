@@ -21,13 +21,6 @@ fn env() -> Env {
     let ports = f.ports();
     let ctl = Arc::new(crate::control::Control::new(&ports, cfg.clone()));
     let disp = Arc::new(TaskDispatcher::new(&ports, cfg.clone(), f.clock.clone()));
-    let evalc = Arc::new(EvalCoordinator::new(
-        &ports,
-        cfg.clone(),
-        f.clock.clone(),
-        ctl.clone(),
-        disp.clone(),
-    ));
     let jobs = Arc::new(JobManager::new(
         ports.jobs.clone(),
         disp.clone(),
@@ -45,7 +38,6 @@ fn env() -> Env {
     ));
     let src = JobSource {
         jobs: jobs.clone(),
-        evalc,
         matches: ports.matches.clone(),
         nets: ports.networks.clone(),
         disp,
@@ -53,7 +45,6 @@ fn env() -> Env {
         asm,
         ctl,
         cfg,
-        phase: JobPhase::Low,
     };
     Env { f, jobs, src }
 }

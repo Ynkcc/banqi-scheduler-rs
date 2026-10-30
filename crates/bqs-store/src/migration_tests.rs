@@ -84,7 +84,7 @@ mod tests {
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap()
         };
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
 
         for (table, col) in [
             ("workers", "note"),
@@ -96,7 +96,6 @@ mod tests {
             ("episodes", "match_id"),
             ("episodes", "red_wins"),
             ("episodes", "draw_truncation"),
-            ("eval_results", "red_wins"),
             ("matches", "pair_wl"),
         ] {
             let n: i64 = conn
@@ -109,25 +108,14 @@ mod tests {
             assert_eq!(n, 1, "{table}.{col} 应已补列");
         }
 
-        let row: (i64, i64, i64, i64, i64, i64, i64) = conn
+        let dropped: i64 = conn
             .query_row(
-                "SELECT target_games, per_task_games, attempts, wins, draws, losses, num_games
-                 FROM eval_queue WHERE network_sha='old-cand' AND opponent_spec='rule:x'",
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('eval_queue','eval_results')",
                 [],
-                |r| {
-                    Ok((
-                        r.get(0)?,
-                        r.get(1)?,
-                        r.get(2)?,
-                        r.get(3)?,
-                        r.get(4)?,
-                        r.get(5)?,
-                        r.get(6)?,
-                    ))
-                },
+                |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(row, (16, 8, 0, 3, 2, 3, 8));
+        assert_eq!(dropped, 0, "eval 表应已在 v12 被 drop");
 
         let n: i64 = conn
             .query_row(
@@ -201,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_whole_package_eval_queue() {
+    fn legacy_whole_package_eval_queue_dropped() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("whole.db");
         {
@@ -233,19 +221,28 @@ mod tests {
                  CREATE TABLE eval_queue (network_sha TEXT NOT NULL, opponent_spec TEXT NOT NULL,
                     attempts INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
                     PRIMARY KEY (network_sha, opponent_spec));
-                 INSERT INTO eval_queue VALUES ('n', 'rule:y', 4, 77);",
+                 INSERT INTO eval_queue VALUES ('n', 'rule:y', 4, 77);
+                 INSERT INTO settings VALUES ('eval_promotions', '9');",
             )
             .unwrap();
         }
         let _store = crate::Store::open(path.to_str().unwrap()).unwrap();
         let conn = _store.conn.lock().unwrap();
-        let row: (i64, i64) = conn
+        let dropped: i64 = conn
             .query_row(
-                "SELECT target_games, attempts FROM eval_queue WHERE network_sha='n' AND opponent_spec='rule:y'",
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('eval_queue','eval_results')",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(row, (0, 4), "整包行 target=0，attempts 保留");
+        assert_eq!(dropped, 0, "eval 表应已在 v12 被 drop");
+        let stale_settings: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM settings WHERE key LIKE 'eval%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stale_settings, 0, "eval_* 设置键应已清理");
     }
 }

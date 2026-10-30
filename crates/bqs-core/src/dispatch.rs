@@ -9,6 +9,8 @@ use crate::{consts, ports::Clock, ports::Ports};
 
 const TASK_DEADLINE_DEFAULT: Duration = Duration::from_secs(10 * 60);
 
+const REANALYSIS_TASK_STALE_AFTER: Duration = Duration::from_secs(15 * 60);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskState {
     Assigned,
@@ -86,9 +88,7 @@ impl RunningTask {
 
 fn deadline_secs(kind: TaskKind) -> i64 {
     match kind {
-        TaskKind::TaskEval | TaskKind::TaskReanalysis => {
-            consts::EVAL_TASK_STALE_AFTER.as_secs() as i64
-        }
+        TaskKind::TaskReanalysis => REANALYSIS_TASK_STALE_AFTER.as_secs() as i64,
         TaskKind::TaskCollect => consts::COLLECT_TASK_DEADLINE.as_secs() as i64,
         _ => TASK_DEADLINE_DEFAULT.as_secs() as i64,
     }
@@ -410,17 +410,18 @@ mod tests {
     fn deadline_by_kind() {
         let clock = FakeClock::new(1000);
         let d = dispatcher(clock.clone());
-        d.register("e", task("w", TaskKind::TaskEval, 10));
+        d.register("e", task("w", TaskKind::TaskCollect, 10));
         d.register("r", task("w", TaskKind::TaskReanalysis, 10));
         d.register("s", task("w", TaskKind::TaskSelfplay, 10));
         d.register("x", task("w", TaskKind::TaskDeriveFeatures, 1));
         assert_eq!(
             d.lookup("e").unwrap().deadline,
-            1000 + consts::EVAL_TASK_STALE_AFTER.as_secs() as i64
+            1000 + consts::COLLECT_TASK_DEADLINE.as_secs() as i64
         );
         assert_eq!(
             d.lookup("r").unwrap().deadline,
-            1000 + consts::EVAL_TASK_STALE_AFTER.as_secs() as i64
+            1000 + 900,
+            "reanalysis 复用 15min 慢任务窗口"
         );
         assert_eq!(d.lookup("s").unwrap().deadline, 1000 + 600);
         assert_eq!(d.lookup("x").unwrap().deadline, 1000 + 600);
@@ -445,9 +446,9 @@ mod tests {
     fn expired_task_can_still_claim_late_report() {
         let clock = FakeClock::new(1000);
         let d = dispatcher(clock.clone());
-        d.register("t1", task("w1", TaskKind::TaskEval, 10));
+        d.register("t1", task("w1", TaskKind::TaskSelfplay, 10));
 
-        clock.advance(consts::EVAL_TASK_STALE_AFTER.as_secs() as i64);
+        clock.advance(consts::COLLECT_TASK_DEADLINE.as_secs() as i64);
         d.prune();
         assert_eq!(d.lookup("t1").unwrap().state, TaskState::Expired);
 
@@ -522,7 +523,7 @@ mod tests {
         d.prune();
         assert!(d.lookup("done").is_none(), "终态记录超保留期应回收");
 
-        d.register("stale", task("w1", TaskKind::TaskEval, 10));
+        d.register("stale", task("w1", TaskKind::TaskSelfplay, 10));
         clock.advance(consts::TASK_MAX_RETENTION.as_secs() as i64);
         d.prune();
         assert!(d.lookup("stale").is_none(), "age >= 24h 应直接回收");
@@ -537,7 +538,7 @@ mod tests {
         d.prune();
         assert_eq!(d.lookup("t1").unwrap().state, TaskState::Expired);
 
-        d.register("t2", task("w1", TaskKind::TaskEval, 4));
+        d.register("t2", task("w1", TaskKind::TaskSelfplay, 4));
         clock.set(659);
         d.prune();
         assert_eq!(
@@ -561,31 +562,31 @@ mod tests {
     fn in_flight_games_filters() {
         let clock = FakeClock::new(0);
         let d = dispatcher(clock.clone());
-        d.register("a", task("w1", TaskKind::TaskEval, 10));
-        d.register("b", task("w2", TaskKind::TaskEval, 5));
+        d.register("a", task("w1", TaskKind::TaskSelfplay, 10));
+        d.register("b", task("w2", TaskKind::TaskSelfplay, 5));
         d.register("c", {
-            let mut t = task("w3", TaskKind::TaskEval, 7);
+            let mut t = task("w3", TaskKind::TaskSelfplay, 7);
             t.opponent_spec = "other".into();
             t
         });
-        let stale = consts::EVAL_TASK_STALE_AFTER;
+        let stale = consts::COLLECT_TASK_DEADLINE;
 
         assert_eq!(
-            d.in_flight_games(TaskKind::TaskEval, "n1", "random", 0, stale),
+            d.in_flight_games(TaskKind::TaskSelfplay, "n1", "random", 0, stale),
             15
         );
         assert_eq!(
-            d.in_flight_games(TaskKind::TaskEval, "n1", "other", 0, stale),
+            d.in_flight_games(TaskKind::TaskSelfplay, "n1", "other", 0, stale),
             7
         );
         assert_eq!(
-            d.in_flight_games(TaskKind::TaskEval, "nX", "random", 0, stale),
+            d.in_flight_games(TaskKind::TaskSelfplay, "nX", "random", 0, stale),
             0
         );
 
         assert_eq!(
             d.in_flight_games(
-                TaskKind::TaskEval,
+                TaskKind::TaskSelfplay,
                 "n1",
                 "random",
                 stale.as_secs() as i64,
@@ -595,7 +596,7 @@ mod tests {
         );
         assert_eq!(
             d.in_flight_games(
-                TaskKind::TaskEval,
+                TaskKind::TaskSelfplay,
                 "n1",
                 "random",
                 stale.as_secs() as i64 - 1,
@@ -606,16 +607,16 @@ mod tests {
 
         d.mark_done("a");
         assert_eq!(
-            d.in_flight_games(TaskKind::TaskEval, "n1", "random", 0, stale),
+            d.in_flight_games(TaskKind::TaskSelfplay, "n1", "random", 0, stale),
             5
         );
 
-        d.register("e", task("w4", TaskKind::TaskEval, 3));
+        d.register("e", task("w4", TaskKind::TaskSelfplay, 3));
         clock.advance(stale.as_secs() as i64);
         d.prune();
         assert_eq!(
             d.in_flight_games(
-                TaskKind::TaskEval,
+                TaskKind::TaskSelfplay,
                 "n1",
                 "random",
                 stale.as_secs() as i64,
@@ -676,7 +677,7 @@ mod tests {
             "e1",
             RunningTask {
                 games: 10,
-                ..RunningTask::new(TaskKind::TaskEval)
+                ..RunningTask::new(TaskKind::TaskSelfplay)
             },
         );
         assert_eq!(d.lookup("e1").unwrap().task_id, "e1");
@@ -690,7 +691,7 @@ mod tests {
         d.register("c1", task("w2", TaskKind::TaskRating, 4));
 
         clock.set(960);
-        d.register("e1", task("w3", TaskKind::TaskEval, 10));
+        d.register("e1", task("w3", TaskKind::TaskSelfplay, 10));
         clock.advance(1);
         d.register("e2", task("w4", TaskKind::TaskReanalysis, 3));
 
@@ -726,10 +727,10 @@ mod tests {
         let clock = FakeClock::new(0);
         let d = dispatcher(clock.clone());
         for i in 0..40 {
-            d.register(&format!("t{i}"), task("w", TaskKind::TaskEval, 1));
+            d.register(&format!("t{i}"), task("w", TaskKind::TaskSelfplay, 1));
             clock.advance(1);
         }
-        clock.advance(consts::EVAL_TASK_STALE_AFTER.as_secs() as i64);
+        clock.advance(consts::COLLECT_TASK_DEADLINE.as_secs() as i64);
         d.prune();
         let snap = d.task_state_snapshot();
         assert_eq!(snap.counts.expired, 40);

@@ -4,13 +4,12 @@ use axum::extract::{Path, State};
 use axum::Json;
 
 use bqs_core::dispatch::TaskStateStats;
-use bqs_core::evalcoord::EvalOverride;
 use bqs_core::types::Network;
 use bqs_judgment::sprt::{judge, llr, new_bounds};
 
 use crate::views::{
-    EpisodeRateEstimateView, EvalConfigView, KindStatsView, MatchView, NetworkView, OkView,
-    SprtView, StatusView, TaskView, WorkerView,
+    EpisodeRateEstimateView, KindStatsView, MatchView, NetworkView, OkView, SprtView, StatusView,
+    TaskView, WorkerView,
 };
 use crate::{read_endpoint, write_endpoint, ApiError, ApiResult, AppState, MAX_CONTROL_BODY};
 
@@ -65,56 +64,11 @@ fn worker_stats(
     }
 }
 
-pub fn apply_eval_override(
-    o: Option<&EvalOverride>,
-    enabled: &mut bool,
-    opponents: &mut Vec<String>,
-    stop_win_rate: &mut f64,
-) {
-    let Some(o) = o else { return };
-    if let Some(v) = o.enabled {
-        *enabled = v;
-    }
-    if let Some(v) = &o.opponents {
-        *opponents = v.clone();
-    }
-    if let Some(v) = o.stop_win_rate {
-        *stop_win_rate = v;
-    }
-}
-
-pub fn to_eval_config_view(st: &AppState) -> EvalConfigView {
-    let cfg = &st.server.cfg.eval;
-    let (mut enabled, mut opponents, mut stop_win_rate) =
-        (cfg.enabled, cfg.opponents.clone(), cfg.stop_win_rate);
-    apply_eval_override(
-        st.server.ctl.eval_override().as_ref(),
-        &mut enabled,
-        &mut opponents,
-        &mut stop_win_rate,
-    );
-    EvalConfigView {
-        enabled,
-        opponents,
-        games: cfg.games,
-        task_games: cfg.games_per_task,
-        mcts_sims: cfg.mcts_sims,
-        every_n_promotions: cfg.every_n_promotions,
-        no_progress_n: cfg.no_progress_n,
-        no_progress_eps: cfg.no_progress_eps,
-        rollback_eps: cfg.rollback_eps,
-        floor_win_rate: cfg.floor_win_rate,
-        stop_win_rate,
-        mode: crate::views::eval_search_mode_name(cfg.mcts_sims),
-        pending: st.server.evalc.pending_eval() as i64,
-    }
-}
-
 pub async fn status(State(st): State<AppState>) -> ApiResult<Json<StatusView>> {
     read_endpoint(&st, |st| -> Result<StatusView, ApiError> {
         let server = &st.server;
         let best = server.ports.networks.get_best()?;
-        let counts: crate::views::CountsView = server.ports.eval.counts()?.into();
+        let counts: crate::views::CountsView = server.ports.stats.counts()?.into();
         let ctl = &server.ctl;
         let (should_stop, stop_reason) = ctl.should_stop();
         Ok(StatusView {
@@ -131,7 +85,6 @@ pub async fn status(State(st): State<AppState>) -> ApiResult<Json<StatusView>> {
             },
             best: best.as_ref().map(to_network_view),
             counts,
-            eval: to_eval_config_view(st),
             should_stop,
             stop_reason,
             auto_paused: ctl.auto_paused(),

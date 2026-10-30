@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::{CoreResult, ports::TrainerRegistryStore, types::Trainer};
+use crate::{ports::TrainerRegistryStore, types::Trainer, CoreResult};
 
 use super::trainers::FakeTrainers;
 

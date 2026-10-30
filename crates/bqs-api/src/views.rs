@@ -10,7 +10,6 @@ pub struct OkView {
 }
 
 pub use bqs_core::data_kind::display_name as data_kind_name;
-pub use bqs_core::evalcoord::eval_search_mode_name;
 
 pub fn balance_mode_name(mode: bqs_config::BalanceMode) -> &'static str {
     match mode {
@@ -61,8 +60,6 @@ pub struct CountsView {
     pub episode_games: i64,
     #[serde(rename = "workers")]
     pub workers: i64,
-    #[serde(rename = "evalResults")]
-    pub eval_results: i64,
 }
 
 impl From<StoreCounts> for CountsView {
@@ -74,39 +71,8 @@ impl From<StoreCounts> for CountsView {
             episodes: c.episodes,
             episode_games: c.episode_games,
             workers: c.workers,
-            eval_results: c.eval_results,
         }
     }
-}
-
-#[derive(Debug, Serialize)]
-pub struct EvalConfigView {
-    #[serde(rename = "enabled")]
-    pub enabled: bool,
-    #[serde(rename = "opponents")]
-    pub opponents: Vec<String>,
-    #[serde(rename = "games")]
-    pub games: i64,
-    #[serde(rename = "taskGames")]
-    pub task_games: i64,
-    #[serde(rename = "mctsSims")]
-    pub mcts_sims: i32,
-    #[serde(rename = "everyNPromotions")]
-    pub every_n_promotions: i64,
-    #[serde(rename = "noProgressN")]
-    pub no_progress_n: i64,
-    #[serde(rename = "noProgressEps")]
-    pub no_progress_eps: f64,
-    #[serde(rename = "rollbackEps")]
-    pub rollback_eps: f64,
-    #[serde(rename = "floorWinRate")]
-    pub floor_win_rate: f64,
-    #[serde(rename = "stopWinRate")]
-    pub stop_win_rate: f64,
-    #[serde(rename = "mode")]
-    pub mode: String,
-    #[serde(rename = "pending")]
-    pub pending: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -127,8 +93,6 @@ pub struct StatusView {
     pub best: Option<NetworkView>,
     #[serde(rename = "counts")]
     pub counts: CountsView,
-    #[serde(rename = "eval")]
-    pub eval: EvalConfigView,
     #[serde(rename = "shouldStop")]
     pub should_stop: bool,
     #[serde(rename = "stopReason")]
@@ -266,115 +230,6 @@ pub struct TaskView {
     pub games: i32,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct EvalResultView {
-    #[serde(rename = "networkSha")]
-    pub network_sha: String,
-    #[serde(rename = "opponentSpec")]
-    pub opponent_spec: String,
-    #[serde(rename = "wins")]
-    pub wins: i64,
-    #[serde(rename = "draws")]
-    pub draws: i64,
-    #[serde(rename = "losses")]
-    pub losses: i64,
-    #[serde(rename = "redWins")]
-    pub red_wins: i64,
-    #[serde(rename = "blackWins")]
-    pub black_wins: i64,
-    #[serde(rename = "drawNoCapture")]
-    pub draw_no_capture: i64,
-    #[serde(rename = "drawTruncation")]
-    pub draw_truncation: i64,
-    #[serde(rename = "numGames")]
-    pub num_games: i64,
-    #[serde(rename = "winRate")]
-    pub win_rate: f64,
-    #[serde(rename = "avgMoves")]
-    pub avg_moves: f64,
-    #[serde(rename = "createdAt")]
-    pub created_at: i64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct EvalTrendView {
-    #[serde(rename = "opponent")]
-    pub opponent: String,
-    #[serde(rename = "versions")]
-    pub versions: i64,
-    #[serde(rename = "noProgress")]
-    pub no_progress: i64,
-    #[serde(rename = "latestWinRate")]
-    pub latest_win_rate: f64,
-    #[serde(rename = "points")]
-    pub points: Vec<EvalResultView>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct EvalRunningView {
-    #[serde(rename = "networkSha")]
-    pub network_sha: String,
-    #[serde(rename = "spec")]
-    pub spec: String,
-    #[serde(rename = "numGames")]
-    pub num_games: i64,
-    #[serde(rename = "targetGames")]
-    pub target_games: i64,
-    #[serde(rename = "inFlight")]
-    pub in_flight: i64,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct EvalTrendProgressView {
-    pub versions: i64,
-    pub no_progress: i64,
-    pub latest_win_rate: f64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct EvalView {
-    #[serde(rename = "config")]
-    pub config: EvalConfigView,
-    #[serde(rename = "shouldStop")]
-    pub should_stop: bool,
-    #[serde(rename = "stopReason")]
-    pub stop_reason: String,
-    #[serde(rename = "latest")]
-    pub latest: Vec<EvalResultView>,
-    #[serde(rename = "trends")]
-    pub trends: Vec<EvalTrendView>,
-    #[serde(rename = "running")]
-    pub running: Vec<EvalRunningView>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct EvalTriggerView {
-    #[serde(rename = "ok")]
-    pub ok: bool,
-    #[serde(rename = "triggered")]
-    pub triggered: i64,
-    #[serde(rename = "message")]
-    pub message: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct EvalConfigGetView {
-    #[serde(rename = "override")]
-    pub override_: Option<bqs_core::evalcoord::EvalOverride>,
-    #[serde(rename = "effective")]
-    pub effective: EvalEffectiveView,
-}
-
-#[derive(Debug, Serialize)]
-pub struct EvalEffectiveView {
-    #[serde(rename = "enabled")]
-    pub enabled: bool,
-    #[serde(rename = "opponents")]
-    pub opponents: Vec<String>,
-    #[serde(rename = "stopWinRate")]
-    pub stop_win_rate: f64,
 }
 
 #[derive(Debug, Serialize)]

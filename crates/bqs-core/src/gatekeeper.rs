@@ -8,7 +8,6 @@ use bqs_proto::{MatchResult, MatchResultAck};
 use crate::{
     CoreError, CoreResult,
     dispatch::RunningTask,
-    evalcoord::EvalCoordinator,
     ports::{MatchStore, NetworkStore, Ports},
     types::network_status,
 };
@@ -38,16 +37,14 @@ pub struct Gatekeeper {
     cfg: Arc<Config>,
     matches: Arc<dyn MatchStore>,
     nets: Arc<dyn NetworkStore>,
-    evalc: Arc<EvalCoordinator>,
 }
 
 impl Gatekeeper {
-    pub fn new(ports: &Ports, cfg: Arc<Config>, evalc: Arc<EvalCoordinator>) -> Self {
+    pub fn new(ports: &Ports, cfg: Arc<Config>) -> Self {
         Self {
             cfg,
             matches: ports.matches.clone(),
             nets: ports.networks.clone(),
-            evalc,
         }
     }
 
@@ -127,10 +124,6 @@ impl Gatekeeper {
                     self.nets.promote_best(&m.candidate)?;
                     promoted = true;
                     best_sha = m.candidate.clone();
-
-                    if let Err(e) = self.evalc.on_new_best(&m.candidate) {
-                        tracing::warn!(sha = %m.candidate, error = %e, "晋级后评估入队失败");
-                    }
                 }
                 Verdict::RejectH0 => {
                     self.nets
@@ -162,7 +155,6 @@ impl Gatekeeper {
 
 #[cfg(test)]
 mod tests {
-    use crate::dispatch::TaskDispatcher;
     use crate::test_support::Fakes;
     use bqs_judgment::BUCKET_LL;
 
@@ -172,16 +164,8 @@ mod tests {
         let f = Fakes::new();
         let cfg = Arc::new(Config::parse(config_extra, "test").unwrap());
         let ports = f.ports();
-        let ctl = Arc::new(crate::control::Control::new(&ports, cfg.clone()));
-        let disp = Arc::new(TaskDispatcher::new(&ports, cfg.clone(), f.clock.clone()));
-        let evalc = Arc::new(EvalCoordinator::new(
-            &ports,
-            cfg.clone(),
-            f.clock.clone(),
-            ctl,
-            disp,
-        ));
-        let gate = Gatekeeper::new(&ports, cfg, evalc);
+        let _ctl = Arc::new(crate::control::Control::new(&ports, cfg.clone()));
+        let gate = Gatekeeper::new(&ports, cfg);
         (f, gate)
     }
 
@@ -191,8 +175,7 @@ mod tests {
         f.networks.promote_best("old_best").unwrap();
     }
 
-    const CFG: &str =
-        "[eval]\nenabled = true\n[sprt]\nelo0 = 0.0\nelo1 = 15.0\nalpha = 0.05\nbeta = 0.05\n";
+    const CFG: &str = "[sprt]\nelo0 = 0.0\nelo1 = 15.0\nalpha = 0.05\nbeta = 0.05\n";
 
     #[test]
     fn unknown_match_rejected_as_business() {
@@ -218,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn accept_promotes_and_triggers_eval() {
+    fn accept_promotes_candidate() {
         let (f, gate) = env(CFG);
         seeded(&f);
         let id = f.matches.seed_match("cand", "old_best", 100);
@@ -229,8 +212,6 @@ mod tests {
         assert!(d.accepted && d.concluded && d.promoted);
         assert_eq!(d.best_sha, "cand");
         assert_eq!(f.networks.best_sha().as_deref(), Some("cand"));
-
-        assert_eq!(f.eval.load_eval_queue().unwrap().len(), 4);
     }
 
     #[test]

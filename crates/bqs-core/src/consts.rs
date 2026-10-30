@@ -4,12 +4,6 @@ pub const RULE_SENTINEL_SHA: &str = "rule";
 
 pub const WEIGHT_FORMATS: [&str; 3] = ["onnx", "pt", "nnue"];
 
-pub const EVAL_MAX_ATTEMPTS: i64 = 3;
-
-pub const EVAL_MAX_GAMES_PER_TASK: i64 = 64;
-
-pub const EVAL_TASK_STALE_AFTER: Duration = Duration::from_secs(15 * 60);
-
 pub const DONE_TASK_RETENTION: Duration = Duration::from_secs(30 * 60);
 
 pub const TASK_MAX_RETENTION: Duration = Duration::from_secs(24 * 3600);
@@ -33,7 +27,6 @@ pub const JOB_VARIANTS: [&str; bq_env::env::config::VARIANT_IDS.len()] =
 
 pub const JOB_PRIORITY_SELFPLAY: i64 = 0;
 pub const JOB_PRIORITY_COLLECT: i64 = 50;
-pub const JOB_PRIORITY_EVAL: i64 = 100;
 
 pub const DERIVE_QUEUE_MAX: usize = 512;
 

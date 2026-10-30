@@ -6,7 +6,6 @@ use bqs_proto::{TaskKind, TaskRequest};
 use crate::{
     consts,
     control::Control,
-    evalcoord::PendingEval,
     featurepack::PendingDerive,
     reanalysis::PendingReanalysis,
     test_support::{FakeSigner, Fakes},
@@ -40,7 +39,7 @@ fn matcher(id: i64, opponent: &str) -> Match {
 }
 
 fn assembler(f: &Fakes) -> TaskAssembler {
-    let cfg = Arc::new(Config::parse("[eval]\nmcts_sims = 7\n", "test").unwrap());
+    let cfg = Arc::new(Config::parse("", "test").unwrap());
     let ports = f.ports();
     let ctl = Arc::new(Control::new(&ports, cfg.clone()));
     TaskAssembler::new(f.networks.clone(), Arc::new(FakeSigner), cfg, ctl)
@@ -253,54 +252,6 @@ fn data_kind_for_format_mapping() {
         data_kind_for_format("whatever"),
         bqs_proto::DataKind::DataResnet as i32
     );
-}
-
-#[test]
-fn eval_task_assembly() {
-    let f = Fakes::new();
-    f.networks.seed_network("n1", None, "onnx");
-    let asm = assembler(&f);
-    let job = PendingEval {
-        network_sha: "n1".into(),
-        opponent_spec: "random".into(),
-        ..Default::default()
-    };
-
-    let req = TaskRequest {
-        current_network: "n1".into(),
-        threads: 4,
-        ..Default::default()
-    };
-    let resp = asm.eval_task("t1", &job, 10, &req).unwrap();
-    assert_eq!(resp.kind, TaskKind::TaskEval as i32);
-    assert_eq!(resp.task_id, "t1");
-    assert_eq!(resp.network_sha, "n1");
-    assert_eq!(resp.network_sha_remote, "n1");
-    assert_eq!(resp.opponent_spec, "random");
-    assert_eq!(resp.games, 10);
-    assert_eq!(resp.network_key, "networks/n1.onnx");
-    assert_eq!(resp.network_url, "", "本地已有缓存不应签发 URL");
-
-    assert_eq!(resp.opponent_key, "");
-    assert_eq!(resp.opponent_url, "");
-    let p = resp.params.unwrap();
-    assert_eq!(p.mcts_sims, 7);
-    assert_eq!(p.data_kind, bqs_proto::DataKind::DataResnet as i32);
-    assert_eq!(p.variant, "4x8");
-
-    let req2 = TaskRequest {
-        current_network: String::new(),
-        ..Default::default()
-    };
-    let resp2 = asm.eval_task("t2", &job, 10, &req2).unwrap();
-    assert_eq!(resp2.network_url, "get:networks/n1.onnx");
-
-    let missing = PendingEval {
-        network_sha: "ghost".into(),
-        opponent_spec: "random".into(),
-        ..Default::default()
-    };
-    assert!(asm.eval_task("t3", &missing, 10, &req2).is_err());
 }
 
 #[test]

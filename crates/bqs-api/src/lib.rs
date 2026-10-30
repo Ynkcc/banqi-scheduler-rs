@@ -1,6 +1,5 @@
 pub mod handlers_control;
 pub mod handlers_episodes;
-pub mod handlers_eval;
 pub mod handlers_jobs;
 pub mod handlers_replay;
 pub mod handlers_status;

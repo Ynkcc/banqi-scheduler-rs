@@ -10,7 +10,7 @@ use clap::Parser;
 
 use bqs_config::Config;
 use bqs_core::ports::{
-    EpisodeStore, EvalStore, FeaturePackStore, JobStore, MatchStore, NetworkStore, SettingsStore,
+    EpisodeStore, FeaturePackStore, JobStore, MatchStore, NetworkStore, SettingsStore, StoreStats,
     SystemClock, TrainerRegistryStore, TrainerStore, WorkerStore,
 };
 use bqs_core::server::{Server, ServerDeps};
@@ -116,7 +116,7 @@ async fn run(args: Args) -> Result<()> {
         settings: Arc::clone(&store) as Arc<dyn SettingsStore>,
         networks: Arc::clone(&store) as Arc<dyn NetworkStore>,
         matches: Arc::clone(&store) as Arc<dyn MatchStore>,
-        eval: Arc::clone(&store) as Arc<dyn EvalStore>,
+        stats: Arc::clone(&store) as Arc<dyn StoreStats>,
         trainers: Arc::clone(&store) as Arc<dyn TrainerStore>,
         episodes: Arc::clone(&store) as Arc<dyn EpisodeStore>,
         workers: Arc::clone(&store) as Arc<dyn WorkerStore>,
@@ -189,20 +189,6 @@ async fn run(args: Args) -> Result<()> {
         sp.data_kind.as_str(),
         cfg.server.min_client_version,
     );
-    if cfg.eval.enabled {
-        tracing::info!(
-            "[eval] enabled opponents={:?} games={} mode={} every={}_promotions no_progress={} eps={:.3}",
-            cfg.eval.opponents,
-            cfg.eval.games,
-            bqs_api::views::eval_search_mode_name(cfg.eval.mcts_sims),
-            cfg.eval.every_n_promotions,
-            cfg.eval.no_progress_n,
-            cfg.eval.no_progress_eps,
-        );
-    } else {
-        tracing::info!("[eval] disabled（eval.enabled=false）");
-    }
-
     tokio::pin!(grpc);
     tokio::select! {
         res = &mut grpc => {

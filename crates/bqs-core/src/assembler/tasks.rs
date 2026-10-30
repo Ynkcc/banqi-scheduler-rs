@@ -2,7 +2,6 @@ use bqs_proto::{CollectionJobSpec, DataKind, SelfPlayParams, TaskKind, TaskReque
 
 use crate::{
     CoreError, CoreResult, consts,
-    evalcoord::PendingEval,
     featurepack::PendingDerive,
     reanalysis::PendingReanalysis,
     types::Network,
@@ -81,55 +80,6 @@ impl TaskAssembler {
             }),
             ..Default::default()
         }
-    }
-
-    pub fn eval_task(
-        &self,
-        task_id: &str,
-        job: &PendingEval,
-        games: i64,
-        req: &TaskRequest,
-    ) -> CoreResult<TaskResponse> {
-        let net = self.nets.get_network(&job.network_sha)?.ok_or_else(|| {
-            CoreError::Internal(format!("eval network not found sha={}", job.network_sha))
-        })?;
-        let key = network_key(&net.sha, &net.format);
-        let mut resp = TaskResponse {
-            task_id: task_id.to_string(),
-            kind: TaskKind::TaskEval as i32,
-            network_sha: job.network_sha.clone(),
-            network_sha_remote: job.network_sha.clone(),
-            opponent_spec: job.opponent_spec.clone(),
-            games: games as i32,
-            network_key: key.clone(),
-            params: Some(SelfPlayParams {
-                variant: self.cfg.selfplay.variant.clone(),
-
-                mcts_sims: self.cfg.eval.mcts_sims,
-
-                data_kind: DataKind::DataResnet as i32,
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        self.with_network_download(req, &mut resp, &job.network_sha, &key)?;
-
-        if !job.opponent_sha.is_empty() {
-            let opp = self.nets.get_network(&job.opponent_sha)?.ok_or_else(|| {
-                CoreError::Internal(format!(
-                    "eval opponent network not found sha={}",
-                    job.opponent_sha
-                ))
-            })?;
-            let opp_key = network_key(&opp.sha, &opp.format);
-            resp.opponent_sha = opp.sha.clone();
-            resp.opponent_key = opp_key.clone();
-            match self.signer.presign_get(&opp_key, self.ttl_secs()) {
-                Ok(url) => resp.opponent_url = url,
-                Err(e) => tracing::warn!("预签名对手 URL 失败 key={opp_key}: {e}"),
-            }
-        }
-        Ok(resp)
     }
 
     pub fn reanalysis_task(

@@ -7,26 +7,6 @@ use super::Server;
 impl Server {
     pub fn submit_job(&self, req: SubmitJobRequest) -> CoreResult<SubmitJobReply> {
         let (accepted, message, job_id) = self.jobs.submit(&req)?;
-        if accepted && req.kind == JobKind::JobEval as i32 {
-            if let Some(e) = &req.eval {
-                let sha = if e.network_sha.is_empty() {
-                    self.ports
-                        .networks
-                        .get_best()?
-                        .map(|b| b.sha)
-                        .unwrap_or_default()
-                } else {
-                    e.network_sha.clone()
-                };
-                if let Err(err) =
-                    self.evalc
-                        .ensure_pending(&sha, &e.opponent_kind, &e.opponent_network_sha)
-                {
-                    self.jobs.control(&job_id, "cancel")?;
-                    return Err(err);
-                }
-            }
-        }
         Ok(SubmitJobReply {
             accepted,
             message,
@@ -59,12 +39,11 @@ impl Server {
 
     fn job_status(&self, r: &JobRow) -> JobStatus {
         let kind = JobKind::try_from(r.kind as i32).unwrap_or(JobKind::JobCollect);
-        let (collect, selfplay, eval, rating) = match JobSpecJson::parse(&r.spec_json) {
-            Some(JobSpecJson::Collect(c)) => (Some(c.to_proto()), None, None, None),
-            Some(JobSpecJson::SelfPlay(s)) => (None, Some(s.to_proto()), None, None),
-            Some(JobSpecJson::Eval(e)) => (None, None, Some(e.to_proto()), None),
-            Some(JobSpecJson::Rating(rt)) => (None, None, None, Some(rt.to_proto())),
-            None => (None, None, None, None),
+        let (collect, selfplay, rating) = match JobSpecJson::parse(&r.spec_json) {
+            Some(JobSpecJson::Collect(c)) => (Some(c.to_proto()), None, None),
+            Some(JobSpecJson::SelfPlay(s)) => (None, Some(s.to_proto()), None),
+            Some(JobSpecJson::Rating(rt)) => (None, None, Some(rt.to_proto())),
+            None => (None, None, None),
         };
         JobStatus {
             job_id: r.job_id.clone(),
@@ -78,7 +57,6 @@ impl Server {
             updated_at: r.updated_at,
             collect,
             selfplay,
-            eval,
             rating,
         }
     }

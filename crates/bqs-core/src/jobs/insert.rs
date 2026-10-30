@@ -2,7 +2,7 @@ use bqs_proto::{JobKind, SubmitJobRequest};
 
 use super::JobManager;
 use super::spec::{
-    CollectSpecJson, EvalSpecJson, JobSpecJson, RatingSpecJson, SelfPlaySpecJson, spec_total,
+    CollectSpecJson, JobSpecJson, RatingSpecJson, SelfPlaySpecJson, spec_total,
 };
 use crate::CoreResult;
 
@@ -69,19 +69,6 @@ impl JobManager {
                 };
                 match self.validate_selfplay(s) {
                     Ok(()) => JobSpecJson::SelfPlay(SelfPlaySpecJson::from_proto(s.clone())),
-                    Err(m) => return Ok((false, m, String::new())),
-                }
-            }
-            JobKind::JobEval => {
-                let Some(e) = &req.eval else {
-                    return Ok((
-                        false,
-                        "eval spec required for JOB_EVAL".into(),
-                        String::new(),
-                    ));
-                };
-                match self.validate_eval(e) {
-                    Ok(()) => JobSpecJson::Eval(EvalSpecJson::from_proto(e.clone())),
                     Err(m) => return Ok((false, m, String::new())),
                 }
             }
@@ -161,62 +148,6 @@ impl JobManager {
             &JobSpecJson::SelfPlay(spec),
         )?;
         tracing::info!("[job] bootstrapped persistent selfplay job id={job_id}");
-        Ok(())
-    }
-
-    pub fn create_eval_job(
-        &self,
-        network_sha: &str,
-        opponent_kind: &str,
-        opponent_sha: &str,
-    ) -> CoreResult<()> {
-        let sha = if network_sha.is_empty() {
-            match self.nets.get_best()? {
-                Some(b) => b.sha,
-                None => return Ok(()),
-            }
-        } else {
-            network_sha.to_string()
-        };
-        let total = self.cfg.eval.games;
-        let existing = self.store.list_jobs(None, Some(JobKind::JobEval as i64))?;
-        let dup = existing.iter().any(|j| {
-            (j.state == "running" || j.state == "paused")
-                && JobSpecJson::parse(&j.spec_json)
-                    .map(|s| {
-                        matches!(
-                            &s,
-                            JobSpecJson::Eval(e)
-                                if e.network_sha == sha
-                                    && e.opponent_kind == opponent_kind
-                                    && e.opponent_network_sha == opponent_sha
-                        )
-                    })
-                    .unwrap_or(false)
-        });
-        if dup {
-            return Ok(());
-        }
-        let spec = JobSpecJson::Eval(EvalSpecJson {
-            variant: self.cfg.selfplay.variant.clone(),
-            network_sha: sha.clone(),
-            opponent_kind: opponent_kind.to_string(),
-            opponent_network_sha: opponent_sha.to_string(),
-            search: None,
-            total_games: total as u64,
-        });
-        let job_id = self.insert_new_job(
-            JobKind::JobEval,
-            self.default_priority(JobKind::JobEval),
-            total,
-            &spec,
-        )?;
-        tracing::info!(
-            "[job] auto eval job id={} network={sha} opponent={opponent_kind} total={total}",
-            job_id
-        );
-
-        self.preemption_sweep(true);
         Ok(())
     }
 }

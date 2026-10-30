@@ -7,7 +7,6 @@ use bqs_proto::{MatchResult, MatchResultAck, TaskKind};
 use crate::{
     CoreError, CoreResult,
     dispatch::{RunningTask, TaskDispatcher, TaskState},
-    evalcoord::EvalCoordinator,
     gatekeeper::Gatekeeper,
     jobs::{JobManager, RatingSpecJson},
     ports::{MatchStore, NetworkStore},
@@ -39,7 +38,6 @@ pub fn lookup_report_task(
 }
 
 pub struct ReportRouter {
-    pub evalc: Arc<EvalCoordinator>,
     pub gate: Arc<Gatekeeper>,
     pub disp: Arc<TaskDispatcher>,
 
@@ -52,7 +50,6 @@ pub struct ReportRouter {
 
 impl ReportRouter {
     pub fn new(
-        evalc: Arc<EvalCoordinator>,
         gate: Arc<Gatekeeper>,
         disp: Arc<TaskDispatcher>,
         jobs: Arc<JobManager>,
@@ -61,7 +58,6 @@ impl ReportRouter {
         cfg: Arc<Config>,
     ) -> Self {
         Self {
-            evalc,
             gate,
             disp,
             jobs,
@@ -77,27 +73,6 @@ impl ReportRouter {
             message: format!("already_reported:{task_id}"),
             ..Default::default()
         }
-    }
-
-    fn eval_sink(
-        &self,
-        task: &RunningTask,
-        req: &MatchResult,
-    ) -> CoreResult<Option<MatchResultAck>> {
-        if task.kind != TaskKind::TaskEval {
-            return Ok(None);
-        }
-        if task.state != TaskState::Assigned {
-            return Ok(Some(Self::already_reported(&req.task_id)));
-        }
-        let ack = self.evalc.report_eval_result(task, req)?;
-
-        if ack.accepted {
-            if let Err(e) = self.jobs.record_report(&req.task_id, req.games as i64) {
-                tracing::warn!("[job] ⚠️ eval 上报聚合失败 task={}: {e}", req.task_id);
-            }
-        }
-        Ok(Some(ack))
     }
 
     fn gate_sink(
@@ -243,9 +218,6 @@ impl ReportRouter {
         if task.state == TaskState::Completed {
             return Ok(Self::already_reported(&req.task_id));
         }
-        if let Some(ack) = self.eval_sink(&task, req)? {
-            return Ok(ack);
-        }
         if let Some(ack) = self.gate_sink(&task, req)? {
             return Ok(ack);
         }
@@ -280,14 +252,7 @@ mod tests {
         let ports = f.ports();
         let ctl = Arc::new(crate::control::Control::new(&ports, cfg.clone()));
         let disp = Arc::new(TaskDispatcher::new(&ports, cfg.clone(), f.clock.clone()));
-        let evalc = Arc::new(EvalCoordinator::new(
-            &ports,
-            cfg.clone(),
-            f.clock.clone(),
-            ctl.clone(),
-            disp.clone(),
-        ));
-        let gate = Arc::new(Gatekeeper::new(&ports, cfg.clone(), evalc.clone()));
+        let gate = Arc::new(Gatekeeper::new(&ports, cfg.clone()));
         let jobs = Arc::new(JobManager::new(
             ports.jobs.clone(),
             disp.clone(),
@@ -298,7 +263,6 @@ mod tests {
             f.clock.clone(),
         ));
         let router = ReportRouter::new(
-            evalc.clone(),
             gate,
             disp.clone(),
             jobs.clone(),

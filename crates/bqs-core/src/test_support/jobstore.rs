@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::{
-    CoreError, CoreResult,
     ports::{JobRow, JobStore, JobTaskLink},
+    CoreError, CoreResult,
 };
 
 #[derive(Debug, Default)]

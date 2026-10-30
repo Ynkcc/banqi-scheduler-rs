@@ -45,22 +45,6 @@ fn status_top_level() {
             episodes: 0,
             episode_games: 0,
             workers: 0,
-            eval_results: 0,
-        },
-        eval: EvalConfigView {
-            enabled: false,
-            opponents: vec![],
-            games: 1000,
-            task_games: 0,
-            mcts_sims: 0,
-            every_n_promotions: 1,
-            no_progress_n: 3,
-            no_progress_eps: 0.035,
-            rollback_eps: 0.04,
-            floor_win_rate: 0.0,
-            stop_win_rate: 0.0,
-            mode: "纯策略 argmax".into(),
-            pending: 0,
         },
         should_stop: false,
         stop_reason: String::new(),
@@ -78,7 +62,6 @@ fn status_top_level() {
             "sprt",
             "best",
             "counts",
-            "eval",
             "shouldStop",
             "stopReason",
             "autoPaused",
@@ -86,24 +69,6 @@ fn status_top_level() {
         ],
     );
     assert_keys(&keys(&v.sprt), &["elo0", "elo1", "alpha", "beta"]);
-    assert_keys(
-        &keys(&v.eval),
-        &[
-            "enabled",
-            "opponents",
-            "games",
-            "taskGames",
-            "mctsSims",
-            "everyNPromotions",
-            "noProgressN",
-            "noProgressEps",
-            "rollbackEps",
-            "floorWinRate",
-            "stopWinRate",
-            "mode",
-            "pending",
-        ],
-    );
     assert_keys(
         &keys(&v.counts),
         &[
@@ -113,7 +78,6 @@ fn status_top_level() {
             "episodes",
             "episodeGames",
             "workers",
-            "evalResults",
         ],
     );
 }
@@ -213,94 +177,6 @@ fn worker_view() {
             "estGamesPerHour",
             "estPerThreadHour",
             "estSamples",
-        ],
-    );
-}
-
-#[test]
-fn eval_view() {
-    let point = EvalResultView {
-        network_sha: "v1".into(),
-        opponent_spec: "rule:capture_first".into(),
-        wins: 600,
-        draws: 0,
-        losses: 400,
-        red_wins: 0,
-        black_wins: 0,
-        draw_no_capture: 0,
-        draw_truncation: 0,
-        num_games: 1000,
-        win_rate: 0.6,
-        avg_moves: 44.4,
-        created_at: 1,
-    };
-    let trend = EvalTrendView {
-        opponent: "rule:capture_first".into(),
-        versions: 1,
-        no_progress: 0,
-        latest_win_rate: 0.6,
-        points: vec![point.clone()],
-    };
-    let v = EvalView {
-        config: EvalConfigView {
-            enabled: true,
-            opponents: vec![],
-            games: 1000,
-            task_games: 0,
-            mcts_sims: 0,
-            every_n_promotions: 1,
-            no_progress_n: 3,
-            no_progress_eps: 0.035,
-            rollback_eps: 0.04,
-            floor_win_rate: 0.0,
-            stop_win_rate: 0.0,
-            mode: "纯策略 argmax".into(),
-            pending: 0,
-        },
-        should_stop: false,
-        stop_reason: String::new(),
-        latest: vec![point.clone()],
-        trends: vec![trend],
-        running: vec![],
-    };
-    assert_keys(
-        &keys(&v),
-        &[
-            "config",
-            "shouldStop",
-            "stopReason",
-            "latest",
-            "trends",
-            "running",
-        ],
-    );
-    assert_keys(
-        &keys(&point),
-        &[
-            "networkSha",
-            "opponentSpec",
-            "wins",
-            "draws",
-            "losses",
-            "redWins",
-            "blackWins",
-            "drawNoCapture",
-            "drawTruncation",
-            "numGames",
-            "winRate",
-            "avgMoves",
-            "createdAt",
-        ],
-    );
-    let trend = &v.trends[0];
-    assert_keys(
-        &keys(trend),
-        &[
-            "opponent",
-            "versions",
-            "noProgress",
-            "latestWinRate",
-            "points",
         ],
     );
 }
@@ -494,33 +370,6 @@ fn storage_views() {
         profiles: vec![],
     };
     assert_keys(&keys(&sv), &["active", "profiles"]);
-}
-
-#[test]
-fn eval_config_get_view() {
-    let v = EvalConfigGetView {
-        override_: None,
-        effective: EvalEffectiveView {
-            enabled: false,
-            opponents: vec![],
-            stop_win_rate: 0.0,
-        },
-    };
-    assert_keys(&keys(&v), &["override", "effective"]);
-    assert_keys(
-        &keys(&v.effective),
-        &["enabled", "opponents", "stopWinRate"],
-    );
-}
-
-#[test]
-fn eval_trigger_view() {
-    let v = EvalTriggerView {
-        ok: true,
-        triggered: 2,
-        message: "已入队 2 条评估".into(),
-    };
-    assert_keys(&keys(&v), &["ok", "triggered", "message"]);
 }
 
 #[test]

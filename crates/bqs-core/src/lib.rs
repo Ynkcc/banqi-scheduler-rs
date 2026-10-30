@@ -8,8 +8,6 @@ pub mod balance;
 pub mod control;
 pub mod data_kind;
 pub mod dispatch;
-pub mod evalcoord;
-pub mod evalopponents;
 pub mod featurepack;
 pub mod gatekeeper;
 pub mod jobs;

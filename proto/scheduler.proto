@@ -81,11 +81,9 @@ enum TaskKind {
   // （按 best.Format 分派 MCTS / Expectimax 栈），产出新的策略/价值目标
   // （一局面一条 1 样本 episode），走 ReportEpisode 常规通道上报。
   TASK_REANALYSIS = 3;
-  // 绝对强度评估（eval）：指定网络 vs 规则/内建对手，只统计胜负、不产 episode、
-  // 不参与 gatekeeper 晋级（结果落 eval_results，仅用于趋势观测与停机判据）。
-  // 对手由 TaskResponse.opponent_spec 指定；评估模式由 SelfPlayParams.mcts_sims 决定。
-  // （由 JOB_EVAL job 驱动派发。）
-  TASK_EVAL = 4;
+  // TASK_EVAL（=4，绝对强度评估）已移除：评估统一走 TASK_RATING（JOB_RATING
+  // 支持 side_b 为规则/随机对手，且 rating 任务恒记录并上传对局）。
+  reserved 4;
   // 特征包补派（derive features）：下载指定记录批次（GameRecord v2），用
   // banqi-core 特征编码器派生 FeaturePack 并经 ReportFeaturePack 上传。
   // 目标批次由 TaskResponse.episode_object_key / episode_url 指定。
@@ -103,7 +101,7 @@ enum TaskKind {
 enum DataKind {
   DATA_RESNET = 0;    // Gumbel MCTS 栈（ResNet 特征包，配 .onnx 权重）
   DATA_NNUE = 1;      // Expectimax 栈（NNUE 稀疏特征包，配 .nnue 权重）
-  // 不产训练数据的对局记录（eval 评估任务）：记录仅含对局真源（快照/动作/
+  // 不产训练数据的对局记录（rating 观测对局等）：记录仅含对局真源（快照/动作/
   // 胜负），无搜索标签，不派生特征包、不进入训练消费管道；仅供 WebUI 回放观测。
   DATA_NONE = 2;
 }
@@ -573,11 +571,10 @@ message FeaturePackReply {
 // 偶数成对、deadline 超期回收重派）逐批下发对应 TaskKind 的任务：
 //   JOB_COLLECT  → TASK_COLLECT   参数化采集（双方自由组合对打/自对弈）
 //   JOB_SELFPLAY → TASK_SELFPLAY  训练闭环自对弈数据生产（total_games=0 = 持续产数）
-//   JOB_EVAL     → TASK_EVAL      绝对强度评估（只统计胜负，不产训练数据）
 //
 // 完成口径（关键约定）：
 // - completed_games 只按「已收到的真实上报」聚合（collect/selfplay 走
-//   ReportEpisode 局数；eval 走 ReportMatchResult 局数），不含在飞；
+//   ReportEpisode 局数；rating 走 ReportMatchResult 局数），不含在飞；
 // - 派发不受在飞封顶：只要 completed < total（或 total=0 持续型）就继续按
 //   worker 线程缩放派发，允许在飞远超剩余需求局数；
 // - completed ≥ total 即置 completed，并立即取消该 job 全部在飞任务
@@ -587,7 +584,7 @@ message FeaturePackReply {
 // 级」的 job 占用在飞任务；更高优先级 job 变为可派发（提交/恢复）时，立即取消
 // 全部更低优先级 job 的在飞任务（在途取消，已完成上报照常计入）。同优先级按
 // created_at 先到先派。默认优先级：selfplay=0（训练闭环兜底）、collect=50、
-// rating=80（手动 SPRT 对打）、eval=100（提交时 priority=0 表示用该 kind 的默认值）。
+// rating=80（手动 SPRT 对打；提交时 priority=0 表示用该 kind 的默认值）。
 //
 // 暂停（pause）：不再派发新任务，在飞任务做完收尾；恢复（resume）后继续派发。
 // 取消（cancel）：立即停止派发 + 取消全部在飞；已上报部分计入 completed，终态
@@ -595,11 +592,13 @@ message FeaturePackReply {
 // ============================================================================
 
 // job 种类（对应 TaskKind：COLLECT→TASK_COLLECT / SELFPLAY→TASK_SELFPLAY /
-// EVAL→TASK_EVAL / RATING→TASK_RATING；reanalysis / derive 仍走既有通道）
+// RATING→TASK_RATING；reanalysis / derive 仍走既有通道）
 enum JobKind {
   JOB_COLLECT = 0;    // 参数化采集（双方自由组合对打/自对弈，产训练数据）
   JOB_SELFPLAY = 1;   // 训练闭环自对异数据生产（默认持续型）
-  JOB_EVAL = 2;       // 绝对强度评估（不产训练数据）
+  // JOB_EVAL（=2，绝对强度评估）已移除：评估统一走 JOB_RATING（side_b 可为
+  // 规则/随机对手，rating 任务恒记录并上传对局）。
+  reserved 2;
   // 手动 SPRT 对打：candidate vs opponent 的 gatekeeper rating 对打，独立
   // TASK_RATING 任务派发（不混入 selfplay）。对手 = 当前 best 时走既有晋级行，
   // 否则仅观测统计。取消（ControlJob cancel）= 停派发 + 取消在飞 + match 置
@@ -699,19 +698,10 @@ message SelfPlayJobSpec {
   uint64 total_games = 7;          // 目标局数；0 = 持续产数（训练闭环默认），仅完成口径计聚合
 }
 
-// 绝对强度评估规格（JOB_EVAL 载荷；结果走 ReportMatchResult → eval_results，
-// 不产 episode）
-message EvalJobSpec {
-  string variant = 1;              // "4x8" | "4x8-fast" | "4x4"
-  string network_sha = 2;          // 被评估网络；空 = 当前 best
-  string opponent_kind = 3;        // 同 CollectPlayerSpec.kind（词表见 CollectPlayerSpec 注释）
-  string opponent_network_sha = 4; // 对手为模型类时必填；提交时校验存在性
-  CollectSearchParams search = 5;  // 双方（评估方 + 搜索类对手）共用搜索参数；0 值回落本地默认
-  uint64 total_games = 6;          // 评估总局数（≥2，偶数；eval 任务粒度上限沿用既有 consts）
-}
+// 绝对强度评估规格（JOB_EVAL 载荷）已随 eval 机制移除（reserved 见 SubmitJobRequest）。
 
 // 手动 SPRT 对打规格（JOB_RATING 载荷；结果走 ReportMatchResult 六桶聚合，
-// SPRT 判停/晋级沿用 gatekeeper 判据链）
+// SPRT 判停/晋级沿用 gatekeeper 判据链；side_b 可为规则/随机对手用于绝对强度评估）
 message RatingJobSpec {
   string variant = 1;              // 对局变体；空 = 调度器 selfplay.variant
   string candidate_sha = 2;        // 被测网络（必填，须已登记）
@@ -743,7 +733,7 @@ message SubmitJobRequest {
   uint32 priority = 3;
   CollectionJobSpec collect = 4;   // kind=JOB_COLLECT 必填
   SelfPlayJobSpec selfplay = 5;    // kind=JOB_SELFPLAY 必填
-  EvalJobSpec eval = 6;            // kind=JOB_EVAL 必填
+  reserved 6;                      // 原 EvalJobSpec eval（eval 机制已移除）
   RatingJobSpec rating = 7;        // kind=JOB_RATING 必填
 }
 message SubmitJobReply {
@@ -765,7 +755,7 @@ message JobStatus {
   int64 updated_at = 9;            // unix 秒
   CollectionJobSpec collect = 10;  // kind=JOB_COLLECT 时返回
   SelfPlayJobSpec selfplay = 11;   // kind=JOB_SELFPLAY 时返回
-  EvalJobSpec eval = 12;           // kind=JOB_EVAL 时返回
+  reserved 12;                     // 原 EvalJobSpec eval（eval 机制已移除）
   RatingJobSpec rating = 13;       // kind=JOB_RATING 时返回
 }
 

@@ -58,8 +58,6 @@ impl Server {
             None => {
                 self.ports.networks.promote_best(&req.sha)?;
                 tracing::info!("[network] first network promoted sha={}", req.sha);
-
-                self.evalc.on_new_best(&req.sha)?;
                 Ok(ack(true, "first_network_promoted".into()))
             }
             Some(best) => {

@@ -17,7 +17,6 @@ use crate::{
     balance::BalanceMonitor,
     control::Control,
     dispatch::TaskDispatcher,
-    evalcoord::EvalCoordinator,
     featurepack::DeriveQueue,
     gatekeeper::Gatekeeper,
     jobs::JobManager,
@@ -35,7 +34,6 @@ pub struct Server {
     pub clock: Arc<dyn Clock>,
 
     pub disp: Arc<TaskDispatcher>,
-    pub evalc: Arc<EvalCoordinator>,
     pub gate: Arc<Gatekeeper>,
     pub balance: Arc<BalanceMonitor>,
     pub reana: Arc<ReanaQueue>,
@@ -66,14 +64,7 @@ impl Server {
 
         let disp = Arc::new(TaskDispatcher::new(&ports, cfg.clone(), clock.clone()));
         let ctl = Arc::new(Control::new(&ports, cfg.clone()));
-        let evalc = Arc::new(EvalCoordinator::new(
-            &ports,
-            cfg.clone(),
-            clock.clone(),
-            ctl.clone(),
-            disp.clone(),
-        ));
-        let gate = Arc::new(Gatekeeper::new(&ports, cfg.clone(), evalc.clone()));
+        let gate = Arc::new(Gatekeeper::new(&ports, cfg.clone()));
         let balance = Arc::new(BalanceMonitor::new(
             &ports,
             cfg.clone(),
@@ -92,8 +83,6 @@ impl Server {
             clock.clone(),
         ));
 
-        evalc.set_job_hook(&jobs);
-
         let asm = Arc::new(TaskAssembler::new(
             ports.networks.clone(),
             signer.clone(),
@@ -101,7 +90,6 @@ impl Server {
             ctl.clone(),
         ));
         let router = Arc::new(ReportRouter::new(
-            evalc.clone(),
             gate.clone(),
             disp.clone(),
             jobs.clone(),
@@ -111,7 +99,6 @@ impl Server {
         ));
         let sources = Sources::assemble(
             jobs.clone(),
-            evalc.clone(),
             reana.clone(),
             derive.clone(),
             ports.matches.clone(),
@@ -121,8 +108,6 @@ impl Server {
             ctl.clone(),
             cfg.clone(),
         );
-
-        evalc.ensure_best_evaluated();
 
         if let Err(e) = jobs.ensure_selfplay_job() {
             panic!("[jobs] selfplay job 引导失败，拒绝启动: {e}");
@@ -134,7 +119,6 @@ impl Server {
             signer,
             clock,
             disp,
-            evalc,
             gate,
             balance,
             reana,

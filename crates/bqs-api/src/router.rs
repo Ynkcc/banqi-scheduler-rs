@@ -7,8 +7,8 @@ use axum::routing::{any, get, post, put};
 use axum::Router;
 
 use crate::{
-    handlers_control, handlers_episodes, handlers_eval, handlers_jobs, handlers_replay,
-    handlers_status, handlers_storage, handlers_trainers,
+    handlers_control, handlers_episodes, handlers_jobs, handlers_replay, handlers_status,
+    handlers_storage, handlers_trainers,
     support::{ApiError, AppState, MAX_BODY_LIMIT},
 };
 
@@ -21,12 +21,6 @@ pub fn router(state: AppState) -> Router {
             post(handlers_status::promote),
         )
         .route("/api/matches", get(handlers_status::matches))
-        .route("/api/eval", get(handlers_eval::eval))
-        .route("/api/eval/trigger", post(handlers_eval::trigger))
-        .route(
-            "/api/eval-config",
-            get(handlers_eval::eval_config_get).put(handlers_eval::eval_config_put),
-        )
         .route("/api/workers", get(handlers_status::workers))
         .route("/api/workers/{id}/note", put(handlers_status::worker_note))
         .route("/api/trainers", get(handlers_trainers::trainers))

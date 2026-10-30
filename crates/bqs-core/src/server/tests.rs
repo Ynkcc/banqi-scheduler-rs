@@ -512,47 +512,6 @@ fn report_match_result_match_not_running_is_business_rejection() {
 }
 
 #[test]
-fn report_match_result_eval_routes_to_eval_sink() {
-    let (s, f) = server_with("[eval]\nenabled = true\ngames = 100\ngames_per_task = 10\n");
-    f.networks.seed_network("best", None, "onnx");
-    f.networks.promote_best("best").unwrap();
-    s.evalc.ensure_best_evaluated();
-
-    let (_, task_id) = loop {
-        match s.evalc.claim_eval_task("w1", 4) {
-            Some((job, id)) if job.opponent_spec == "random" => break (job, id),
-            Some((_, id)) => s.evalc.release_eval_claim(&id),
-            None => panic!("应有可认领的 eval 分片"),
-        }
-    };
-    let r = s
-        .report_match_result(MatchResult {
-            worker_id: "w1".into(),
-            task_id: task_id.clone(),
-            kind: TaskKind::TaskEval as i32,
-            games: 10,
-            wins: 8,
-            opponent_spec: "random".into(),
-            ..Default::default()
-        })
-        .unwrap();
-    assert!(r.accepted, "{}", r.message);
-    assert!(!r.match_concluded, "100 目标仅累计 10 局，不收尾");
-
-    let dup = s
-        .report_match_result(MatchResult {
-            worker_id: "w1".into(),
-            task_id: task_id.clone(),
-            kind: TaskKind::TaskEval as i32,
-            games: 10,
-            ..Default::default()
-        })
-        .unwrap();
-    assert!(dup.accepted);
-    assert_eq!(dup.message, format!("already_reported:{task_id}"));
-}
-
-#[test]
 fn register_network_validations() {
     let (s, _) = default_server();
     let r = s
@@ -614,8 +573,8 @@ fn register_network_creates_match_against_best_snapshot() {
 }
 
 #[test]
-fn register_network_first_promotes_and_triggers_eval() {
-    let (s, f) = server_with("[eval]\nenabled = true\n");
+fn register_network_first_promotes() {
+    let (s, f) = server_with("");
     let r = s
         .register_network(RegisterNetworkRequest {
             sha: "first".into(),
@@ -626,8 +585,6 @@ fn register_network_first_promotes_and_triggers_eval() {
     assert!(r.accepted);
     assert_eq!(r.message, "first_network_promoted");
     assert_eq!(f.networks.best_sha().as_deref(), Some("first"));
-
-    assert_eq!(f.eval.load_eval_queue().unwrap().len(), 4);
 }
 
 #[test]
@@ -789,21 +746,25 @@ fn get_task_priority_chain() {
 }
 
 #[test]
-fn get_task_eval_has_highest_priority() {
-    let (s, f) = server_with(
-        "[eval]\nenabled = true\ngames = 100\ngames_per_task = 10\n[reanalysis]\ninterval_tasks = 1\nmax_queue = 10\n",
-    );
+fn get_task_rating_job_has_priority_over_selfplay() {
+    let (s, f) = server_with("[sprt]\nelo0 = 0.0\nelo1 = 15.0\nalpha = 0.05\nbeta = 0.05\n");
     f.networks.seed_network("best", None, "onnx");
     f.networks.promote_best("best").unwrap();
-    s.evalc.ensure_best_evaluated();
-    s.submit_reanalysis(SubmitReanalysisRequest {
-        requester: "t".into(),
-        variant: "4x8".into(),
-        positions: 1,
-        payload: vec![1],
-        ..Default::default()
-    })
-    .unwrap();
+    f.networks.seed_network("cand", None, "onnx");
+    let reply = s
+        .submit_job(SubmitJobRequest {
+            requester: "t".into(),
+            kind: JobKind::JobRating as i32,
+            priority: 0,
+            rating: Some(RatingJobSpec {
+                candidate_sha: "cand".into(),
+                total_games: 8,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(reply.accepted, "{}", reply.message);
     let resp = s
         .get_task(TaskRequest {
             worker_id: "w1".into(),
@@ -813,12 +774,10 @@ fn get_task_eval_has_highest_priority() {
         .unwrap();
     assert_eq!(
         resp.kind,
-        TaskKind::TaskEval as i32,
-        "eval 先于 reanalysis 与 selfplay"
+        TaskKind::TaskRating as i32,
+        "rating job 先于 selfplay 派发"
     );
-    assert_eq!(resp.network_sha, "best");
-    assert_eq!(resp.opponent_spec, "random");
-    assert_eq!(resp.games, 10);
+    assert_eq!(resp.network_sha, "cand");
 }
 
 #[test]
@@ -862,10 +821,10 @@ fn get_info_returns_variant_meta_and_stop_signal() {
     assert_eq!(meta.piece_counts.len(), 7);
     assert!(!reply.should_stop);
 
-    s.ctl.set_stop("eval_no_progress: test").unwrap();
+    s.ctl.set_stop("test_stop_reason").unwrap();
     let reply = s.get_info(GetInfoRequest {}).unwrap();
     assert!(reply.should_stop);
-    assert!(reply.stop_reason.contains("eval_no_progress"));
+    assert!(reply.stop_reason.contains("test_stop_reason"));
 }
 
 #[test]

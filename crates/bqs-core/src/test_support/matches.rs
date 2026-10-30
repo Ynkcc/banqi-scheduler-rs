@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::{
-    CoreError, CoreResult,
     ports::MatchStore,
-    types::{Match, match_status},
+    types::{match_status, Match},
+    CoreError, CoreResult,
 };
 
 #[derive(Debug, Default)]

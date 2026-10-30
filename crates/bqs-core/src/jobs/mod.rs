@@ -8,8 +8,8 @@ mod validate;
 mod tests;
 
 pub use spec::{
-    CollectSpecJson, EvalSpecJson, JobSpecJson, PlayerSpecJson, RatingSpecJson, SearchSpecJson,
-    SeedStrategyJson, SelfPlaySpecJson, resolve_seed, valid_scenario,
+    CollectSpecJson, JobSpecJson, PlayerSpecJson, RatingSpecJson, SearchSpecJson, SeedStrategyJson,
+    SelfPlaySpecJson, resolve_seed, valid_scenario,
 };
 
 use std::collections::HashMap;
@@ -72,7 +72,6 @@ impl JobManager {
         match kind {
             JobKind::JobSelfplay => self.cfg.jobs.priority_selfplay,
             JobKind::JobCollect => self.cfg.jobs.priority_collect,
-            JobKind::JobEval => self.cfg.jobs.priority_eval,
             JobKind::JobRating => self.cfg.jobs.priority_rating,
         }
     }

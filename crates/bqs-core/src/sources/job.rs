@@ -9,7 +9,6 @@ use crate::{
     consts,
     control::Control,
     dispatch::TaskDispatcher,
-    evalcoord::EvalCoordinator,
     jobs::{JobManager, JobSpecJson},
     ports::{JobRow, MatchStore, NetworkStore},
     reanalysis::ReanaQueue,
@@ -17,15 +16,8 @@ use crate::{
 
 use super::{TaskSource, new_id};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JobPhase {
-    High,
-    Low,
-}
-
 pub struct JobSource {
     pub jobs: Arc<JobManager>,
-    pub evalc: Arc<EvalCoordinator>,
     pub matches: Arc<dyn MatchStore>,
     pub nets: Arc<dyn NetworkStore>,
     pub disp: Arc<TaskDispatcher>,
@@ -33,116 +25,50 @@ pub struct JobSource {
     pub asm: Arc<TaskAssembler>,
     pub ctl: Arc<Control>,
     pub cfg: Arc<Config>,
-    pub phase: JobPhase,
 }
 
 impl TaskSource for JobSource {
     fn try_task(&self, req: &TaskRequest) -> CoreResult<Option<TaskResponse>> {
         self.jobs.preemption_sweep(false);
-        match self.phase {
-            JobPhase::High => self.try_eval(req),
-            JobPhase::Low => {
-                let mut candidates: Vec<JobRow> = Vec::new();
-                for kind in [
-                    JobKind::JobEval,
-                    JobKind::JobRating,
-                    JobKind::JobCollect,
-                    JobKind::JobSelfplay,
-                ] {
-                    candidates.extend(self.jobs.dispatchable(kind)?);
-                }
-                candidates.sort_by(|a, b| {
-                    b.priority
-                        .cmp(&a.priority)
-                        .then(a.created_at.cmp(&b.created_at))
-                });
-                for job in candidates {
-                    match JobKind::try_from(job.kind as i32) {
-                        Ok(JobKind::JobEval) => {
-                            if let Some(resp) = self.try_eval(req)? {
-                                return Ok(Some(resp));
-                            }
-                        }
-                        Ok(JobKind::JobCollect) => {
-                            if let Some(resp) = self.dispatch_collect(&job, req)? {
-                                return Ok(Some(resp));
-                            }
-                        }
-                        Ok(JobKind::JobRating) => {
-                            if let Some(resp) = self.dispatch_rating(&job, req)? {
-                                return Ok(Some(resp));
-                            }
-                        }
-                        Ok(JobKind::JobSelfplay) => {
-                            if let Some(resp) = self.dispatch_selfplay(req)? {
-                                return Ok(Some(resp));
-                            }
-                        }
-                        _ => {}
+        let mut candidates: Vec<JobRow> = Vec::new();
+        for kind in [
+            JobKind::JobRating,
+            JobKind::JobCollect,
+            JobKind::JobSelfplay,
+        ] {
+            candidates.extend(self.jobs.dispatchable(kind)?);
+        }
+        candidates.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then(a.created_at.cmp(&b.created_at))
+        });
+        for job in candidates {
+            match JobKind::try_from(job.kind as i32) {
+                Ok(JobKind::JobCollect) => {
+                    if let Some(resp) = self.dispatch_collect(&job, req)? {
+                        return Ok(Some(resp));
                     }
                 }
-
-                Ok(None)
+                Ok(JobKind::JobRating) => {
+                    if let Some(resp) = self.dispatch_rating(&job, req)? {
+                        return Ok(Some(resp));
+                    }
+                }
+                Ok(JobKind::JobSelfplay) => {
+                    if let Some(resp) = self.dispatch_selfplay(req)? {
+                        return Ok(Some(resp));
+                    }
+                }
+                _ => {}
             }
         }
+
+        Ok(None)
     }
 }
 
 impl JobSource {
-    fn try_eval(&self, req: &TaskRequest) -> CoreResult<Option<TaskResponse>> {
-        let eval_jobs = self.jobs.dispatchable(JobKind::JobEval)?;
-        if eval_jobs.is_empty() {
-            return Ok(None);
-        }
-        let Some((pending, task_id)) = self.evalc.claim_eval_task(&req.worker_id, req.threads)
-        else {
-            return Ok(None);
-        };
-
-        let matched = eval_jobs.iter().find(|j| {
-            JobSpecJson::parse(&j.spec_json)
-                .map(|s| {
-                    matches!(
-                        &s,
-                        JobSpecJson::Eval(e)
-                            if e.network_sha == pending.network_sha
-                                && e.opponent_kind == pending.opponent_spec
-                    )
-                })
-                .unwrap_or(false)
-        });
-        let Some(job) = matched else {
-            self.evalc.release_eval_claim(&task_id);
-            return Ok(None);
-        };
-        let games = self.disp.lookup(&task_id).map(|t| t.games).unwrap_or(0);
-        match self.asm.eval_task(&task_id, &pending, games, req) {
-            Ok(resp) => {
-                if let Err(e) = self.jobs.note_eval_claim(&task_id, &job.job_id) {
-                    self.evalc.release_eval_claim(&task_id);
-                    return Err(e);
-                }
-                self.disp.set_task_job(&task_id, &job.job_id);
-                tracing::info!(
-                    "[task] eval assigned worker={} task={} job={} network={} opponent={} games={} sims={}",
-                    req.worker_id,
-                    task_id,
-                    job.job_id,
-                    pending.network_sha,
-                    pending.opponent_spec,
-                    games,
-                    self.cfg.eval.mcts_sims
-                );
-                Ok(Some(resp))
-            }
-            Err(e) => {
-                self.evalc.release_eval_claim(&task_id);
-                tracing::warn!("[eval] 本次无法下发（{e}），已释放认领待重试");
-                Ok(None)
-            }
-        }
-    }
-
     fn dispatch_collect(
         &self,
         job: &JobRow,

@@ -64,6 +64,11 @@ static MIGRATIONS: &[Migration] = &[
         name: "match sides nullable sha",
         up: migrate_match_sides_nullable,
     },
+    Migration {
+        version: 12,
+        name: "drop eval tables",
+        up: migrate_drop_eval_tables,
+    },
 ];
 
 fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, StoreError> {
@@ -449,6 +454,26 @@ fn migrate_match_sides_nullable(conn: &Connection) -> Result<(), StoreError> {
         name: "match sides nullable sha",
         message: format!("rebuild matches: {e}"),
     })
+}
+
+fn migrate_drop_eval_tables(conn: &Connection) -> Result<(), StoreError> {
+    conn.execute_batch(
+        "DROP INDEX IF EXISTS idx_eval_results_spec;
+		 DROP TABLE IF EXISTS eval_results;
+		 DROP TABLE IF EXISTS eval_queue;
+		 DELETE FROM settings WHERE key LIKE 'eval%';
+		 DELETE FROM job_tasks WHERE job_id IN (SELECT job_id FROM jobs WHERE kind = 2);
+		 DELETE FROM jobs WHERE kind = 2;",
+    )
+    .map_err(|e| StoreError::Migration {
+        version: 12,
+        name: "drop eval tables",
+        message: format!("drop eval schema: {e}"),
+    })?;
+    tracing::info!(
+        "[store] eval 机制已移除：eval_results / eval_queue 表与 JOB_EVAL job 行已清理"
+    );
+    Ok(())
 }
 
 fn migrate_jobs(conn: &Connection) -> Result<(), StoreError> {

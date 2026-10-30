@@ -96,13 +96,6 @@ impl JobManager {
         Ok(row.next_seq - 1)
     }
 
-    pub fn note_eval_claim(&self, task_id: &str, job_id: &str) -> CoreResult<()> {
-        let games = self.disp.lookup(task_id).map(|t| t.games).unwrap_or(0);
-        let row = self.store.incr_job_dispatched(job_id, games, self.now())?;
-        let _ = row;
-        self.store.insert_job_task(task_id, job_id, games)
-    }
-
     pub fn record_report(&self, task_id: &str, games: i64) -> CoreResult<()> {
         let Some(link) = self.store.get_job_task(task_id)? else {
             return Ok(());

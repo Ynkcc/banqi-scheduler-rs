@@ -1,4 +1,4 @@
-use bqs_proto::{CollectPlayerSpec, CollectionJobSpec, EvalJobSpec, RatingJobSpec, SelfPlayJobSpec};
+use bqs_proto::{CollectPlayerSpec, CollectionJobSpec, RatingJobSpec, SelfPlayJobSpec};
 
 use super::JobManager;
 use super::spec::PlayerSpecJson;
@@ -95,41 +95,6 @@ impl JobManager {
             require_registered_sha(self.nets.as_ref(), sha, "")?;
         }
         Ok(())
-    }
-
-    pub(super) fn validate_eval(&self, e: &EvalJobSpec) -> Result<(), String> {
-        validate_variant(&e.variant)?;
-        if e.total_games < 2 || e.total_games % 2 != 0 {
-            return Err(format!(
-                "eval.total_games 必须 ≥2 且为偶数，当前 {}",
-                e.total_games
-            ));
-        }
-        let Some(kind) = bq_policy::player_kind::canonical(&e.opponent_kind) else {
-            return Err(format!(
-                "invalid_opponent_kind=\"{}\"（可选 {}）",
-                e.opponent_kind,
-                bq_policy::player_kind::PLAYER_KINDS.join("/")
-            ));
-        };
-        let is_model = bq_policy::player_kind::requires_model(kind);
-        if is_model {
-            if e.opponent_network_sha.is_empty() {
-                return Err("eval.opponent_network_sha required for model opponent".into());
-            }
-            require_registered_sha(
-                self.nets.as_ref(),
-                &e.opponent_network_sha,
-                "（eval 对手网络必须已登记）",
-            )?;
-        } else {
-            check_model_sha(
-                &e.opponent_network_sha,
-                "eval.opponent_network_sha 必须为空（非模型类对手）".into(),
-            )?;
-        }
-
-        require_registered_sha(self.nets.as_ref(), &e.network_sha, "")
     }
 
     pub(super) fn validate_and_resolve_rating(

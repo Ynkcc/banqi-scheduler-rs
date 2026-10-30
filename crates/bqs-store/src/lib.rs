@@ -1,5 +1,4 @@
 mod episodes;
-mod eval;
 mod featurepacks;
 mod jobs;
 #[cfg(test)]
@@ -108,7 +107,7 @@ const _: () = {
             T: ports::SettingsStore
                 + ports::NetworkStore
                 + ports::MatchStore
-                + ports::EvalStore
+                + ports::StoreStats
                 + ports::TrainerStore
                 + ports::EpisodeStore
                 + ports::WorkerStore
@@ -120,6 +119,25 @@ const _: () = {
         assert_impl::<Store>();
     }
 };
+
+impl ports::StoreStats for Store {
+    fn counts(&self) -> CoreResult<ports::StoreCounts> {
+        self.with_conn(|conn| {
+            let one = |q: &str| -> Result<i64, StoreError> {
+                conn.query_row(q, [], |row| row.get::<_, i64>(0))
+                    .map_err(StoreError::from)
+            };
+            Ok(ports::StoreCounts {
+                networks: one("SELECT COUNT(*) FROM networks")?,
+                candidates: one("SELECT COUNT(*) FROM networks WHERE status='candidate'")?,
+                matches_running: one("SELECT COUNT(*) FROM matches WHERE status='running'")?,
+                episodes: one("SELECT COUNT(*) FROM episodes")?,
+                workers: one("SELECT COUNT(*) FROM workers")?,
+                episode_games: one("SELECT COALESCE(SUM(game_count),0) FROM episodes")?,
+            })
+        })
+    }
+}
 
 impl ports::SettingsStore for Store {
     fn get_setting(&self, key: &str) -> CoreResult<Option<String>> {

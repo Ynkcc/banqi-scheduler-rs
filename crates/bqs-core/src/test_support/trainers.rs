@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::{CoreResult, ports::TrainerStore, types::Trainer};
+use crate::{ports::TrainerStore, types::Trainer, CoreResult};
 
 #[derive(Debug, Default)]
 pub struct FakeTrainers {

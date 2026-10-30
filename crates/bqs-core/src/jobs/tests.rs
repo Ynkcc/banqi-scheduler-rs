@@ -1,6 +1,6 @@
 use bqs_proto::{
-    CollectPlayerSpec, CollectionJobSpec, DataKind, EvalJobSpec, JobKind, RatingJobSpec,
-    SeedStrategy, SeedStrategyKind, SubmitJobRequest, TaskKind,
+    CollectPlayerSpec, CollectionJobSpec, DataKind, JobKind, RatingJobSpec, SeedStrategy,
+    SeedStrategyKind, SubmitJobRequest, TaskKind,
 };
 
 use super::*;
@@ -86,30 +86,6 @@ fn seed_collect_job(env: &Env, priority: i64, total: i64, state: &str) -> String
     job_id
 }
 
-fn seed_eval_job(env: &Env, priority: i64, total: i64, state: &str) -> String {
-    let job_id = format!("j{}", env.f.jobs.next_id());
-    env.f.jobs.seed_job(JobRow {
-        job_id: job_id.clone(),
-        kind: JobKind::JobEval as i64,
-        priority,
-        state: state.into(),
-        total_games: total,
-        completed_games: 0,
-        dispatched_games: 0,
-        spec_json: JobSpecJson::Eval(EvalSpecJson {
-            variant: "4x8".into(),
-            network_sha: "n1".into(),
-            opponent_kind: "random".into(),
-            ..Default::default()
-        })
-        .to_json(),
-        created_at: 1,
-        updated_at: 1,
-        next_seq: 0,
-    });
-    job_id
-}
-
 fn register_in_flight(env: &Env, task_id: &str, job_id: &str, worker: &str, games: i64) {
     let mut t = crate::dispatch::RunningTask::new(TaskKind::TaskCollect);
     t.worker_id = worker.into();
@@ -186,35 +162,6 @@ fn submit_rejects_unregistered_model_network_and_requires_sha() {
     let (ok, msg, _) = e.jobs.submit(&r).unwrap();
     assert!(!ok, "非模型类棋手不得携带 network_sha");
     assert!(msg.contains("必须为空"), "{msg}");
-}
-
-#[test]
-fn submit_eval_rejects_odd_total_and_missing_opponent_network() {
-    let e = env("");
-    let req = |total: u64, opp_sha: &str| SubmitJobRequest {
-        requester: "test".into(),
-        kind: JobKind::JobEval as i32,
-        priority: 0,
-        eval: Some(EvalJobSpec {
-            variant: "4x8".into(),
-            network_sha: String::new(),
-            opponent_kind: "expectimax_nnue".into(),
-            opponent_network_sha: opp_sha.into(),
-            total_games: total,
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    let (ok, msg, _) = e.jobs.submit(&req(3, "")).unwrap();
-    assert!(!ok);
-    assert!(msg.contains("偶数"), "{msg}");
-    let (ok, msg, _) = e.jobs.submit(&req(10, "ghost")).unwrap();
-    assert!(!ok);
-    assert!(msg.contains("network_not_registered"), "{msg}");
-    e.f.networks.seed_network("opp", None, "nnue");
-    let (ok, _, id) = e.jobs.submit(&req(10, "opp")).unwrap();
-    assert!(ok);
-    assert!(!id.is_empty());
 }
 
 #[test]
@@ -453,7 +400,7 @@ fn preemption_skips_paused_high_priority() {
     let low = seed_collect_job(&e, 10, 1000, "running");
     register_in_flight(&e, "p-t1", &low, "w1", 32);
 
-    seed_eval_job(&e, 100, 100, "paused");
+    seed_collect_job(&e, 100, 100, "paused");
     e.jobs.preemption_sweep(true);
     assert!(
         e.jobs.cancel_task_ids_for_worker("w1").is_empty(),
@@ -466,7 +413,7 @@ fn preemption_resume_cancels_lower_priority_in_flight() {
     let e = env("");
     let low = seed_collect_job(&e, 10, 1000, "running");
     register_in_flight(&e, "low-t1", &low, "w1", 32);
-    let high = seed_eval_job(&e, 100, 100, "paused");
+    let high = seed_collect_job(&e, 100, 100, "paused");
 
     let (ok, msg, _) = e.jobs.control(&high, "resume").unwrap();
     assert!(ok, "{msg}");
@@ -613,35 +560,6 @@ fn selfplay_bootstrap_is_idempotent() {
 }
 
 #[test]
-fn eval_job_auto_creation_dedups_by_network_and_opponent() {
-    let e = env("[eval]\ngames = 40\n");
-    e.f.networks.seed_network("n1", None, "onnx");
-    e.f.networks.promote_best("n1").unwrap();
-    e.jobs.create_eval_job("", "random", "").unwrap();
-    e.jobs.create_eval_job("", "random", "").unwrap();
-    let rows = e.jobs.list(None, Some(JobKind::JobEval as i64)).unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].total_games, 40);
-    assert_eq!(rows[0].priority, 100, "eval 默认优先级");
-    let JobSpecJson::Eval(spec) = JobSpecJson::parse(&rows[0].spec_json).unwrap() else {
-        panic!("eval spec json");
-    };
-    assert_eq!(spec.network_sha, "n1", "空 sha 解析为当前 best");
-    assert_eq!(spec.opponent_kind, "random");
-
-    e.jobs
-        .create_eval_job("", "rule:capture_first", "")
-        .unwrap();
-    assert_eq!(
-        e.jobs
-            .list(None, Some(JobKind::JobEval as i64))
-            .unwrap()
-            .len(),
-        2
-    );
-}
-
-#[test]
 fn dispatchable_filters_state_and_completion() {
     let e = env("");
     let running = seed_collect_job(&e, 50, 100, "running");
@@ -683,41 +601,11 @@ fn dispatchable_filters_state_and_completion() {
 }
 
 #[test]
-fn eval_report_via_job_link_records_completion() {
-    let e = env("");
-    let job_id = seed_eval_job(&e, 100, 100, "running");
-    e.jobs.note_eval_claim("et1", &job_id).unwrap();
-
-    let mut t = crate::dispatch::RunningTask::new(TaskKind::TaskEval);
-    t.worker_id = "w1".into();
-    t.games = 50;
-    t.job_id = job_id.clone();
-    e.disp.register("et1", t);
-    e.jobs.record_report("et1", 50).unwrap();
-    let row = e.jobs.get(&job_id).unwrap().unwrap();
-    assert_eq!(row.completed_games, 50);
-
-    e.jobs.note_eval_claim("et2", &job_id).unwrap();
-    let mut t2 = crate::dispatch::RunningTask::new(TaskKind::TaskEval);
-    t2.worker_id = "w1".into();
-    t2.games = 50;
-    t2.job_id = job_id.clone();
-    e.disp.register("et2", t2);
-    e.jobs.record_report("et2", 50).unwrap();
-    let row = e.jobs.get(&job_id).unwrap().unwrap();
-    assert_eq!(row.state, "completed");
-
-    let mut got = e.jobs.cancel_task_ids_for_worker("w1");
-    got.sort();
-    assert_eq!(got, vec!["et1".to_string(), "et2".to_string()]);
-}
-
-#[test]
 fn fake_clock_preemption_throttled() {
     let e = env("");
     let low = seed_collect_job(&e, 10, 1000, "running");
     register_in_flight(&e, "low-t1", &low, "w1", 32);
-    let _high = seed_eval_job(&e, 100, 100, "running");
+    let _high = seed_collect_job(&e, 100, 100, "running");
 
     e.jobs.preemption_sweep(false);
     assert_eq!(

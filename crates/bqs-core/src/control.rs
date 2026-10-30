@@ -5,8 +5,6 @@ use bqs_config::{Config, DataKind};
 
 use crate::{
     CoreError, CoreResult,
-    evalcoord::{EvalOverride, SETTING_EVAL_PROMOTIONS},
-    evalopponents::validate_eval_opponents,
     ports::{Ports, SettingsStore},
     trainconfig::{SETTING_TRAIN_CONFIG, TrainConfig},
 };
@@ -15,10 +13,8 @@ const SETTING_PAUSE_SELF_PLAY: &str = "pause_self_play";
 const SETTING_INITIAL_REVEALED: &str = "initial_revealed";
 const SETTING_DATA_KIND: &str = "data_kind";
 
-const SETTING_EVAL_SHOULD_STOP: &str = "eval_should_stop";
-const SETTING_EVAL_STOP_REASON: &str = "eval_stop_reason";
-
-const SETTING_EVAL_OVERRIDE: &str = "eval_override";
+const SETTING_SHOULD_STOP: &str = "should_stop";
+const SETTING_STOP_REASON: &str = "stop_reason";
 
 pub type HotDataKind = DataKind;
 
@@ -115,8 +111,8 @@ impl StopSignal {
     }
 
     fn set_stop(&self, reason: &str) -> CoreResult<()> {
-        self.store.set_setting(SETTING_EVAL_SHOULD_STOP, "1")?;
-        self.store.set_setting(SETTING_EVAL_STOP_REASON, reason)?;
+        self.store.set_setting(SETTING_SHOULD_STOP, "1")?;
+        self.store.set_setting(SETTING_STOP_REASON, reason)?;
         let mut g = self.mu.lock().unwrap();
         g.stopped = true;
         g.stop_reason = reason.to_string();
@@ -124,8 +120,8 @@ impl StopSignal {
     }
 
     fn clear_stop(&self) -> CoreResult<()> {
-        self.store.set_setting(SETTING_EVAL_SHOULD_STOP, "0")?;
-        self.store.set_setting(SETTING_EVAL_STOP_REASON, "")?;
+        self.store.set_setting(SETTING_SHOULD_STOP, "0")?;
+        self.store.set_setting(SETTING_STOP_REASON, "")?;
         let mut g = self.mu.lock().unwrap();
         g.stopped = false;
         g.stop_reason = String::new();
@@ -137,7 +133,6 @@ struct HotInner {
     initial_revealed: i32,
     data_kind: DataKind,
     train_config: BTreeMap<String, String>,
-    eval_override: Option<EvalOverride>,
 }
 
 pub struct HotConfig {
@@ -193,25 +188,11 @@ impl HotConfig {
             _ => BTreeMap::new(),
         };
 
-        let eval_override = match store
-            .get_setting(SETTING_EVAL_OVERRIDE)
-            .map_err(|e| e.to_string())?
-        {
-            Some(raw) if !raw.is_empty() => {
-                Some(serde_json::from_str::<EvalOverride>(&raw).map_err(|e| {
-                    format!(
-                        "setting {SETTING_EVAL_OVERRIDE}={raw:?} 不是合法的 EvalOverride JSON: {e}"
-                    )
-                })?)
-            }
-            _ => None,
-        };
         Ok(Self {
             mu: Mutex::new(HotInner {
                 initial_revealed,
                 data_kind,
                 train_config,
-                eval_override,
             }),
             store: store.clone(),
         })
@@ -257,30 +238,6 @@ impl HotConfig {
         self.mu.lock().unwrap().train_config = normalized;
         Ok(())
     }
-
-    fn eval_override(&self) -> Option<EvalOverride> {
-        self.mu.lock().unwrap().eval_override.clone()
-    }
-
-    fn set_eval_override(&self, o: EvalOverride) -> CoreResult<()> {
-        if let Some(opp) = &o.opponents {
-            if !opp.is_empty() {
-                validate_eval_opponents(opp).map_err(validation_error)?;
-            }
-        }
-        if let Some(sw) = o.stop_win_rate {
-            if !(0.0..=1.0).contains(&sw) {
-                return Err(validation_error(format!(
-                    "stopWinRate 须在 [0,1]（0 = 关闭达标停机），实际 {sw}"
-                )));
-            }
-        }
-        let encoded = serde_json::to_string(&o)
-            .map_err(|e| CoreError::Internal(format!("序列化评估覆盖: {e}")))?;
-        self.store.set_setting(SETTING_EVAL_OVERRIDE, &encoded)?;
-        self.mu.lock().unwrap().eval_override = Some(o);
-        Ok(())
-    }
 }
 
 #[derive(Default)]
@@ -316,13 +273,13 @@ impl Control {
         let pause = PauseState::new(store.clone(), paused);
         let stopped = matches!(
             store
-                .get_setting(SETTING_EVAL_SHOULD_STOP)
+                .get_setting(SETTING_SHOULD_STOP)
                 .map_err(|e| e.to_string())?
                 .as_deref(),
             Some("1")
         );
         let stop_reason = store
-            .get_setting(SETTING_EVAL_STOP_REASON)
+            .get_setting(SETTING_STOP_REASON)
             .map_err(|e| e.to_string())?
             .unwrap_or_default();
         let stop = StopSignal::new(store.clone(), stopped, stop_reason);
@@ -413,23 +370,6 @@ impl Control {
         self.hot().set_train_config(overrides)
     }
 
-    pub fn eval_override(&self) -> Option<EvalOverride> {
-        self.hot().eval_override()
-    }
-
-    pub fn set_eval_override(&self, o: EvalOverride) -> CoreResult<()> {
-        self.hot().set_eval_override(o)
-    }
-
-    pub fn eval_promotions(&self) -> CoreResult<i64> {
-        self.settings().get_int_setting(SETTING_EVAL_PROMOTIONS, 0)
-    }
-
-    pub fn set_eval_promotions(&self, n: i64) -> CoreResult<()> {
-        self.settings()
-            .set_setting(SETTING_EVAL_PROMOTIONS, &n.to_string())
-    }
-
     pub fn settings(&self) -> Arc<dyn SettingsStore> {
         self.pause().store.clone()
     }
@@ -512,11 +452,8 @@ mod tests {
         let f = Fakes::new();
         let c = control(&f, cfg());
         assert_eq!(c.should_stop(), (false, String::new()));
-        c.set_stop("eval_no_progress: test").unwrap();
-        assert_eq!(
-            c.should_stop(),
-            (true, "eval_no_progress: test".to_string())
-        );
+        c.set_stop("test_reason").unwrap();
+        assert_eq!(c.should_stop(), (true, "test_reason".to_string()));
 
         c.set_stop("second").unwrap();
         assert_eq!(c.should_stop(), (true, "second".to_string()));
@@ -562,40 +499,5 @@ mod tests {
             .unwrap();
         let err = Control::try_new(&f.ports(), cfg()).unwrap_err();
         assert!(err.contains("train_config"), "{err}");
-    }
-
-    #[test]
-    fn eval_override_roundtrip_keeps_empty_ladder() {
-        let f = Fakes::new();
-        let c = control(&f, cfg());
-        assert!(c.eval_override().is_none());
-
-        let mut o = EvalOverride::default();
-        o.opponents = Some(vec![]);
-        o.stop_win_rate = Some(0.9);
-        c.set_eval_override(o).unwrap();
-        let stored = f.settings.get_setting("eval_override").unwrap().unwrap();
-        assert!(stored.contains(r#""opponents":[]"#), "{stored}");
-        let back = c.eval_override().unwrap();
-        assert_eq!(back.opponents, Some(vec![]));
-        assert_eq!(back.stop_win_rate, Some(0.9));
-
-        let mut bad = EvalOverride::default();
-        bad.opponents = Some(vec!["rule:bogus".to_string()]);
-        assert!(c.set_eval_override(bad).is_err());
-
-        let mut bad = EvalOverride::default();
-        bad.stop_win_rate = Some(1.5);
-        assert!(c.set_eval_override(bad).is_err());
-    }
-
-    #[test]
-    fn eval_promotions_counter_via_settings() {
-        let f = Fakes::new();
-        let c = control(&f, cfg());
-        assert_eq!(c.eval_promotions().unwrap(), 0);
-        c.set_eval_promotions(7).unwrap();
-        assert_eq!(c.eval_promotions().unwrap(), 7);
-        assert_eq!(f.settings.get_int_setting("eval_promotions", 0).unwrap(), 7);
     }
 }

@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::{
-    CoreError, CoreResult,
     ports::NetworkStore,
-    types::{Network, network_status},
+    types::{network_status, Network},
+    CoreError, CoreResult,
 };
 
 #[derive(Debug, Default)]

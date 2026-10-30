@@ -1,6 +1,5 @@
 mod clock;
 mod episodes;
-mod eval;
 mod jobstore;
 mod matches;
 mod networks;
@@ -13,7 +12,6 @@ mod workers;
 
 pub use clock::FakeClock;
 pub use episodes::FakeEpisodes;
-pub use eval::FakeEval;
 pub use jobstore::FakeJobs;
 pub use matches::FakeMatches;
 pub use networks::FakeNetworks;
@@ -26,7 +24,16 @@ pub use workers::FakeWorkers;
 
 use std::sync::Arc;
 
-use crate::ports::Ports;
+use crate::ports::{Ports, StoreCounts, StoreStats};
+
+#[derive(Debug, Default)]
+pub struct FakeStats;
+
+impl StoreStats for FakeStats {
+    fn counts(&self) -> crate::CoreResult<StoreCounts> {
+        Ok(StoreCounts::default())
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct Fakes {
@@ -34,7 +41,6 @@ pub struct Fakes {
     pub settings: Arc<FakeSettings>,
     pub networks: Arc<FakeNetworks>,
     pub matches: Arc<FakeMatches>,
-    pub eval: Arc<FakeEval>,
     pub trainers: Arc<FakeTrainers>,
     pub registry: Arc<FakeRegistry>,
     pub episodes: Arc<FakeEpisodes>,
@@ -55,7 +61,6 @@ impl Fakes {
             settings: Arc::new(FakeSettings::default()),
             networks: Arc::new(FakeNetworks::default()),
             matches: Arc::new(FakeMatches::default()),
-            eval: Arc::new(FakeEval::default()),
             trainers,
             registry,
             episodes: Arc::new(FakeEpisodes::default()),
@@ -71,7 +76,7 @@ impl Fakes {
             settings: self.settings.clone(),
             networks: self.networks.clone(),
             matches: self.matches.clone(),
-            eval: self.eval.clone(),
+            stats: Arc::new(FakeStats),
             trainers: self.trainers.clone(),
             episodes: self.episodes.clone(),
             workers: self.workers.clone(),

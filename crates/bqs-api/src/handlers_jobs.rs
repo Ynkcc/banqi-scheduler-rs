@@ -236,7 +236,6 @@ pub struct SubmitJobBody {
     pub requester: String,
     pub collect: Option<CollectBody>,
     pub selfplay: Option<SelfPlayBody>,
-    pub eval: Option<bqs_core::jobs::EvalSpecJson>,
     pub rating: Option<RatingBody>,
 }
 
@@ -279,10 +278,9 @@ fn parse_job_kind(s: &str) -> Result<JobKind, ApiError> {
     match s.trim().to_ascii_lowercase().as_str() {
         "collect" => Ok(JobKind::JobCollect),
         "selfplay" => Ok(JobKind::JobSelfplay),
-        "eval" => Ok(JobKind::JobEval),
         "rating" => Ok(JobKind::JobRating),
         other => Err(ApiError::bad_request(format!(
-            "未知 job kind {other:?}（可选 collect / selfplay / eval / rating）"
+            "未知 job kind {other:?}（可选 collect / selfplay / rating）"
         ))),
     }
 }
@@ -291,7 +289,6 @@ fn kind_name(k: JobKind) -> &'static str {
     match k {
         JobKind::JobCollect => "collect",
         JobKind::JobSelfplay => "selfplay",
-        JobKind::JobEval => "eval",
         JobKind::JobRating => "rating",
     }
 }
@@ -304,7 +301,6 @@ fn spec_echo(parsed: Option<&JobSpecJson>) -> serde_json::Value {
     match parsed {
         Some(JobSpecJson::Collect(c)) => serde_json::to_value(CollectBody::from_json(c)),
         Some(JobSpecJson::SelfPlay(s)) => serde_json::to_value(SelfPlayBody::from_json(s)),
-        Some(JobSpecJson::Eval(e)) => serde_json::to_value(e),
         Some(JobSpecJson::Rating(rt)) => serde_json::to_value(RatingBody::from_json(rt)),
         None => Ok(serde_json::Value::Null),
     }
@@ -336,10 +332,6 @@ pub async fn submit_job(
                     .to_proto()
                     .map_err(ApiError::bad_request)?,
             ),
-            _ => None,
-        },
-        eval: match kind {
-            JobKind::JobEval => Some(take_spec(body.eval, "eval")?.to_proto()),
             _ => None,
         },
         rating: match kind {

@@ -1,6 +1,6 @@
 use bqs_proto::{
-    CollectPlayerSpec, CollectSearchParams, CollectionJobSpec, EvalJobSpec, OpeningScenario,
-    RatingJobSpec, SeedStrategy, SeedStrategyKind, SelfPlayJobSpec,
+    CollectPlayerSpec, CollectSearchParams, CollectionJobSpec, OpeningScenario, RatingJobSpec,
+    SeedStrategy, SeedStrategyKind, SelfPlayJobSpec,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -261,45 +261,6 @@ impl SelfPlaySpecJson {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct EvalSpecJson {
-    pub variant: String,
-    #[serde(alias = "network_sha")]
-    pub network_sha: String,
-    #[serde(alias = "opponent_kind")]
-    pub opponent_kind: String,
-    #[serde(alias = "opponent_network_sha")]
-    pub opponent_network_sha: String,
-    pub search: Option<SearchSpecJson>,
-    #[serde(alias = "total_games")]
-    pub total_games: u64,
-}
-
-impl EvalSpecJson {
-    pub(super) fn from_proto(s: EvalJobSpec) -> Self {
-        Self {
-            variant: s.variant,
-            network_sha: s.network_sha,
-            opponent_kind: s.opponent_kind,
-            opponent_network_sha: s.opponent_network_sha,
-            search: s.search.map(|x| SearchSpecJson::from_proto(Some(x))),
-            total_games: s.total_games,
-        }
-    }
-
-    pub fn to_proto(&self) -> EvalJobSpec {
-        EvalJobSpec {
-            variant: self.variant.clone(),
-            network_sha: self.network_sha.clone(),
-            opponent_kind: self.opponent_kind.clone(),
-            opponent_network_sha: self.opponent_network_sha.clone(),
-            search: self.search.as_ref().and_then(|s| s.to_proto()),
-            total_games: self.total_games,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, rename_all = "camelCase")]
 pub struct RatingSpecJson {
     pub variant: String,
     #[serde(alias = "candidate_sha")]
@@ -394,7 +355,6 @@ impl RatingSpecJson {
 pub enum JobSpecJson {
     Collect(CollectSpecJson),
     SelfPlay(SelfPlaySpecJson),
-    Eval(EvalSpecJson),
     Rating(RatingSpecJson),
 }
 
@@ -438,7 +398,6 @@ pub(super) fn spec_total(spec: &JobSpecJson) -> u64 {
     match spec {
         JobSpecJson::Collect(c) => c.total_games,
         JobSpecJson::SelfPlay(s) => s.total_games,
-        JobSpecJson::Eval(e) => e.total_games,
         JobSpecJson::Rating(r) => r.total_games,
     }
 }

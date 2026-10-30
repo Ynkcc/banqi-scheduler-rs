@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bqs_judgment::Hexanomial;
 
-use crate::{CoreResult, types::*};
+use crate::{types::*, CoreResult};
 
 pub trait SettingsStore: Send + Sync {
     fn get_setting(&self, key: &str) -> CoreResult<Option<String>>;
@@ -46,60 +46,6 @@ pub trait MatchStore: Send + Sync {
     fn conclude_match(&self, id: i64) -> CoreResult<bool>;
 
     fn cancel_match(&self, id: i64) -> CoreResult<bool>;
-}
-
-pub trait EvalStore: SettingsStore {
-    fn load_eval_queue(&self) -> CoreResult<Vec<EvalQueueEntry>>;
-
-    fn enqueue_eval_job(
-        &self,
-        network_sha: &str,
-        spec: &str,
-        opponent_sha: &str,
-        target_games: i64,
-        per_task_games: i64,
-    ) -> CoreResult<bool>;
-    fn delete_eval_job(&self, network_sha: &str, spec: &str) -> CoreResult<()>;
-
-    fn inc_eval_job_attempts(&self, network_sha: &str, spec: &str) -> CoreResult<i64>;
-
-    fn accumulate_eval_job(
-        &self,
-        network_sha: &str,
-        spec: &str,
-        delta: EvalDelta,
-    ) -> CoreResult<EvalQueueEntry>;
-    fn get_eval_job(&self, network_sha: &str, spec: &str) -> CoreResult<Option<EvalQueueEntry>>;
-
-    fn upsert_eval_result(&self, r: EvalResult) -> CoreResult<()>;
-    fn get_eval_result(
-        &self,
-        network_sha: &str,
-        opponent_spec: &str,
-    ) -> CoreResult<Option<EvalResult>>;
-
-    fn eval_trend(&self, opponent_spec: &str, limit: i64) -> CoreResult<Vec<EvalResult>>;
-
-    fn counts(&self) -> CoreResult<StoreCounts> {
-        let _ = self;
-        Err(CoreError::Internal(
-            "counts 仅 bqs-store::Store 实现（[api 需求]）".into(),
-        ))
-    }
-
-    fn list_eval_results(&self, limit: i64) -> CoreResult<Vec<EvalResult>> {
-        let _ = (self, limit);
-        Err(CoreError::Internal(
-            "list_eval_results 仅 bqs-store::Store 实现（[api 需求]）".into(),
-        ))
-    }
-
-    fn list_eval_opponents(&self) -> CoreResult<Vec<String>> {
-        let _ = self;
-        Err(CoreError::Internal(
-            "list_eval_opponents 仅 bqs-store::Store 实现（[api 需求]）".into(),
-        ))
-    }
 }
 
 pub trait TrainerStore: Send + Sync {
@@ -273,12 +219,21 @@ impl Clock for SystemClock {
     }
 }
 
+pub trait StoreStats: Send + Sync {
+    fn counts(&self) -> CoreResult<StoreCounts> {
+        let _ = self;
+        Err(CoreError::Internal(
+            "counts 仅 bqs-store::Store 实现（[api 需求]）".into(),
+        ))
+    }
+}
+
 #[derive(Clone)]
 pub struct Ports {
     pub settings: Arc<dyn SettingsStore>,
     pub networks: Arc<dyn NetworkStore>,
     pub matches: Arc<dyn MatchStore>,
-    pub eval: Arc<dyn EvalStore>,
+    pub stats: Arc<dyn StoreStats>,
     pub trainers: Arc<dyn TrainerStore>,
     pub episodes: Arc<dyn EpisodeStore>,
     pub workers: Arc<dyn WorkerStore>,
@@ -298,7 +253,6 @@ pub struct StoreCounts {
     pub episodes: i64,
     pub episode_games: i64,
     pub workers: i64,
-    pub eval_results: i64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]

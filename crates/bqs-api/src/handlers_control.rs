@@ -45,7 +45,7 @@ pub async fn control(
             if req.clear_stop == Some(true) {
                 ctl.clear_stop()
                     .map_err(|e| ApiError::internal(e.to_string()))?;
-                tracing::info!("[webui] eval should_stop 已清除（确认续训）");
+                tracing::info!("[webui] should_stop 已清除（确认续训）");
             }
             Ok(OkView { ok: true })
         },
@@ -54,6 +54,5 @@ pub async fn control(
 }
 
 fn parse_data_kind(s: &str) -> Result<bqs_config::DataKind, ApiError> {
-    bqs_core::data_kind::parse(s)
-        .map_err(|e| ApiError::bad_request(format!("{e}；none 为 eval-only 对局记录，不可配置")))
+    bqs_core::data_kind::parse(s).map_err(|e| ApiError::bad_request(format!("{e}")))
 }
