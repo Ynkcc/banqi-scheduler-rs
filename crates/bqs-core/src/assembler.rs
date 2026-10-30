@@ -515,6 +515,51 @@ impl TaskAssembler {
         }
     }
 
+    /// 组装 rating 对打任务响应（TASK_RATING，JOB_RATING 的下发形态）：
+    /// candidate（主网络）与对手网络各自携带对象键与下载 URL（对手 URL 恒签发，
+    /// 同 selfplay 混入口径；主网络 URL 仅在 worker 本地缺该 sha 时签发）。
+    /// data_kind 跟随 candidate 架构（worker 能力校验口径）；不产训练数据。
+    /// 登记与派发记账由调用方（JobSource::dispatch_rating）完成。
+    pub fn rating_task(
+        &self,
+        task_id: &str,
+        variant: &str,
+        candidate: &Network,
+        opponent: Option<&Network>,
+        games: i64,
+        req: &TaskRequest,
+    ) -> CoreResult<TaskResponse> {
+        let key = network_key(&candidate.sha, &candidate.format);
+        let mut resp = TaskResponse {
+            task_id: task_id.to_string(),
+            kind: TaskKind::TaskRating as i32,
+            network_sha: candidate.sha.clone(),
+            network_sha_remote: candidate.sha.clone(),
+            games: games as i32,
+            network_key: key.clone(),
+            params: Some(SelfPlayParams {
+                variant: variant.to_string(),
+                data_kind: data_kind_for_format(&candidate.format),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        self.with_network_download(req, &mut resp, &candidate.sha, &key)?;
+        if let Some(opp) = opponent {
+            let opp_key = network_key(&opp.sha, &opp.format);
+            resp.opponent_sha = opp.sha.clone();
+            resp.opponent_key = opp_key.clone();
+            match self.signer.presign_get(&opp_key, self.ttl_secs()) {
+                Ok(url) => resp.opponent_url = url,
+                Err(e) => tracing::warn!(
+                    "[task] presign opponent {} 失败（本地有缓存的 worker 不受影响）: {e}",
+                    opp_key
+                ),
+            }
+        }
+        Ok(resp)
+    }
+
     /// 组装特征包补派任务响应（记录批次下载 URL 恒签发）。
     pub fn derive_task(&self, task_id: &str, item: &PendingDerive) -> CoreResult<TaskResponse> {
         let episode_url = self.signer.presign_get(&item.episode_object_key, self.ttl_secs())?;
@@ -850,6 +895,37 @@ mod tests {
         let (resp3, mid3) = asm.selfplay_task("t3", &req_fresh, &sel_pure).unwrap();
         assert_eq!(mid3, 0);
         assert_eq!(resp3.network_url, "get:networks/best.onnx");
+    }
+
+    #[test]
+    fn rating_task_assembly() {
+        let f = Fakes::new();
+        f.networks.seed_network("cand", None, "onnx");
+        f.networks.seed_network("opp", None, "nnue");
+        let asm = assembler(&f);
+        let cand = f.networks.get_network("cand").unwrap().unwrap();
+        let opp = f.networks.get_network("opp").unwrap().unwrap();
+
+        // worker 本地已有候选 → 主 URL 不签发；对手 URL 恒签发
+        let req = TaskRequest { current_network: "cand".into(), threads: 4, ..Default::default() };
+        let resp = asm.rating_task("t1", "4x8", &cand, Some(&opp), 8, &req).unwrap();
+        assert_eq!(resp.kind, TaskKind::TaskRating as i32);
+        assert_eq!(resp.network_sha, "cand");
+        assert_eq!(resp.network_key, "networks/cand.onnx");
+        assert_eq!(resp.network_url, "", "本地已有主网络不签 URL");
+        assert_eq!(resp.opponent_sha, "opp");
+        assert_eq!(resp.opponent_key, "networks/opp.nnue");
+        assert_eq!(resp.opponent_url, "get:networks/opp.nnue", "对手 URL 恒签发");
+        assert_eq!(resp.games, 8);
+        let p = resp.params.unwrap();
+        assert_eq!(p.variant, "4x8");
+        assert_eq!(p.data_kind, bqs_proto::DataKind::DataResnet as i32, "data_kind 跟随候选架构");
+
+        // worker 本地无候选 → 主 URL 签发
+        let req2 = TaskRequest { current_network: String::new(), ..Default::default() };
+        let resp2 = asm.rating_task("t2", "4x8", &cand, None, 4, &req2).unwrap();
+        assert_eq!(resp2.network_url, "get:networks/cand.onnx");
+        assert_eq!(resp2.opponent_key, "", "无对手时不签对手键");
     }
 
     #[test]

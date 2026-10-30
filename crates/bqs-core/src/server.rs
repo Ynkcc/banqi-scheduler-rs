@@ -96,6 +96,7 @@ impl Server {
             ports.jobs.clone(),
             disp.clone(),
             ports.networks.clone(),
+            ports.matches.clone(),
             ctl.clone(),
             cfg.clone(),
             clock.clone(),
@@ -109,7 +110,15 @@ impl Server {
             cfg.clone(),
             ctl.clone(),
         ));
-        let router = Arc::new(ReportRouter::new(evalc.clone(), gate.clone(), disp.clone(), jobs.clone()));
+        let router = Arc::new(ReportRouter::new(
+            evalc.clone(),
+            gate.clone(),
+            disp.clone(),
+            jobs.clone(),
+            ports.matches.clone(),
+            ports.networks.clone(),
+            cfg.clone(),
+        ));
         let sources = Sources::assemble(
             jobs.clone(),
             evalc.clone(),
@@ -427,11 +436,12 @@ impl Server {
     /// JobRow → proto JobStatus（规格回显解析失败时留空——落库数据损坏的防御）。
     fn job_status(&self, r: &crate::ports::JobRow) -> JobStatus {
         let kind = JobKind::try_from(r.kind as i32).unwrap_or(JobKind::JobCollect);
-        let (collect, selfplay, eval) = match JobSpecJson::parse(&r.spec_json) {
-            Some(JobSpecJson::Collect(c)) => (Some(c.to_proto()), None, None),
-            Some(JobSpecJson::SelfPlay(s)) => (None, Some(s.to_proto()), None),
-            Some(JobSpecJson::Eval(e)) => (None, None, Some(e.to_proto())),
-            None => (None, None, None),
+        let (collect, selfplay, eval, rating) = match JobSpecJson::parse(&r.spec_json) {
+            Some(JobSpecJson::Collect(c)) => (Some(c.to_proto()), None, None, None),
+            Some(JobSpecJson::SelfPlay(s)) => (None, Some(s.to_proto()), None, None),
+            Some(JobSpecJson::Eval(e)) => (None, None, Some(e.to_proto()), None),
+            Some(JobSpecJson::Rating(rt)) => (None, None, None, Some(rt.to_proto())),
+            None => (None, None, None, None),
         };
         JobStatus {
             job_id: r.job_id.clone(),
@@ -446,6 +456,7 @@ impl Server {
             collect,
             selfplay,
             eval,
+            rating,
         }
     }
 

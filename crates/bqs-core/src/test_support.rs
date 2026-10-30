@@ -327,6 +327,10 @@ impl FakeMatches {
     pub fn conclude_match(&self, id: i64) -> CoreResult<bool> {
         MatchStore::conclude_match(self, id)
     }
+
+    pub fn cancel_match(&self, id: i64) -> CoreResult<bool> {
+        MatchStore::cancel_match(self, id)
+    }
 }
 
 impl MatchStore for FakeMatches {
@@ -377,6 +381,18 @@ impl MatchStore for FakeMatches {
             return Ok(false);
         }
         m.status = crate::types::match_status::CONCLUDED.to_string();
+        Ok(true)
+    }
+
+    fn cancel_match(&self, id: i64) -> CoreResult<bool> {
+        let mut g = self.inner.lock().unwrap();
+        let Some(m) = g.matches.get_mut(&id) else {
+            return Err(CoreError::Store(format!("match {id} 不存在")));
+        };
+        if !m.running() {
+            return Ok(false);
+        }
+        m.status = crate::types::match_status::CANCELLED.to_string();
         Ok(true)
     }
 }
@@ -1039,6 +1055,18 @@ impl JobStore for FakeJobs {
     fn delete_job_task(&self, task_id: &str) -> CoreResult<()> {
         self.inner.lock().unwrap().tasks.remove(task_id);
         Ok(())
+    }
+
+    fn update_job_spec(&self, job_id: &str, spec_json: &str, now: i64) -> CoreResult<()> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.jobs.get_mut(job_id) {
+            Some(j) => {
+                j.spec_json = spec_json.to_string();
+                j.updated_at = now;
+                Ok(())
+            }
+            None => Err(CoreError::Store(format!("job {job_id} not found"))),
+        }
     }
 }
 

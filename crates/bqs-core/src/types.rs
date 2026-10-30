@@ -16,6 +16,8 @@ pub mod network_status {
 pub mod match_status {
     pub const RUNNING: &str = "running";
     pub const CONCLUDED: &str = "concluded";
+    /// rating job 被 ControlJob cancel 时置位（对打终止，不晋级不标 rejected）。
+    pub const CANCELLED: &str = "cancelled";
 }
 
 #[derive(Debug, Clone, PartialEq)]

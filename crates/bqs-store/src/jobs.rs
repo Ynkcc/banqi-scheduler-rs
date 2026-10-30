@@ -242,6 +242,17 @@ impl JobStore for Store {
             Ok(())
         })
     }
+
+    fn update_job_spec(&self, job_id: &str, spec_json: &str, now: i64) -> CoreResult<()> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE jobs SET spec_json = ?2, updated_at = ?3 WHERE job_id = ?1",
+                rusqlite::params![job_id, spec_json, now],
+            )
+            .map_err(StoreError::from)?;
+            Ok(())
+        })
+    }
 }
 
 impl Store {
@@ -265,5 +276,39 @@ impl Store {
         })
         .optional()
         .map_err(StoreError::from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bqs_core::ports::JobStore as JS;
+
+    #[test]
+    fn update_job_spec_rewrites_echo_and_timestamp() {
+        let (_dir, s) = crate::testutil::open_temp_store();
+        JS::insert_job(
+            &*s,
+            JobRow {
+                job_id: "j1".into(),
+                kind: 3,
+                priority: 80,
+                state: "running".into(),
+                total_games: 20,
+                completed_games: 0,
+                dispatched_games: 0,
+                spec_json: r#"{"rating":{"match_id":0}}"#.into(),
+                created_at: 1,
+                updated_at: 1,
+                next_seq: 0,
+            },
+        )
+        .unwrap();
+        JS::update_job_spec(&*s, "j1", r#"{"rating":{"match_id":7}}"#, 99).unwrap();
+        let row = JS::get_job(&*s, "j1").unwrap().unwrap();
+        assert!(row.spec_json.contains("\"match_id\":7"));
+        assert_eq!(row.updated_at, 99);
+        // 不存在的 job：no-op（不报错）
+        JS::update_job_spec(&*s, "ghost", "{}", 100).unwrap();
     }
 }

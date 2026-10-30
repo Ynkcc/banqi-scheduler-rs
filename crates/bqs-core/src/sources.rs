@@ -97,7 +97,7 @@ impl TaskSource for JobSource {
                 // 可派发 job 统一按优先级排序（list_jobs 已按 priority DESC、
                 // created_at ASC）；逐个尝试直到派发成功。
                 let mut candidates: Vec<JobRow> = Vec::new();
-                for kind in [JobKind::JobEval, JobKind::JobCollect, JobKind::JobSelfplay] {
+                for kind in [JobKind::JobEval, JobKind::JobRating, JobKind::JobCollect, JobKind::JobSelfplay] {
                     candidates.extend(self.jobs.dispatchable(kind)?);
                 }
                 candidates.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.created_at.cmp(&b.created_at)));
@@ -110,6 +110,11 @@ impl TaskSource for JobSource {
                         }
                         Ok(JobKind::JobCollect) => {
                             if let Some(resp) = self.dispatch_collect(&job, req)? {
+                                return Ok(Some(resp));
+                            }
+                        }
+                        Ok(JobKind::JobRating) => {
+                            if let Some(resp) = self.dispatch_rating(&job, req)? {
                                 return Ok(Some(resp));
                             }
                         }
@@ -218,6 +223,75 @@ impl JobSource {
         Ok(Some(resp))
     }
 
+    /// rating job 派发（TASK_RATING，手动 SPRT 对打）：对打行已在提交时创建
+    /// （spec.match_id），候选与对手网络按对发行快照加载；单任务局数按 worker
+    /// 线程缩放并向上取偶（换色配对），total>0 时按剩余局数截断。全部派发
+    /// 共享同一对打行的六桶聚合（上报经 ReportRouter 的 rating sink 判停）。
+    fn dispatch_rating(&self, job: &JobRow, req: &TaskRequest) -> CoreResult<Option<TaskResponse>> {
+        let Some(JobSpecJson::Rating(spec)) = JobSpecJson::parse(&job.spec_json) else {
+            tracing::warn!("[job] rating job {} spec_json 解析失败，跳过", job.job_id);
+            return Ok(None);
+        };
+        if spec.match_id == 0 {
+            tracing::warn!("[job] rating job {} 无对发行（提交异常），跳过", job.job_id);
+            return Ok(None);
+        }
+        let Some(m) = self.matches.get_match(spec.match_id)? else {
+            tracing::warn!("[job] rating job {} 对发行 {} 缺失，跳过", job.job_id, spec.match_id);
+            return Ok(None);
+        };
+        if !m.running() {
+            return Ok(None);
+        }
+        let Some(cand) = self.nets.get_network(&m.candidate)? else {
+            tracing::warn!("[task] rating 候选网络登记记录缺失 sha={}，跳过", m.candidate);
+            return Ok(None);
+        };
+        let opp = self.nets.get_network(&m.opponent)?;
+        // 变体空 = 回落调度器 selfplay.variant（提交校验已保证非空值合法）。
+        let variant = if spec.variant.is_empty() {
+            self.cfg.selfplay.variant.clone()
+        } else {
+            spec.variant.clone()
+        };
+        let mut games = games_for_threads(
+            self.cfg.selfplay.threads_baseline,
+            self.cfg.selfplay.games_per_task as i64,
+            req.threads,
+        );
+        games += games & 1; // 向上取偶：换色配对成对派发
+        if spec.total_games > 0 {
+            let remaining = spec.total_games as i64 - job.dispatched_games;
+            if remaining < 2 {
+                return Ok(None);
+            }
+            games = games.min(remaining);
+            games -= games & 1;
+            if games < 2 {
+                return Ok(None);
+            }
+        }
+        let task_id = new_id();
+        let resp = self.asm.rating_task(&task_id, &variant, &cand, opp.as_ref(), games, req)?;
+        self.jobs.note_dispatch(
+            &task_id,
+            &job.job_id,
+            games,
+            &req.worker_id,
+            TaskKind::TaskRating,
+            &cand.sha,
+            &m.opponent,
+            "",
+            m.id,
+            None,
+        )?;
+        tracing::info!(
+            "[task] rating assigned worker={} task={} job={} match={} candidate={} opponent={} games={}",
+            req.worker_id, task_id, job.job_id, m.id, cand.sha, m.opponent, games
+        );
+        Ok(Some(resp))
+    }
+
     /// selfplay job 派发：沿用既有 selfplay 生产路径，派发记账挂 job。
     /// 返回 Some(TASK_NONE) = 请求已被处理（空转等待，与旧 SelfplaySource 一致）。
     fn dispatch_selfplay(&self, req: &TaskRequest) -> CoreResult<Option<TaskResponse>> {
@@ -242,7 +316,14 @@ impl JobSource {
         let Some(job) = self.jobs.dispatchable(JobKind::JobSelfplay)?.into_iter().next() else {
             return Ok(None);
         };
-        let pm = self.matches.pending_match()?;
+        // pending_match 会取到任意 running 对打；rating job 的对打（手动 SPRT
+        // 对打）不得劫持 selfplay 混入（候选归属、判停口径均不同）。
+        let mut pm = self.matches.pending_match()?;
+        if let Some(m) = &pm {
+            if self.jobs.is_rating_match(m.id) {
+                pm = None;
+            }
+        }
         let best = self.nets.get_best()?;
         // 规则哨兵开关（[selfplay] best = "rule"）——条件哨兵（冷启动预热）。
         if pm.is_none() && best.is_none() && self.cfg.selfplay.best == consts::RULE_SENTINEL_SHA {
@@ -442,5 +523,173 @@ impl Sources {
             Box::new(DeriveSource { derive, disp: disp.clone(), asm: asm.clone() }),
             mk(JobPhase::Low),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bqs_proto::{JobKind, RatingJobSpec, SubmitJobRequest, TaskKind, TaskRequest};
+
+    use super::*;
+    use crate::test_support::Fakes;
+    use std::sync::Arc;
+
+    struct Env {
+        f: Fakes,
+        jobs: Arc<JobManager>,
+        src: JobSource,
+    }
+
+    fn env() -> Env {
+        let f = Fakes::new();
+        let cfg = Arc::new(Config::parse(
+            "[selfplay]\ngames_per_task = 8\n[sprt]\nelo0 = 0.0\nelo1 = 15.0\nalpha = 0.05\nbeta = 0.05\n",
+            "test",
+        )
+        .unwrap());
+        let ports = f.ports();
+        let ctl = Arc::new(crate::control::Control::new(&ports, cfg.clone()));
+        let disp = Arc::new(TaskDispatcher::new(&ports, cfg.clone(), f.clock.clone()));
+        let evalc = Arc::new(EvalCoordinator::new(
+            &ports,
+            cfg.clone(),
+            f.clock.clone(),
+            ctl.clone(),
+            disp.clone(),
+        ));
+        let jobs = Arc::new(JobManager::new(
+            ports.jobs.clone(),
+            disp.clone(),
+            ports.networks.clone(),
+            ports.matches.clone(),
+            ctl.clone(),
+            cfg.clone(),
+            f.clock.clone(),
+        ));
+        let asm = Arc::new(TaskAssembler::new(
+            ports.networks.clone(),
+            f.signer.clone(),
+            cfg.clone(),
+            ctl.clone(),
+        ));
+        let src = JobSource {
+            jobs: jobs.clone(),
+            evalc,
+            matches: ports.matches.clone(),
+            nets: ports.networks.clone(),
+            disp,
+            reana: Arc::new(ReanaQueue::new(&ports, cfg.clone(), f.clock.clone())),
+            asm,
+            ctl,
+            cfg,
+            phase: JobPhase::Low,
+        };
+        Env { f, jobs, src }
+    }
+
+    fn submit_rating(env: &Env, total: u64, opponent: &str) -> (String, i64) {
+        env.f.networks.seed_network("best", None, "onnx");
+        env.f.networks.promote_best("best").unwrap();
+        env.f.networks.seed_network("cand", None, "onnx");
+        env.f.networks.seed_network("fixed", None, "onnx");
+        let (ok, msg, id) = env
+            .jobs
+            .submit(&SubmitJobRequest {
+                requester: "test".into(),
+                kind: JobKind::JobRating as i32,
+                priority: 0,
+                rating: Some(RatingJobSpec {
+                    candidate_sha: "cand".into(),
+                    opponent_sha: opponent.into(),
+                    total_games: total,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(ok, "{msg}");
+        let row = env.jobs.get(&id).unwrap().unwrap();
+        let Some(JobSpecJson::Rating(spec)) = JobSpecJson::parse(&row.spec_json) else {
+            panic!("rating spec json");
+        };
+        (id, spec.match_id)
+    }
+
+    fn req(threads: i32) -> TaskRequest {
+        TaskRequest { worker_id: "w1".into(), threads, ..Default::default() }
+    }
+
+    #[test]
+    fn rating_dispatch_builds_task_and_books_job() {
+        let e = env();
+        let (job_id, match_id) = submit_rating(&e, 20, "");
+        let resp = e.src.dispatch_rating(
+            &e.jobs.dispatchable(JobKind::JobRating).unwrap().remove(0),
+            &req(4),
+        ).unwrap().unwrap();
+        assert_eq!(resp.kind, TaskKind::TaskRating as i32);
+        assert_eq!(resp.network_sha, "cand");
+        assert_eq!(resp.opponent_sha, "best", "对手空解析为当前 best");
+        assert_eq!(resp.games, 8, "games_per_task=8 缩放（threads=4/baseline=4）");
+        assert_eq!(resp.network_key, "networks/cand.onnx");
+        assert_eq!(resp.opponent_url, "get:networks/best.onnx", "对手 URL 恒签发");
+        // 派发记账：dispatched 推进 + 映射落库 + 内存任务带 match_id/job_id
+        let row = e.jobs.get(&job_id).unwrap().unwrap();
+        assert_eq!(row.dispatched_games, 8);
+        let t = e.src.disp.lookup(&resp.task_id).unwrap();
+        assert_eq!(t.match_id, match_id);
+        assert_eq!(t.job_id, job_id);
+        assert!(e.jobs.rating_spec(&job_id).unwrap().is_some());
+    }
+
+    #[test]
+    fn rating_dispatch_clamps_to_remaining_games() {
+        let e = env();
+        let (job_id, _) = submit_rating(&e, 10, "");
+        // 剩余 10 局：单任务额度 8 → 8
+        let resp = e.src.dispatch_rating(
+            &e.jobs.dispatchable(JobKind::JobRating).unwrap().remove(0),
+            &req(4),
+        ).unwrap().unwrap();
+        assert_eq!(resp.games, 8);
+        // 再派发：剩余 2 局 → 2
+        let resp2 = e.src.dispatch_rating(
+            &e.jobs.dispatchable(JobKind::JobRating).unwrap().remove(0),
+            &req(4),
+        ).unwrap().unwrap();
+        assert_eq!(resp2.games, 2);
+        // 剩余 0：不再派发
+        let next = e.src.dispatch_rating(
+            &e.jobs.dispatchable(JobKind::JobRating).unwrap().remove(0),
+            &req(4),
+        ).unwrap();
+        assert!(next.is_none(), "剩余不足 2 局不应派发");
+        let _ = job_id;
+    }
+
+    #[test]
+    fn rating_dispatch_skips_concluded_match() {
+        let e = env();
+        let (job_id, match_id) = submit_rating(&e, 0, "");
+        e.f.matches.conclude_match(match_id).unwrap();
+        let out = e.src.dispatch_rating(
+            &e.jobs.dispatchable(JobKind::JobRating).unwrap().remove(0),
+            &req(4),
+        ).unwrap();
+        assert!(out.is_none(), "对打已结转不再派发");
+        let _ = job_id;
+    }
+
+    #[test]
+    fn selfplay_mix_skips_rating_match() {
+        // rating job 的对打不得进入 selfplay 混入（pending_match 过滤）
+        let e = env();
+        let (_, rating_match) = submit_rating(&e, 0, "");
+        assert!(e.f.matches.pending_match().unwrap().is_some());
+        assert!(e.jobs.is_rating_match(rating_match));
+        // dispatch_selfplay 的过滤逻辑：rating match 视为无混入
+        let pm = e.f.matches.pending_match().unwrap();
+        let filtered = pm.filter(|m| !e.jobs.is_rating_match(m.id));
+        assert!(filtered.is_none(), "rating match 应被过滤出混入查询");
     }
 }

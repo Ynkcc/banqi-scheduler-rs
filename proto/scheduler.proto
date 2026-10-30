@@ -581,7 +581,7 @@ message FeaturePackReply {
 // 级」的 job 占用在飞任务；更高优先级 job 变为可派发（提交/恢复）时，立即取消
 // 全部更低优先级 job 的在飞任务（在途取消，已完成上报照常计入）。同优先级按
 // created_at 先到先派。默认优先级：selfplay=0（训练闭环兜底）、collect=50、
-// eval=100（提交时 priority=0 表示用该 kind 的默认值）。
+// rating=80（手动 SPRT 对打）、eval=100（提交时 priority=0 表示用该 kind 的默认值）。
 //
 // 暂停（pause）：不再派发新任务，在飞任务做完收尾；恢复（resume）后继续派发。
 // 取消（cancel）：立即停止派发 + 取消全部在飞；已上报部分计入 completed，终态
@@ -589,11 +589,16 @@ message FeaturePackReply {
 // ============================================================================
 
 // job 种类（对应 TaskKind：COLLECT→TASK_COLLECT / SELFPLAY→TASK_SELFPLAY /
-// EVAL→TASK_EVAL；rating / reanalysis / derive 仍走既有通道，不 job 化）
+// EVAL→TASK_EVAL / RATING→TASK_RATING；reanalysis / derive 仍走既有通道）
 enum JobKind {
   JOB_COLLECT = 0;    // 参数化采集（双方自由组合对打/自对弈，产训练数据）
   JOB_SELFPLAY = 1;   // 训练闭环自对异数据生产（默认持续型）
   JOB_EVAL = 2;       // 绝对强度评估（不产训练数据）
+  // 手动 SPRT 对打：candidate vs opponent 的 gatekeeper rating 对打，独立
+  // TASK_RATING 任务派发（不混入 selfplay）。对手 = 当前 best 时走既有晋级行，
+  // 否则仅观测统计。取消（ControlJob cancel）= 停派发 + 取消在飞 + match 置
+  // cancelled（不晋级）。
+  JOB_RATING = 3;
 }
 
 // job 运行状态
@@ -699,6 +704,19 @@ message EvalJobSpec {
   uint64 total_games = 6;          // 评估总局数（≥2，偶数；eval 任务粒度上限沿用既有 consts）
 }
 
+// 手动 SPRT 对打规格（JOB_RATING 载荷；结果走 ReportMatchResult 六桶聚合，
+// SPRT 判停/晋级沿用 gatekeeper 判据链）
+message RatingJobSpec {
+  string variant = 1;              // 对局变体；空 = 调度器 selfplay.variant
+  string candidate_sha = 2;        // 被测网络（必填，须已登记）
+  string opponent_sha = 3;         // 对手网络；空 = 当前 best（结论可晋级）
+  uint64 total_games = 4;          // 局数上限（≥2 偶数；0 = 仅由 SPRT 判停）
+  double sprt_elo0 = 5;            // 0 = 用调度器 [sprt] 配置
+  double sprt_elo1 = 6;
+  double sprt_alpha = 7;
+  double sprt_beta = 8;
+}
+
 // 提交 job（priority=0 = 用 JobKind 对应默认值，见文件头「优先级抢占」）
 message SubmitJobRequest {
   string requester = 1;            // 提交方标识（日志/展示用）
@@ -707,6 +725,7 @@ message SubmitJobRequest {
   CollectionJobSpec collect = 4;   // kind=JOB_COLLECT 必填
   SelfPlayJobSpec selfplay = 5;    // kind=JOB_SELFPLAY 必填
   EvalJobSpec eval = 6;            // kind=JOB_EVAL 必填
+  RatingJobSpec rating = 7;        // kind=JOB_RATING 必填
 }
 message SubmitJobReply {
   bool accepted = 1;
@@ -728,6 +747,7 @@ message JobStatus {
   CollectionJobSpec collect = 10;  // kind=JOB_COLLECT 时返回
   SelfPlayJobSpec selfplay = 11;   // kind=JOB_SELFPLAY 时返回
   EvalJobSpec eval = 12;           // kind=JOB_EVAL 时返回
+  RatingJobSpec rating = 13;       // kind=JOB_RATING 时返回
 }
 
 message ListJobsRequest {

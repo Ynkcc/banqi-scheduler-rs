@@ -280,6 +280,8 @@ pub struct JobsSection {
     pub priority_selfplay: i64,
     pub priority_collect: i64,
     pub priority_eval: i64,
+    /// 手动 SPRT 对打（JOB_RATING）默认优先级
+    pub priority_rating: i64,
 }
 
 impl Default for JobsSection {
@@ -290,6 +292,7 @@ impl Default for JobsSection {
             priority_selfplay: 0,
             priority_collect: 50,
             priority_eval: 100,
+            priority_rating: 80,
         }
     }
 }

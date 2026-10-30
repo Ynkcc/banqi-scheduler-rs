@@ -10,10 +10,12 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use bqs_core::jobs::{CollectSpecJson, EvalSpecJson, JobSpecJson, SelfPlaySpecJson, SearchSpecJson};
+use bqs_core::jobs::{
+    CollectSpecJson, EvalSpecJson, JobSpecJson, RatingSpecJson, SelfPlaySpecJson, SearchSpecJson,
+};
 use bqs_proto::{
-    CollectionJobSpec, CollectPlayerSpec, EvalJobSpec, JobKind, SeedStrategy, SelfPlayJobSpec,
-    SubmitJobRequest,
+    CollectionJobSpec, CollectPlayerSpec, EvalJobSpec, JobKind, RatingJobSpec, SeedStrategy,
+    SelfPlayJobSpec, SubmitJobRequest,
 };
 
 use crate::{ApiError, ApiResult, AppState};
@@ -307,11 +309,58 @@ impl EvalBody {
     }
 }
 
+/// JOB_RATING 规格请求体（手动 SPRT 对打）。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RatingBody {
+    /// 空 = 调度器 selfplay.variant
+    pub variant: String,
+    /// 被测网络（必填，须已登记）
+    pub candidate_sha: String,
+    /// 对手网络；空 = 当前 best（结论可晋级）
+    pub opponent_sha: String,
+    /// 局数上限（≥2 偶数；0 = 仅由 SPRT 判停）
+    pub total_games: u64,
+    /// 0 = 回落调度器 [sprt] 配置
+    pub sprt_elo0: f64,
+    pub sprt_elo1: f64,
+    pub sprt_alpha: f64,
+    pub sprt_beta: f64,
+}
+
+impl RatingBody {
+    fn to_proto(&self) -> RatingJobSpec {
+        RatingJobSpec {
+            variant: self.variant.clone(),
+            candidate_sha: self.candidate_sha.clone(),
+            opponent_sha: self.opponent_sha.clone(),
+            total_games: self.total_games,
+            sprt_elo0: self.sprt_elo0,
+            sprt_elo1: self.sprt_elo1,
+            sprt_alpha: self.sprt_alpha,
+            sprt_beta: self.sprt_beta,
+        }
+    }
+
+    fn from_json(r: &RatingSpecJson) -> Self {
+        Self {
+            variant: r.variant.clone(),
+            candidate_sha: r.candidate_sha.clone(),
+            opponent_sha: r.opponent_sha.clone(),
+            total_games: r.total_games,
+            sprt_elo0: r.sprt_elo0,
+            sprt_elo1: r.sprt_elo1,
+            sprt_alpha: r.sprt_alpha,
+            sprt_beta: r.sprt_beta,
+        }
+    }
+}
+
 /// POST /api/jobs 请求体（kind 决定哪个规格字段必填）。
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SubmitJobBody {
-    /// collect | selfplay | eval
+    /// collect | selfplay | eval | rating
     pub kind: String,
     /// 0 = 用该 kind 的默认优先级
     pub priority: u32,
@@ -319,6 +368,21 @@ pub struct SubmitJobBody {
     pub collect: Option<CollectBody>,
     pub selfplay: Option<SelfPlayBody>,
     pub eval: Option<EvalBody>,
+    pub rating: Option<RatingBody>,
+}
+
+/// rating job 六桶统计进度（来自对发行聚合；未派发时为 null）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RatingStatsView {
+    pub ll: i64,
+    pub ld: i64,
+    pub dd: i64,
+    pub wl: i64,
+    pub dw: i64,
+    pub ww: i64,
+    pub num_games: i64,
+    pub match_status: String,
 }
 
 /// GET /api/jobs 条目视图。
@@ -336,6 +400,9 @@ pub struct JobView {
     pub updated_at: i64,
     /// 规格回显（结构与提交体一致）
     pub spec: serde_json::Value,
+    /// rating job 专属：对打六桶统计（其余 kind 为 null）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rating_stats: Option<RatingStatsView>,
 }
 
 /// POST /api/jobs 响应。
@@ -365,8 +432,9 @@ fn parse_job_kind(s: &str) -> Result<JobKind, ApiError> {
         "collect" => Ok(JobKind::JobCollect),
         "selfplay" => Ok(JobKind::JobSelfplay),
         "eval" => Ok(JobKind::JobEval),
+        "rating" => Ok(JobKind::JobRating),
         other => Err(ApiError::bad_request(format!(
-            "未知 job kind {other:?}（可选 collect / selfplay / eval）"
+            "未知 job kind {other:?}（可选 collect / selfplay / eval / rating）"
         ))),
     }
 }
@@ -376,6 +444,7 @@ fn kind_name(k: JobKind) -> &'static str {
         JobKind::JobCollect => "collect",
         JobKind::JobSelfplay => "selfplay",
         JobKind::JobEval => "eval",
+        JobKind::JobRating => "rating",
     }
 }
 
@@ -435,6 +504,13 @@ pub async fn submit_job(
                 .map_err(ApiError::bad_request)?),
             _ => None,
         },
+        rating: match kind {
+            JobKind::JobRating => Some(body
+                .rating
+                .ok_or_else(|| ApiError::bad_request("kind=rating 需要 rating 规格"))?
+                .to_proto()),
+            _ => None,
+        },
     };
     let (accepted, message, job_id) = st
         .server
@@ -471,13 +547,36 @@ pub async fn list_jobs(
     let jobs = rows
         .iter()
         .map(|r| {
-            let spec = match JobSpecJson::parse(&r.spec_json) {
-                Some(JobSpecJson::Collect(c)) => serde_json::to_value(CollectBody::from_json(&c)),
-                Some(JobSpecJson::SelfPlay(s)) => serde_json::to_value(SelfPlayBody::from_json(&s)),
-                Some(JobSpecJson::Eval(e)) => serde_json::to_value(EvalBody::from_json(&e)),
+            let parsed = JobSpecJson::parse(&r.spec_json);
+            let spec = match &parsed {
+                Some(JobSpecJson::Collect(c)) => serde_json::to_value(CollectBody::from_json(c)),
+                Some(JobSpecJson::SelfPlay(s)) => serde_json::to_value(SelfPlayBody::from_json(s)),
+                Some(JobSpecJson::Eval(e)) => serde_json::to_value(EvalBody::from_json(e)),
+                Some(JobSpecJson::Rating(rt)) => serde_json::to_value(RatingBody::from_json(rt)),
                 None => Ok(serde_json::Value::Null),
             }
             .unwrap_or(serde_json::Value::Null);
+            // rating job 的六桶统计进度（对发行聚合快照；对打未建/缺失为 null）
+            let rating_stats = match (&parsed, JobKind::try_from(r.kind as i32)) {
+                (Some(JobSpecJson::Rating(rt)), Ok(JobKind::JobRating)) if rt.match_id != 0 => st
+                    .server
+                    .ports
+                    .matches
+                    .get_match(rt.match_id)
+                    .ok()
+                    .flatten()
+                    .map(|m| RatingStatsView {
+                        ll: m.pairs.0[0],
+                        ld: m.pairs.0[1],
+                        dd: m.pairs.0[2],
+                        wl: m.pairs.0[3],
+                        dw: m.pairs.0[4],
+                        ww: m.pairs.0[5],
+                        num_games: m.num_games,
+                        match_status: m.status,
+                    }),
+                _ => None,
+            };
             JobView {
                 job_id: r.job_id.clone(),
                 kind: JobKind::try_from(r.kind as i32)
@@ -492,6 +591,7 @@ pub async fn list_jobs(
                 created_at: r.created_at,
                 updated_at: r.updated_at,
                 spec,
+                rating_stats,
             }
         })
         .collect();

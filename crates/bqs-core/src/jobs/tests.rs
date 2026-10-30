@@ -2,8 +2,8 @@
 //! 完成收敛取消在飞 / 优先级抢占取消在飞 / 暂停恢复取消状态机。
 
 use bqs_proto::{
-    CollectionJobSpec, CollectPlayerSpec, DataKind, EvalJobSpec, JobKind, SeedStrategy,
-    SeedStrategyKind, SubmitJobRequest, TaskKind,
+    CollectionJobSpec, CollectPlayerSpec, DataKind, EvalJobSpec, JobKind, RatingJobSpec,
+    SeedStrategy, SeedStrategyKind, SubmitJobRequest, TaskKind,
 };
 
 use super::*;
@@ -24,7 +24,15 @@ fn env(config_extra: &str) -> Env {
     let ports = f.ports();
     let ctl = Arc::new(Control::new(&ports, cfg.clone()));
     let disp = Arc::new(TaskDispatcher::new(&ports, cfg.clone(), f.clock.clone()));
-    let jobs = JobManager::new(ports.jobs.clone(), disp.clone(), ports.networks.clone(), ctl, cfg, f.clock.clone());
+    let jobs = JobManager::new(
+        ports.jobs.clone(),
+        disp.clone(),
+        ports.networks.clone(),
+        ports.matches.clone(),
+        ctl,
+        cfg,
+        f.clock.clone(),
+    );
     Env { f, disp, jobs }
 }
 
@@ -549,4 +557,168 @@ fn submit_timestamps_from_injected_clock() {
     let row = e.jobs.get(&id).unwrap().unwrap();
     assert_eq!(row.created_at, 1000);
     assert_eq!(row.updated_at, row.created_at);
+}
+
+// ---- rating job（手动 SPRT 对打）--------------------------------------------
+
+fn rating_req(total: u64, candidate: &str, opponent: &str) -> SubmitJobRequest {
+    SubmitJobRequest {
+        requester: "test".into(),
+        kind: JobKind::JobRating as i32,
+        priority: 0,
+        rating: Some(RatingJobSpec {
+            variant: String::new(),
+            candidate_sha: candidate.into(),
+            opponent_sha: opponent.into(),
+            total_games: total,
+            sprt_elo0: 0.0,
+            sprt_elo1: 0.0,
+            sprt_alpha: 0.0,
+            sprt_beta: 0.0,
+        }),
+        ..Default::default()
+    }
+}
+
+fn seed_rating_job(e: &Env, match_id: i64, total: u64, state: &str) -> String {
+    let job_id = format!("j{}", e.f.jobs.next_id());
+    e.f.jobs.seed_job(JobRow {
+        job_id: job_id.clone(),
+        kind: JobKind::JobRating as i64,
+        priority: 80,
+        state: state.into(),
+        total_games: total as i64,
+        completed_games: 0,
+        dispatched_games: 0,
+        spec_json: JobSpecJson::Rating(RatingSpecJson {
+            variant: "4x8".into(),
+            candidate_sha: "cand".into(),
+            opponent_sha: "best".into(),
+            total_games: total,
+            match_id,
+            ..Default::default()
+        })
+        .to_json(),
+        created_at: 1,
+        updated_at: 1,
+        next_seq: 0,
+    });
+    job_id
+}
+
+#[test]
+fn rating_submit_validates_and_creates_match() {
+    let e = env("");
+    // 候选未登记 → 拒绝
+    let (ok, msg, _) = e.jobs.submit(&rating_req(20, "ghost", "")).unwrap();
+    assert!(!ok);
+    assert!(msg.contains("network_not_registered"), "{msg}");
+    e.f.networks.seed_network("best", None, "onnx");
+    e.f.networks.promote_best("best").unwrap();
+    e.f.networks.seed_network("cand", None, "onnx");
+    // 奇数局数 → 拒绝；1 局 → 拒绝
+    for total in [1u64, 3] {
+        let (ok, msg, _) = e.jobs.submit(&rating_req(total, "cand", "")).unwrap();
+        assert!(!ok, "total={total} 应拒绝");
+        assert!(msg.contains("total_games"), "{msg}");
+    }
+    // 指定对手未登记 → 拒绝
+    let (ok, msg, _) = e.jobs.submit(&rating_req(20, "cand", "ghost")).unwrap();
+    assert!(!ok);
+    assert!(msg.contains("network_not_registered"), "{msg}");
+    // 对手空 = 当前 best：接受并对打行以 best 为对手，spec 回写 match_id
+    let (ok, msg, id) = e.jobs.submit(&rating_req(20, "cand", "")).unwrap();
+    assert!(ok, "{msg}");
+    let row = e.jobs.get(&id).unwrap().unwrap();
+    assert_eq!(row.priority, 80, "rating 默认优先级");
+    assert_eq!(row.total_games, 20);
+    let JobSpecJson::Rating(spec) = JobSpecJson::parse(&row.spec_json).unwrap() else {
+        panic!("rating spec json");
+    };
+    assert!(spec.match_id != 0, "提交即建对发行");
+    let m = e.f.matches.get_match(spec.match_id).unwrap().unwrap();
+    assert_eq!(m.candidate, "cand");
+    assert_eq!(m.opponent, "best", "对手空解析为当前 best");
+    assert_eq!(m.target_games, 10, "对打目标（对数）= 局数上限一半");
+    // variant 非法 → 拒绝
+    let mut bad = rating_req(20, "cand", "");
+    bad.rating.as_mut().unwrap().variant = "9x9".into();
+    let (ok, msg, _) = e.jobs.submit(&bad).unwrap();
+    assert!(!ok);
+    assert!(msg.contains("invalid_variant"), "{msg}");
+    // 无 best 且对手空 → 拒绝
+    let e2 = env("");
+    e2.f.networks.seed_network("cand", None, "onnx");
+    let (ok, msg, _) = e2.jobs.submit(&rating_req(20, "cand", "")).unwrap();
+    assert!(!ok);
+    assert!(msg.contains("no_best_network"), "{msg}");
+    // sprt 参数范围校验
+    let e3 = env("");
+    e3.f.networks.seed_network("best", None, "onnx");
+    e3.f.networks.promote_best("best").unwrap();
+    e3.f.networks.seed_network("cand", None, "onnx");
+    let mut bad = rating_req(20, "cand", "");
+    bad.rating.as_mut().unwrap().sprt_alpha = 1.5;
+    let (ok, msg, _) = e3.jobs.submit(&bad).unwrap();
+    assert!(!ok);
+    assert!(msg.contains("sprt_alpha"), "{msg}");
+}
+
+#[test]
+fn rating_cancel_stops_match_and_in_flight() {
+    let e = env("");
+    e.f.networks.seed_network("best", None, "onnx");
+    e.f.networks.promote_best("best").unwrap();
+    e.f.networks.seed_network("cand", None, "onnx");
+    let (_, _, id) = e.jobs.submit(&rating_req(20, "cand", "")).unwrap();
+    let row = e.jobs.get(&id).unwrap().unwrap();
+    let JobSpecJson::Rating(spec) = JobSpecJson::parse(&row.spec_json).unwrap() else {
+        panic!("rating spec json");
+    };
+    let match_id = spec.match_id;
+    // 在飞任务 + 派发记账（真实路径在 JobSource::dispatch_rating）
+    e.jobs.note_dispatch("rt1", &id, 4, "w1", TaskKind::TaskRating, "cand", "best", "", match_id, None).unwrap();
+    // 取消：job cancelled + 对打 cancelled + 在飞取消
+    let (ok, msg, st) = e.jobs.control(&id, "cancel").unwrap();
+    assert!(ok, "{msg}");
+    assert_eq!(st, "cancelled");
+    let m = e.f.matches.get_match(match_id).unwrap().unwrap();
+    assert_eq!(m.status, crate::types::match_status::CANCELLED, "对打应置 cancelled");
+    assert_eq!(e.jobs.cancel_task_ids_for_worker("w1"), vec!["rt1".to_string()]);
+    // 已 cancelled 的对打拒绝继续累加（迟到上报在聚合闸门被拒）
+    let (_, ok2) = e
+        .f
+        .matches
+        .add_match_games(match_id, bqs_judgment::Hexanomial([1, 0, 0, 0, 0, 0]), 2)
+        .unwrap();
+    assert!(!ok2);
+}
+
+#[test]
+fn rating_complete_job_on_verdict_is_idempotent() {
+    let e = env("");
+    let match_id = e.f.matches.seed_match("cand", "best", 10);
+    let job_id = seed_rating_job(&e, match_id, 0, "running");
+    e.jobs.note_dispatch("rt1", &job_id, 4, "w1", TaskKind::TaskRating, "cand", "best", "", match_id, None).unwrap();
+    // SPRT 判停 → job 收敛 + 在飞取消；重复收敛幂等
+    e.jobs.complete_rating_job(&job_id).unwrap();
+    let row = e.jobs.get(&job_id).unwrap().unwrap();
+    assert_eq!(row.state, "completed");
+    assert_eq!(e.jobs.cancel_task_ids_for_worker("w1"), vec!["rt1".to_string()]);
+    e.jobs.complete_rating_job(&job_id).unwrap();
+    assert_eq!(e.jobs.get(&job_id).unwrap().unwrap().state, "completed");
+    // 终态 job 不再可派发
+    assert!(e.jobs.dispatchable(JobKind::JobRating).unwrap().is_empty());
+}
+
+#[test]
+fn is_rating_match_filters_pending_match() {
+    // rating job 的对打不得劫持 selfplay 混入查询
+    let e = env("");
+    let gate_id = e.f.matches.seed_match("cand", "best", 10);
+    let rating_id = e.f.matches.seed_match("rcand", "best", 10);
+    let _job = seed_rating_job(&e, rating_id, 0, "running");
+    assert!(e.jobs.is_rating_match(rating_id));
+    assert!(!e.jobs.is_rating_match(gate_id));
+    assert!(!e.jobs.is_rating_match(999));
 }

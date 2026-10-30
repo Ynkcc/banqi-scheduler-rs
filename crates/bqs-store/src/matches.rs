@@ -131,6 +131,20 @@ impl MatchStore for Store {
             Ok(n > 0)
         })
     }
+
+    /// 取消对打（CAS）：仅当 match 仍为 running 时置 cancelled（rating job 被
+    /// ControlJob cancel 时调用；不晋级、不标 rejected）。match 不存在返回 false。
+    fn cancel_match(&self, id: i64) -> CoreResult<bool> {
+        self.with_conn(|conn| {
+            let n = conn
+                .execute(
+                    "UPDATE matches SET status=? WHERE id=? AND status=?",
+                    rusqlite::params![match_status::CANCELLED, id, match_status::RUNNING],
+                )
+                .map_err(StoreError::from)?;
+            Ok(n > 0)
+        })
+    }
 }
 
 /// add_match_games false 分支的零值占位（调用方不应消费其内容）。
@@ -228,5 +242,27 @@ mod tests {
             MS::get_match(&*s, id).unwrap().unwrap().status,
             match_status::CONCLUDED
         );
+    }
+
+    /// cancel_match（rating job 取消）：running→cancelled CAS；cancelled 后拒绝
+    /// 继续累加（迟到上报在聚合闸门被拒）。
+    #[test]
+    fn cancel_match_is_cas_and_gates_aggregation() {
+        let (_dir, s) = crate::testutil::open_temp_store();
+        use bqs_core::ports::NetworkStore as NS;
+        NS::register_network(&*s, "c1", None, None, "onnx").unwrap();
+        NS::register_network(&*s, "o1", None, None, "onnx").unwrap();
+        let id = MS::create_match(&*s, "c1", "o1", 10).unwrap();
+        assert!(MS::cancel_match(&*s, id).unwrap());
+        assert!(!MS::cancel_match(&*s, id).unwrap(), "二次取消 CAS false");
+        assert!(!MS::cancel_match(&*s, 424242).unwrap(), "不存在 match false");
+        assert_eq!(
+            MS::get_match(&*s, id).unwrap().unwrap().status,
+            match_status::CANCELLED
+        );
+        let (_, ok) = MS::add_match_games(&*s, id, Hexanomial::ZERO, 1).unwrap();
+        assert!(!ok, "cancelled 对打拒绝累加");
+        // conclude 与 cancel 互斥：cancelled 后 conclude false
+        assert!(!MS::conclude_match(&*s, id).unwrap());
     }
 }

@@ -68,6 +68,9 @@ pub trait MatchStore: Send + Sync {
     /// 条件结转（status: running→concluded 的 CAS）；返回 true = 本调用完成结转
     /// （防多路径双晋级）
     fn conclude_match(&self, id: i64) -> CoreResult<bool>;
+    /// 取消对打（status: running→cancelled 的 CAS，rating job 被 cancel 时置位，
+    /// 不晋级不标 rejected）；返回 true = 本调用完成取消。
+    fn cancel_match(&self, id: i64) -> CoreResult<bool>;
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +296,8 @@ pub trait JobStore: Send + Sync {
     fn get_job_task(&self, task_id: &str) -> CoreResult<Option<JobTaskLink>>;
     /// 聚合完成后删除映射（CAS 已防双计；控制映射表体积）。
     fn delete_job_task(&self, task_id: &str) -> CoreResult<()>;
+    /// 回写 job 规格回显（rating job 提交时建对打后记录 match_id；单列更新）。
+    fn update_job_spec(&self, job_id: &str, spec_json: &str, now: i64) -> CoreResult<()>;
 }
 
 // ---------------------------------------------------------------------------
