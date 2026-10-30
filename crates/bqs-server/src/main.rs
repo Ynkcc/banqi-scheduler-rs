@@ -83,7 +83,7 @@ fn init_tracing() {
 async fn wait_for_signal() {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         let mut term = signal(SignalKind::terminate()).expect("注册 SIGTERM 处理器");
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {}

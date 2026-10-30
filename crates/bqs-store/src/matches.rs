@@ -1,14 +1,13 @@
-use bqs_core::ports::MatchStore;
-use bqs_core::types::{match_status, Match};
 use bqs_core::CoreResult;
+use bqs_core::ports::MatchStore;
+use bqs_core::types::{Match, match_status};
 use bqs_judgment::Hexanomial;
 
 use crate::{Store, StoreError};
 
 use rusqlite::OptionalExtension;
 
-const MATCH_COLUMNS: &str =
-    "id, candidate, opponent, status, pair_ll, pair_ld, pair_dd, pair_wl, pair_dw, pair_ww, num_games, target_games";
+const MATCH_COLUMNS: &str = "id, candidate, opponent, status, pair_ll, pair_ld, pair_dd, pair_wl, pair_dw, pair_ww, num_games, target_games";
 
 fn scan_match_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Match> {
     let p = |i: usize| -> rusqlite::Result<i64> { row.get(4 + i) };

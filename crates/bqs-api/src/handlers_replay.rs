@@ -1,11 +1,11 @@
-use axum::extract::{Path, State};
 use axum::Json;
+use axum::extract::{Path, State};
 use prost::Message;
 
 use bqs_proto::EpisodeBatch;
 
-use crate::views::{data_kind_name, ReplayGameSummaryView, ReplayListView};
-use crate::{ApiError, ApiResult, AppState};
+use crate::views::{ReplayGameSummaryView, ReplayListView, data_kind_name};
+use crate::{ApiError, ApiResult, AppState, read_endpoint};
 
 pub(crate) fn fetch_episode_batch(
     st: &AppState,
@@ -60,12 +60,11 @@ pub async fn episode_replay_list(
     let id: i64 = id
         .parse()
         .map_err(|_| ApiError::bad_request("invalid episode id"))?;
-    let server = st.server.clone();
-    let view = tokio::task::spawn_blocking(move || -> Result<ReplayListView, ApiError> {
-        let Some(ep) = server.ports.episodes.get_episode(id)? else {
+    read_endpoint(&st, move |st| -> Result<ReplayListView, ApiError> {
+        let Some(ep) = st.server.ports.episodes.get_episode(id)? else {
             return Err(ApiError::not_found("episode not found"));
         };
-        let batch = fetch_episode_batch(&st, &ep.object_key)?;
+        let batch = fetch_episode_batch(st, &ep.object_key)?;
         let games: Vec<ReplayGameSummaryView> = batch
             .records
             .iter()
@@ -88,8 +87,6 @@ pub async fn episode_replay_list(
         })
     })
     .await
-    .map_err(|e| ApiError::internal(format!("join: {e}")))?;
-    Ok(Json(view?))
 }
 
 pub async fn episode_replay_game(
@@ -105,19 +102,18 @@ pub async fn episode_replay_game(
     if index < 0 {
         return Err(ApiError::bad_request("invalid game index"));
     }
-    let server = st.server.clone();
-    let view =
-        tokio::task::spawn_blocking(move || -> Result<crate::views::ReplayGameView, ApiError> {
-            let Some(ep) = server.ports.episodes.get_episode(id)? else {
+    read_endpoint(
+        &st,
+        move |st| -> Result<crate::views::ReplayGameView, ApiError> {
+            let Some(ep) = st.server.ports.episodes.get_episode(id)? else {
                 return Err(ApiError::not_found("episode not found"));
             };
-            let batch = fetch_episode_batch(&st, &ep.object_key)?;
+            let batch = fetch_episode_batch(st, &ep.object_key)?;
             let g = replay_game(&batch, &ep, index as usize).map_err(ApiError::bad_request)?;
             Ok(g)
-        })
-        .await
-        .map_err(|e| ApiError::internal(format!("join: {e}")))?;
-    Ok(Json(view?))
+        },
+    )
+    .await
 }
 
 #[cfg(test)]

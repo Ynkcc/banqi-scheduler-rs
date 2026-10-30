@@ -1,5 +1,5 @@
-use bqs_core::ports::{JobRow, JobStore, JobTaskLink};
 use bqs_core::CoreResult;
+use bqs_core::ports::{JobRow, JobStore, JobTaskLink};
 use rusqlite::OptionalExtension;
 
 use crate::{Store, StoreError};
@@ -93,21 +93,26 @@ impl JobStore for Store {
                 "SELECT job_id, kind, priority, state, total_games, completed_games,
 				 dispatched_games, spec_json, created_at, updated_at, next_seq FROM jobs",
             );
-            let mut conds: Vec<String> = Vec::new();
-            if state.is_some() {
-                conds.push("state = ?1".into());
+
+            let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            if let Some(s) = state {
+                sql.push_str(if args.is_empty() {
+                    " WHERE state = ?"
+                } else {
+                    " AND state = ?"
+                });
+                args.push(Box::new(s.to_string()));
             }
-            if kind.is_some() {
-                conds.push(format!("kind = ?{}", conds.len() + 1));
-            }
-            if !conds.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&conds.join(" AND "));
+            if let Some(k) = kind {
+                sql.push_str(if args.is_empty() {
+                    " WHERE kind = ?"
+                } else {
+                    " AND kind = ?"
+                });
+                args.push(Box::new(k));
             }
             sql.push_str(" ORDER BY priority DESC, created_at ASC");
             let mut stmt = conn.prepare(&sql).map_err(StoreError::from)?;
-            let state_p = state.map(|s| s.to_string());
-            let kind_p = kind;
             let map = |row: &rusqlite::Row| {
                 Ok(row_from(
                     row.get(0)?,
@@ -123,28 +128,14 @@ impl JobStore for Store {
                     row.get(10)?,
                 ))
             };
-            let rows = match (state_p.as_deref(), kind_p) {
-                (Some(s), Some(k)) => stmt
-                    .query_map(rusqlite::params![s, k], map)
-                    .map_err(StoreError::from)?
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(StoreError::from)?,
-                (Some(s), None) => stmt
-                    .query_map(rusqlite::params![s], map)
-                    .map_err(StoreError::from)?
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(StoreError::from)?,
-                (None, Some(k)) => stmt
-                    .query_map(rusqlite::params![k], map)
-                    .map_err(StoreError::from)?
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(StoreError::from)?,
-                (None, None) => stmt
-                    .query_map([], map)
-                    .map_err(StoreError::from)?
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(StoreError::from)?,
-            };
+            let rows = stmt
+                .query_map(
+                    rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())),
+                    map,
+                )
+                .map_err(StoreError::from)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)?;
             Ok(rows)
         })
     }
@@ -163,58 +154,32 @@ impl JobStore for Store {
 
     fn incr_job_dispatched(&self, job_id: &str, games: i64, now: i64) -> CoreResult<JobRow> {
         self.with_conn(|conn| {
-            conn.execute_batch("BEGIN").map_err(StoreError::from)?;
-            let write = conn.execute(
-                "UPDATE jobs SET dispatched_games = dispatched_games + ?2, next_seq = next_seq + 1,
-				 updated_at = ?3 WHERE job_id = ?1",
-                rusqlite::params![job_id, games, now],
-            )
-            .map_err(StoreError::from);
-            if let Err(e) = write {
-                let _ = conn.execute_batch("ROLLBACK");
-                return Err(StoreError::from(e).into());
-            }
-            let read = Self::read_job_conn(conn, job_id);
-            match read {
-                Ok(row) => {
-                    conn.execute_batch("COMMIT").map_err(StoreError::from)?;
-                    row.ok_or_else(|| {
-                        StoreError::Unexpected(format!("job {job_id} 派发记账后消失"))
-                    })
-                }
-                Err(e) => {
-                    let _ = conn.execute_batch("ROLLBACK");
-                    Err(e.into())
-                }
-            }
+            crate::tx_read_modify_write(conn, |conn| {
+                conn.execute(
+                    "UPDATE jobs SET dispatched_games = dispatched_games + ?2, next_seq = next_seq + 1,
+					 updated_at = ?3 WHERE job_id = ?1",
+                    rusqlite::params![job_id, games, now],
+                )
+                .map_err(StoreError::from)?;
+                Self::read_job_conn(conn, job_id)?.ok_or_else(|| {
+                    StoreError::Unexpected(format!("job {job_id} 派发记账后消失"))
+                })
+            })
         })
     }
 
     fn incr_job_completed(&self, job_id: &str, games: i64, now: i64) -> CoreResult<JobRow> {
         self.with_conn(|conn| {
-            conn.execute_batch("BEGIN").map_err(StoreError::from)?;
-            let write = conn
-                .execute(
+            crate::tx_read_modify_write(conn, |conn| {
+                conn.execute(
                     "UPDATE jobs SET completed_games = completed_games + ?2, updated_at = ?3
-				 WHERE job_id = ?1",
+					 WHERE job_id = ?1",
                     rusqlite::params![job_id, games, now],
                 )
-                .map_err(StoreError::from);
-            if let Err(e) = write {
-                let _ = conn.execute_batch("ROLLBACK");
-                return Err(StoreError::from(e).into());
-            }
-            let read = Self::read_job_conn(conn, job_id);
-            match read {
-                Ok(row) => {
-                    conn.execute_batch("COMMIT").map_err(StoreError::from)?;
-                    row.ok_or_else(|| StoreError::Unexpected(format!("job {job_id} 聚合后消失")))
-                }
-                Err(e) => {
-                    let _ = conn.execute_batch("ROLLBACK");
-                    Err(e.into())
-                }
-            }
+                .map_err(StoreError::from)?;
+                Self::read_job_conn(conn, job_id)?
+                    .ok_or_else(|| StoreError::Unexpected(format!("job {job_id} 聚合后消失")))
+            })
         })
     }
 

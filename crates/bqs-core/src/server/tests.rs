@@ -790,7 +790,9 @@ fn get_task_priority_chain() {
 
 #[test]
 fn get_task_eval_has_highest_priority() {
-    let (s, f) = server_with("[eval]\nenabled = true\ngames = 100\ngames_per_task = 10\n[reanalysis]\ninterval_tasks = 1\nmax_queue = 10\n");
+    let (s, f) = server_with(
+        "[eval]\nenabled = true\ngames = 100\ngames_per_task = 10\n[reanalysis]\ninterval_tasks = 1\nmax_queue = 10\n",
+    );
     f.networks.seed_network("best", None, "onnx");
     f.networks.promote_best("best").unwrap();
     s.evalc.ensure_best_evaluated();

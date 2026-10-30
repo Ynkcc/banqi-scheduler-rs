@@ -1,6 +1,6 @@
-use bqs_core::ports::NetworkStore;
-use bqs_core::types::{network_status, Network};
 use bqs_core::CoreResult;
+use bqs_core::ports::NetworkStore;
+use bqs_core::types::{Network, network_status};
 
 use crate::{Store, StoreError};
 

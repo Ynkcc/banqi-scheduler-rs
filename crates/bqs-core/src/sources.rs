@@ -4,7 +4,8 @@ use bqs_config::Config;
 use bqs_proto::{JobKind, TaskKind, TaskRequest, TaskResponse};
 
 use crate::{
-    assembler::{games_for_threads, SelfplayMode, TaskAssembler},
+    CoreResult,
+    assembler::{SelfplayMode, TaskAssembler, games_for_threads},
     consts,
     control::Control,
     dispatch::{RunningTask, TaskDispatcher},
@@ -13,7 +14,6 @@ use crate::{
     jobs::{JobManager, JobSpecJson},
     ports::{JobRow, MatchStore, NetworkStore},
     reanalysis::ReanaQueue,
-    CoreResult,
 };
 
 pub trait TaskSource: Send + Sync {
@@ -132,8 +132,13 @@ impl JobSource {
                 self.disp.set_task_job(&task_id, &job.job_id);
                 tracing::info!(
                     "[task] eval assigned worker={} task={} job={} network={} opponent={} games={} sims={}",
-                    req.worker_id, task_id, job.job_id, pending.network_sha,
-                    pending.opponent_spec, games, self.cfg.eval.mcts_sims
+                    req.worker_id,
+                    task_id,
+                    job.job_id,
+                    pending.network_sha,
+                    pending.opponent_spec,
+                    games,
+                    self.cfg.eval.mcts_sims
                 );
                 Ok(Some(resp))
             }
@@ -182,7 +187,13 @@ impl JobSource {
         )?;
         tracing::info!(
             "[task] collect assigned worker={} task={} job={} variant={} games={} seed={} data_kind={}",
-            req.worker_id, task_id, job.job_id, proto_spec.variant, games, seed, proto_spec.data_kind
+            req.worker_id,
+            task_id,
+            job.job_id,
+            proto_spec.variant,
+            games,
+            seed,
+            proto_spec.data_kind
         );
         Ok(Some(resp))
     }
@@ -288,8 +299,15 @@ impl JobSource {
         )?;
         tracing::info!(
             "[task] rating assigned worker={} task={} job={} match={} side_a={}:{} side_b={}:{} games={}",
-            req.worker_id, task_id, job.job_id, m.id,
-            side_a.kind, m.candidate, side_b.kind, m.opponent, games
+            req.worker_id,
+            task_id,
+            job.job_id,
+            m.id,
+            side_a.kind,
+            m.candidate,
+            side_b.kind,
+            m.opponent,
+            games
         );
         Ok(Some(resp))
     }
@@ -345,7 +363,10 @@ impl JobSource {
             )?;
             tracing::info!(
                 "[task] selfplay(rule-sentinel) assigned worker={} task={} job={} games={} data_kind=nnue",
-                req.worker_id, task_id, job.job_id, resp.games
+                req.worker_id,
+                task_id,
+                job.job_id,
+                resp.games
             );
             return Ok(Some(resp));
         }
@@ -382,8 +403,16 @@ impl JobSource {
         if match_id != 0 {
             tracing::info!(
                 "[task] selfplay(mix) assigned worker={} task={} job={} match={} candidate={} games={} data_kind={}",
-                req.worker_id, task_id, job.job_id, match_id, producer_sha, resp.games,
-                resp.params.as_ref().map(|p| p.data_kind).unwrap_or_default()
+                req.worker_id,
+                task_id,
+                job.job_id,
+                match_id,
+                producer_sha,
+                resp.games,
+                resp.params
+                    .as_ref()
+                    .map(|p| p.data_kind)
+                    .unwrap_or_default()
             );
         } else {
             tracing::info!(

@@ -1,7 +1,7 @@
 use std::io::Read;
 
-use bqs_core::ports::ObjectSigner;
 use bqs_core::CoreError;
+use bqs_core::ports::ObjectSigner;
 
 pub const MAX_OBJECT_SIZE: usize = 256 << 20;
 

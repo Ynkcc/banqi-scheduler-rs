@@ -4,14 +4,13 @@ use bqs_config::Config;
 use bqs_proto::{CollectionJobSpec, DataKind, SelfPlayParams, TaskKind, TaskRequest, TaskResponse};
 
 use crate::{
-    consts,
+    CoreError, CoreResult, consts,
     control::Control,
     evalcoord::PendingEval,
     featurepack::PendingDerive,
     ports::{NetworkStore, ObjectSigner},
     reanalysis::PendingReanalysis,
     types::{Match, Network},
-    CoreError, CoreResult,
 };
 
 pub fn network_key(sha: &str, format: &str) -> String {
@@ -22,29 +21,11 @@ pub fn episode_key(network_sha: &str, data_id: &str) -> String {
     format!("episodes/{network_sha}/{data_id}.epb.gz")
 }
 
-pub fn stack_format_for_data_kind(kind: i32) -> Option<&'static str> {
-    match kind {
-        x if x == DataKind::DataResnet as i32 => Some("onnx"),
-        x if x == DataKind::DataNnue as i32 => Some("nnue"),
-        _ => None,
-    }
-}
-
-pub fn stack_data_kind_for_weight_format(format: &str) -> Result<i32, String> {
-    match format.trim().to_ascii_lowercase().as_str() {
-        "onnx" => Ok(DataKind::DataResnet as i32),
-        "nnue" => Ok(DataKind::DataNnue as i32),
-        other => Err(format!("未知权重格式 \"{other}\"（可选 onnx / nnue）")),
-    }
-}
-
-pub fn data_kind_for_format(format: &str) -> i32 {
-    if format == "nnue" {
-        DataKind::DataNnue as i32
-    } else {
-        DataKind::DataResnet as i32
-    }
-}
+pub use crate::data_kind::{
+    proto_for_format as data_kind_for_format,
+    proto_for_weight_format as stack_data_kind_for_weight_format,
+    weight_format_for_proto as stack_format_for_data_kind,
+};
 
 pub fn games_for_threads(baseline: i32, base: i64, threads: i32) -> i64 {
     if baseline <= 0 {
@@ -710,14 +691,16 @@ mod tests {
         let best = net("s", "onnx");
         assert!(select_producer(Some(&best), None, None, None, 99).is_err());
 
-        assert!(select_producer(
-            Some(&best),
-            None,
-            None,
-            None,
-            bqs_proto::DataKind::DataNone as i32
-        )
-        .is_err());
+        assert!(
+            select_producer(
+                Some(&best),
+                None,
+                None,
+                None,
+                bqs_proto::DataKind::DataNone as i32
+            )
+            .is_err()
+        );
     }
 
     #[test]

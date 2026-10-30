@@ -19,6 +19,8 @@ use rusqlite::{Connection, OptionalExtension};
 mod migration_tests;
 pub mod migrations;
 
+pub use episodes::{EPISODE_PAGE_DEFAULT_LIMIT, EPISODE_PAGE_MAX_LIMIT, clamp_episode_page_limit};
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("sqlite: {0}")]
@@ -82,6 +84,23 @@ impl Store {
     }
 }
 
+pub(crate) fn tx_read_modify_write<T>(
+    conn: &Connection,
+    f: impl FnOnce(&Connection) -> Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    conn.execute_batch("BEGIN").map_err(StoreError::from)?;
+    match f(conn) {
+        Ok(v) => {
+            conn.execute_batch("COMMIT").map_err(StoreError::from)?;
+            Ok(v)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(e)
+        }
+    }
+}
+
 const _: () = {
     fn _assert_store_impls_all_ports() {
         fn assert_impl<T>()
@@ -138,39 +157,23 @@ impl ports::SettingsStore for Store {
 
     fn inc_setting(&self, key: &str) -> CoreResult<i64> {
         self.with_conn(|conn| {
-
-            conn.execute_batch("BEGIN").map_err(StoreError::from)?;
-            let read = conn
-                .query_row(
-                    "SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key = ?), 0)",
-                    rusqlite::params![key],
-                    |row| row.get::<_, i64>(0),
+            tx_read_modify_write(conn, |conn| {
+                let cur: i64 = conn
+                    .query_row(
+                        "SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key = ?), 0)",
+                        rusqlite::params![key],
+                        |row| row.get(0),
+                    )
+                    .map_err(StoreError::from)?;
+                let next = cur + 1;
+                conn.execute(
+                    "INSERT INTO settings (key, value) VALUES (?, ?)
+					 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    rusqlite::params![key, next.to_string()],
                 )
-                .map_err(StoreError::from);
-            match read {
-                Ok(cur) => {
-                    let next = cur + 1;
-                    let write = conn
-                        .execute(
-                            "INSERT INTO settings (key, value) VALUES (?, ?)
-							 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                            rusqlite::params![key, next.to_string()],
-                        )
-                        .map_err(StoreError::from);
-                    match write {
-                        Ok(_) => conn.execute_batch("COMMIT").map_err(StoreError::from)?,
-                        Err(e) => {
-                            let _ = conn.execute_batch("ROLLBACK");
-                            return Err(e);
-                        }
-                    }
-                    Ok(next)
-                }
-                Err(e) => {
-                    let _ = conn.execute_batch("ROLLBACK");
-                    Err(e)
-                }
-            }
+                .map_err(StoreError::from)?;
+                Ok(next)
+            })
         })
     }
 }
@@ -178,15 +181,9 @@ impl ports::SettingsStore for Store {
 #[cfg(test)]
 pub(crate) mod testutil {
     use super::Store;
-    use bqs_core::ports::Clock;
     use std::sync::Arc;
 
-    struct FixedClock(i64);
-    impl Clock for FixedClock {
-        fn now(&self) -> i64 {
-            self.0
-        }
-    }
+    use bqs_core::test_support::FakeClock;
 
     pub(crate) fn open_temp_store() -> (tempfile::TempDir, Arc<Store>) {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -198,11 +195,8 @@ pub(crate) mod testutil {
     pub(crate) fn open_temp_store_at(unix: i64) -> (tempfile::TempDir, Arc<Store>) {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("test.db");
-        let store = Store::open_with_clock(
-            path.to_str().expect("utf8 path"),
-            Arc::new(FixedClock(unix)),
-        )
-        .expect("open store");
+        let store = Store::open_with_clock(path.to_str().expect("utf8 path"), FakeClock::new(unix))
+            .expect("open store");
         (dir, store)
     }
 }
@@ -210,8 +204,8 @@ pub(crate) mod testutil {
 #[cfg(test)]
 mod tests {
     use super::testutil::open_temp_store;
-    use bqs_core::ports::{SettingsStore, SystemClock};
     use bqs_core::CoreResult;
+    use bqs_core::ports::{SettingsStore, SystemClock};
 
     #[test]
     fn settings_roundtrip_and_int_defaults() {

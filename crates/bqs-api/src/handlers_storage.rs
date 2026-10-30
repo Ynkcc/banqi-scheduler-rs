@@ -1,13 +1,13 @@
-use axum::extract::{Path, State};
 use axum::Json;
+use axum::extract::{Path, State};
 use serde::Deserialize;
 
 use bqs_storage::{StorageError, StorageProfile};
 
 use crate::views::{OkView, StorageProfileView, StorageView};
 use crate::{
-    decode_body, to_profile_view, valid_profile_name, ApiError, ApiResult, AppState,
-    MAX_CONTROL_BODY,
+    ApiError, ApiResult, AppState, MAX_CONTROL_BODY, read_endpoint, to_profile_view,
+    valid_profile_name, write_endpoint,
 };
 
 pub async fn storage_get(State(st): State<AppState>) -> ApiResult<Json<StorageView>> {
@@ -60,33 +60,34 @@ pub async fn profile_put(
             "profile 名只允许字母数字与 - _（1~32 字符）",
         ));
     }
-    let req: StorageProfileUpdate = decode_body(&bytes, MAX_CONTROL_BODY)?;
-    let storage = st.storage.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
-        let existing = storage.profile(&name);
-        let p = match existing {
-            None => {
-                if req.secret_key.as_deref().unwrap_or("").is_empty() {
-                    return Err(ApiError::bad_request("新建 profile 必须提供 secretKey"));
+    write_endpoint(
+        &st,
+        bytes,
+        MAX_CONTROL_BODY,
+        move |st, req: StorageProfileUpdate| {
+            let storage = &st.storage;
+            let existing = storage.profile(&name);
+            let mut p = match existing {
+                None => {
+                    if req.secret_key.as_deref().unwrap_or("").is_empty() {
+                        return Err(ApiError::bad_request("新建 profile 必须提供 secretKey"));
+                    }
+                    StorageProfile {
+                        name: name.clone(),
+                        ..Default::default()
+                    }
                 }
-                StorageProfile {
-                    name: name.clone(),
-                    ..Default::default()
-                }
-            }
-            Some(p) => p,
-        };
-        let mut p = p;
-        apply_profile_update(&mut p, &req);
-        storage
-            .upsert_profile(p)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        tracing::info!("[storage] profile={name} updated/created");
-        Ok(())
-    })
+                Some(p) => p,
+            };
+            apply_profile_update(&mut p, &req);
+            storage
+                .upsert_profile(p)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            tracing::info!("[storage] profile={name} updated/created");
+            Ok(OkView { ok: true })
+        },
+    )
     .await
-    .map_err(|e| ApiError::internal(format!("join: {e}")))??;
-    Ok(Json(OkView { ok: true }))
 }
 
 fn apply_profile_update(p: &mut StorageProfile, req: &StorageProfileUpdate) {
@@ -116,8 +117,8 @@ pub async fn profile_delete(
     State(st): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<OkView>> {
-    let storage = st.storage.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
+    read_endpoint(&st, move |st| {
+        let storage = &st.storage;
         let active = storage.active_name().unwrap_or_default();
         if name == active {
             return Err(ApiError::conflict("不能删除当前生效的 profile，请先切换"));
@@ -129,11 +130,9 @@ pub async fn profile_delete(
             .delete_profile(&name)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         tracing::info!("[storage] profile={name} deleted");
-        Ok(())
+        Ok(OkView { ok: true })
     })
     .await
-    .map_err(|e| ApiError::internal(format!("join: {e}")))??;
-    Ok(Json(OkView { ok: true }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -146,28 +145,30 @@ pub async fn activate(
     State(st): State<AppState>,
     bytes: axum::body::Bytes,
 ) -> ApiResult<Json<OkView>> {
-    let req: StorageActivateRequest = decode_body(&bytes, MAX_CONTROL_BODY)?;
-    let storage = st.storage.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
-        if storage.profile(&req.name).is_none() {
-            return Err(ApiError::not_found(format!(
-                "profile not found: {}",
-                req.name
-            )));
-        }
-        if let Err(e) = storage.activate(&req.name) {
-            tracing::warn!("[storage] activate profile={} 失败: {e}", req.name);
-            return Err(match e {
-                StorageError::HeadBucket(_) => {
-                    ApiError::bad_gateway(format!("连通性校验失败: {e}"))
-                }
-                other => ApiError::internal(other.to_string()),
-            });
-        }
-        tracing::info!("[storage] 已切换到 profile={}", req.name);
-        Ok(())
-    })
+    write_endpoint(
+        &st,
+        bytes,
+        MAX_CONTROL_BODY,
+        |st, req: StorageActivateRequest| {
+            let storage = &st.storage;
+            if storage.profile(&req.name).is_none() {
+                return Err(ApiError::not_found(format!(
+                    "profile not found: {}",
+                    req.name
+                )));
+            }
+            if let Err(e) = storage.activate(&req.name) {
+                tracing::warn!("[storage] activate profile={} 失败: {e}", req.name);
+                return Err(match e {
+                    StorageError::HeadBucket(_) => {
+                        ApiError::bad_gateway(format!("连通性校验失败: {e}"))
+                    }
+                    other => ApiError::internal(other.to_string()),
+                });
+            }
+            tracing::info!("[storage] 已切换到 profile={}", req.name);
+            Ok(OkView { ok: true })
+        },
+    )
     .await
-    .map_err(|e| ApiError::internal(format!("join: {e}")))??;
-    Ok(Json(OkView { ok: true }))
 }

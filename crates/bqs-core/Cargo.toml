@@ -18,3 +18,9 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+
+[features]
+default = []
+# test-util：对下游 crate（bqs-store / bqs-storage）的测试开放共享 test_support
+# （FakeClock 等），替代各 crate 各持一份 FixedClock
+test-util = []

@@ -4,11 +4,11 @@ use std::sync::{Arc, Mutex};
 use bqs_config::{BalanceMode, Config};
 
 use crate::{
+    CoreResult,
     consts::BALANCE_EVAL_INTERVAL,
     control::Control,
     ports::{Clock, EpisodeStore, Ports, TrainerRegistryStore, TrainerStore},
     types::Trainer,
-    CoreResult,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -136,7 +136,8 @@ impl BalanceMonitor {
         stalled_window: i64,
     ) -> Option<String> {
         let age = now - t.last_seen;
-        if age > online_window {
+
+        if !crate::is_online(t.last_seen, now, online_window) {
             return Some(format!("trainer={} offline {age}s（心跳超时）", t.id));
         }
 

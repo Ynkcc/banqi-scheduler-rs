@@ -9,21 +9,8 @@ pub struct OkView {
     pub ok: bool,
 }
 
-pub fn data_kind_name(kind: i64) -> &'static str {
-    match kind {
-        1 => "nnue",
-        2 => "none",
-        _ => "resnet",
-    }
-}
-
-pub fn eval_search_mode_name(mcts_sims: i32) -> String {
-    if mcts_sims <= 0 {
-        "纯策略 argmax".into()
-    } else {
-        format!("MCTS {mcts_sims} sims")
-    }
-}
+pub use bqs_core::data_kind::display_name as data_kind_name;
+pub use bqs_core::evalcoord::eval_search_mode_name;
 
 pub fn balance_mode_name(mode: bqs_config::BalanceMode) -> &'static str {
     match mode {

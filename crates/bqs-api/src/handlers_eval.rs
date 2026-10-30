@@ -1,5 +1,5 @@
-use axum::extract::State;
 use axum::Json;
+use axum::extract::State;
 use serde::Deserialize;
 
 use bqs_core::evalcoord::EvalOverride;
@@ -7,7 +7,7 @@ use bqs_core::evalcoord::EvalOverride;
 use crate::views::{
     EvalConfigGetView, EvalEffectiveView, EvalResultView, EvalTriggerView, EvalView, OkView,
 };
-use crate::{decode_body, ApiError, ApiResult, AppState, MAX_CONTROL_BODY};
+use crate::{ApiError, ApiResult, AppState, MAX_CONTROL_BODY, read_endpoint, write_endpoint};
 
 const EVAL_LATEST_LIMIT: i64 = 200;
 const EVAL_TREND_LIMIT: i64 = 50;
@@ -31,8 +31,8 @@ fn to_eval_result_view(e: &bqs_core::types::EvalResult) -> EvalResultView {
 }
 
 pub async fn eval(State(st): State<AppState>) -> ApiResult<Json<EvalView>> {
-    let server = st.server.clone();
-    let view = tokio::task::spawn_blocking(move || -> Result<EvalView, ApiError> {
+    read_endpoint(&st, |st| -> Result<EvalView, ApiError> {
+        let server = &st.server;
         let latest: Vec<EvalResultView> = server
             .ports
             .eval
@@ -82,7 +82,7 @@ pub async fn eval(State(st): State<AppState>) -> ApiResult<Json<EvalView>> {
 
         let (should_stop, stop_reason) = server.ctl.should_stop();
         Ok(EvalView {
-            config: crate::handlers_status::to_eval_config_view(&st),
+            config: crate::handlers_status::to_eval_config_view(st),
             should_stop,
             stop_reason,
             latest,
@@ -91,8 +91,6 @@ pub async fn eval(State(st): State<AppState>) -> ApiResult<Json<EvalView>> {
         })
     })
     .await
-    .map_err(|e| ApiError::internal(format!("join: {e}")))??;
-    Ok(Json(view))
 }
 
 pub async fn eval_config_get(State(st): State<AppState>) -> ApiResult<Json<EvalConfigGetView>> {
@@ -105,17 +103,12 @@ pub async fn eval_config_get(State(st): State<AppState>) -> ApiResult<Json<EvalC
         opponents: cfg.opponents.clone(),
         stop_win_rate: cfg.stop_win_rate,
     };
-    if let Some(o) = &ov {
-        if let Some(v) = o.enabled {
-            eff.enabled = v;
-        }
-        if let Some(v) = &o.opponents {
-            eff.opponents = v.clone();
-        }
-        if let Some(v) = o.stop_win_rate {
-            eff.stop_win_rate = v;
-        }
-    }
+    crate::handlers_status::apply_eval_override(
+        ov.as_ref(),
+        &mut eff.enabled,
+        &mut eff.opponents,
+        &mut eff.stop_win_rate,
+    );
     Ok(Json(EvalConfigGetView {
         override_: ov,
         effective: eff,
@@ -135,43 +128,41 @@ pub async fn eval_config_put(
     State(st): State<AppState>,
     bytes: axum::body::Bytes,
 ) -> ApiResult<Json<OkView>> {
-    let req: EvalConfigRequest = decode_body(&bytes, MAX_CONTROL_BODY)?;
-    let server = st.server.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
-        if req.clear == Some(true) {
-            server
-                .ctl
-                .set_eval_override(EvalOverride::default())
-                .map_err(ApiError::from)?;
-            tracing::info!("[webui] eval_config 已清除覆盖（回落配置文件）");
-            return Ok(());
-        }
+    write_endpoint(
+        &st,
+        bytes,
+        MAX_CONTROL_BODY,
+        |st, req: EvalConfigRequest| -> Result<OkView, ApiError> {
+            let ctl = &st.server.ctl;
+            if req.clear == Some(true) {
+                ctl.set_eval_override(EvalOverride::default())
+                    .map_err(ApiError::from)?;
+                tracing::info!("[webui] eval_config 已清除覆盖（回落配置文件）");
+                return Ok(OkView { ok: true });
+            }
 
-        let ov = EvalOverride {
-            enabled: req.enabled,
-            opponents: req.opponents.clone(),
-            stop_win_rate: req.stop_win_rate,
-            ..Default::default()
-        };
-        if let Some(opps) = &ov.opponents {
-            bqs_core::evalopponents::validate_eval_opponents(opps)
-                .map_err(ApiError::bad_request)?;
-        }
-        server
-            .ctl
-            .set_eval_override(ov)
-            .map_err(|e| ApiError::bad_request(e.to_string()))?;
-        tracing::info!(
-            "[webui] eval_config 已更新: enabled={:?} opponents={:?} stopWinRate={:?}",
-            req.enabled,
-            req.opponents,
-            req.stop_win_rate
-        );
-        Ok(())
-    })
+            let ov = EvalOverride {
+                enabled: req.enabled,
+                opponents: req.opponents.clone(),
+                stop_win_rate: req.stop_win_rate,
+                ..Default::default()
+            };
+            if let Some(opps) = &ov.opponents {
+                bqs_core::evalopponents::validate_eval_opponents(opps)
+                    .map_err(ApiError::bad_request)?;
+            }
+            ctl.set_eval_override(ov)
+                .map_err(|e| ApiError::bad_request(e.to_string()))?;
+            tracing::info!(
+                "[webui] eval_config 已更新: enabled={:?} opponents={:?} stopWinRate={:?}",
+                req.enabled,
+                req.opponents,
+                req.stop_win_rate
+            );
+            Ok(OkView { ok: true })
+        },
+    )
     .await
-    .map_err(|e| ApiError::internal(format!("join: {e}")))??;
-    Ok(Json(OkView { ok: true }))
 }
 
 pub async fn trigger(State(st): State<AppState>) -> ApiResult<Json<EvalTriggerView>> {

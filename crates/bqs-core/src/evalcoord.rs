@@ -2,20 +2,20 @@ use std::sync::{Arc, Mutex, Weak};
 
 use bqs_config::Config;
 use bqs_judgment::judgment::{
-    consecutive_no_progress, judge_rollback, judge_stop, RollbackVerdict,
+    RollbackVerdict, consecutive_no_progress, judge_rollback, judge_stop,
 };
 use bqs_proto::{MatchResult, MatchResultAck, TaskKind};
 use serde::Serialize;
 
 use crate::{
+    CoreResult,
     assembler::games_for_threads,
     consts::{EVAL_MAX_ATTEMPTS, EVAL_MAX_GAMES_PER_TASK, EVAL_TASK_STALE_AFTER},
     control::Control,
     dispatch::{RunningTask, TaskDispatcher},
     evalopponents::EVAL_OPPONENT_MATERIAL_EXPECTIMAX,
     ports::{Clock, EvalStore, NetworkStore, Ports},
-    types::{network_status, EvalDelta, EvalResult},
-    CoreResult,
+    types::{EvalDelta, EvalResult, network_status},
 };
 
 pub const SETTING_EVAL_PROMOTIONS: &str = "eval_promotions";
@@ -1100,7 +1100,7 @@ mod tests {
     fn ensure_best_evaluated_fills_missing_opponents() {
         let e = env(enabled_cfg());
         e.f.networks.seed_network("best1", None, "onnx");
-        e.f.networks.promote_best("best1");
+        e.f.networks.promote_best("best1").unwrap();
 
         e.f.eval
             .upsert_eval_result(eval_row("best1", "random", 1, 0, 1, 1))
@@ -1118,7 +1118,7 @@ mod tests {
 
         assert!(e.evalc.trigger_manual().is_err());
         e.f.networks.seed_network("b", None, "onnx");
-        e.f.networks.promote_best("b");
+        e.f.networks.promote_best("b").unwrap();
         let n = e.evalc.trigger_manual().unwrap();
         assert_eq!(n, 4);
 
@@ -1201,12 +1201,12 @@ mod tests {
             "0 局上报也收尾任务本身"
         );
 
-        assert!(e
-            .f
-            .eval
-            .get_eval_job("n", &claimed.opponent_spec)
-            .unwrap()
-            .is_some());
+        assert!(
+            e.f.eval
+                .get_eval_job("n", &claimed.opponent_spec)
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
@@ -1271,7 +1271,7 @@ mod tests {
                 ))
                 .unwrap();
         }
-        e.f.networks.promote_best("n1");
+        e.f.networks.promote_best("n1").unwrap();
         e.evalc.on_new_best("n1").unwrap();
 
         let _ = claim_and_report(&e, "random", 100, 50);
@@ -1298,7 +1298,7 @@ mod tests {
                 ))
                 .unwrap();
         }
-        e.f.networks.promote_best("n1");
+        e.f.networks.promote_best("n1").unwrap();
         e.evalc.on_new_best("n1").unwrap();
         let _ = claim_and_report(&e, "random", 100, 70);
         assert!(!e.ctl.should_stop().0);
@@ -1327,7 +1327,7 @@ mod tests {
                 1,
             ))
             .unwrap();
-        e.f.networks.promote_best("child");
+        e.f.networks.promote_best("child").unwrap();
         e.evalc.on_new_best("child").unwrap();
         let _ = claim_and_report(&e, "rule:material_expectimax", 100, 30);
 
@@ -1351,11 +1351,11 @@ mod tests {
                 1,
             ))
             .unwrap();
-        e.f.networks.promote_best("child");
+        e.f.networks.promote_best("child").unwrap();
         e.evalc.on_new_best("child").unwrap();
 
         let claimed = claim_spec(&e, "rule:material_expectimax");
-        e.f.networks.promote_best("newer");
+        e.f.networks.promote_best("newer").unwrap();
         e.evalc.report_result(&claimed.task_id, "", delta(100, 30));
         assert_eq!(e.f.networks.best_sha().as_deref(), Some("newer"));
 
@@ -1367,7 +1367,7 @@ mod tests {
         let raw = "[eval]\nenabled = true\ngames = 10\nstop_win_rate = 0.8\n";
         let e = env(raw);
         e.f.networks.seed_network("n1", None, "onnx");
-        e.f.networks.promote_best("n1");
+        e.f.networks.promote_best("n1").unwrap();
         e.evalc.on_new_best("n1").unwrap();
         let _ = claim_and_report(&e, "rule:material_expectimax", 10, 9);
         let (stopped, reason) = e.ctl.should_stop();

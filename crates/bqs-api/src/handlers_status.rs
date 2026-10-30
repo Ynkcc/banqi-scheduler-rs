@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 
-use axum::extract::{Path, State};
 use axum::Json;
+use axum::extract::{Path, State};
 
 use bqs_core::dispatch::TaskStateStats;
+use bqs_core::evalcoord::EvalOverride;
 use bqs_core::types::Network;
 use bqs_judgment::sprt::{judge, llr, new_bounds};
 
@@ -11,7 +12,7 @@ use crate::views::{
     EpisodeRateEstimateView, EvalConfigView, KindStatsView, MatchView, NetworkView, OkView,
     SprtView, StatusView, TaskView, WorkerView,
 };
-use crate::{decode_body, ApiError, ApiResult, AppState, MAX_CONTROL_BODY};
+use crate::{ApiError, ApiResult, AppState, MAX_CONTROL_BODY, read_endpoint, write_endpoint};
 
 pub fn to_network_view(n: &Network) -> NetworkView {
     NetworkView {
@@ -64,21 +65,34 @@ fn worker_stats(
     }
 }
 
+pub fn apply_eval_override(
+    o: Option<&EvalOverride>,
+    enabled: &mut bool,
+    opponents: &mut Vec<String>,
+    stop_win_rate: &mut f64,
+) {
+    let Some(o) = o else { return };
+    if let Some(v) = o.enabled {
+        *enabled = v;
+    }
+    if let Some(v) = &o.opponents {
+        *opponents = v.clone();
+    }
+    if let Some(v) = o.stop_win_rate {
+        *stop_win_rate = v;
+    }
+}
+
 pub fn to_eval_config_view(st: &AppState) -> EvalConfigView {
     let cfg = &st.server.cfg.eval;
     let (mut enabled, mut opponents, mut stop_win_rate) =
         (cfg.enabled, cfg.opponents.clone(), cfg.stop_win_rate);
-    if let Some(o) = st.server.ctl.eval_override() {
-        if let Some(v) = o.enabled {
-            enabled = v;
-        }
-        if let Some(v) = o.opponents {
-            opponents = v;
-        }
-        if let Some(v) = o.stop_win_rate {
-            stop_win_rate = v;
-        }
-    }
+    apply_eval_override(
+        st.server.ctl.eval_override().as_ref(),
+        &mut enabled,
+        &mut opponents,
+        &mut stop_win_rate,
+    );
     EvalConfigView {
         enabled,
         opponents,
@@ -97,15 +111,14 @@ pub fn to_eval_config_view(st: &AppState) -> EvalConfigView {
 }
 
 pub async fn status(State(st): State<AppState>) -> ApiResult<Json<StatusView>> {
-    let server = st.server.clone();
-    let view = tokio::task::spawn_blocking(move || -> Result<StatusView, ApiError> {
+    read_endpoint(&st, |st| -> Result<StatusView, ApiError> {
+        let server = &st.server;
         let best = server.ports.networks.get_best()?;
         let counts: crate::views::CountsView = server.ports.eval.counts()?.into();
         let ctl = &server.ctl;
         let (should_stop, stop_reason) = ctl.should_stop();
         Ok(StatusView {
             variant: server.cfg.selfplay.variant.clone(),
-
             paused: ctl.manual_paused(),
             initial_revealed: ctl.initial_revealed(),
             data_kind: ctl.data_kind().as_str().to_string(),
@@ -118,7 +131,7 @@ pub async fn status(State(st): State<AppState>) -> ApiResult<Json<StatusView>> {
             },
             best: best.as_ref().map(to_network_view),
             counts,
-            eval: to_eval_config_view(&st),
+            eval: to_eval_config_view(st),
             should_stop,
             stop_reason,
             auto_paused: ctl.auto_paused(),
@@ -126,44 +139,38 @@ pub async fn status(State(st): State<AppState>) -> ApiResult<Json<StatusView>> {
         })
     })
     .await
-    .map_err(|e| ApiError::internal(format!("join: {e}")))??;
-    Ok(Json(view))
 }
 
 pub async fn networks(State(st): State<AppState>) -> ApiResult<Json<Vec<NetworkView>>> {
-    let server = st.server.clone();
-    let items = tokio::task::spawn_blocking(move || server.ports.networks.list_networks())
-        .await
-        .map_err(|e| ApiError::internal(format!("join: {e}")))??;
-    Ok(Json(items.iter().map(to_network_view).collect()))
+    read_endpoint(&st, |st| -> Result<Vec<NetworkView>, ApiError> {
+        let items = st.server.ports.networks.list_networks()?;
+        Ok(items.iter().map(to_network_view).collect())
+    })
+    .await
 }
 
 pub async fn promote(
     State(st): State<AppState>,
     Path(sha): Path<String>,
 ) -> ApiResult<Json<OkView>> {
-    let server = st.server.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
-        let n = server
-            .ports
-            .networks
+    read_endpoint(&st, move |st| -> Result<OkView, ApiError> {
+        let networks = &st.server.ports.networks;
+        let n = networks
             .get_network(&sha)?
             .ok_or_else(|| ApiError::not_found(format!("network not found: {sha}")))?;
         if n.is_best {
             return Err(ApiError::conflict(format!("already best: {sha}")));
         }
-        server.ports.networks.promote_best(&sha)?;
+        networks.promote_best(&sha)?;
         tracing::info!("[webui] manual promote sha={sha} status={}", n.status);
-        Ok(())
+        Ok(OkView { ok: true })
     })
     .await
-    .map_err(|e| ApiError::internal(format!("join: {e}")))??;
-    Ok(Json(OkView { ok: true }))
 }
 
 pub async fn matches(State(st): State<AppState>) -> ApiResult<Json<Vec<MatchView>>> {
-    let server = st.server.clone();
-    let items = tokio::task::spawn_blocking(move || -> Result<Vec<MatchView>, ApiError> {
+    read_endpoint(&st, |st| -> Result<Vec<MatchView>, ApiError> {
+        let server = &st.server;
         let sprt = &server.cfg.sprt;
         let bounds = new_bounds(sprt.alpha, sprt.beta);
         let items = server.ports.matches.list_matches()?;
@@ -202,17 +209,14 @@ pub async fn matches(State(st): State<AppState>) -> ApiResult<Json<Vec<MatchView
         Ok(out)
     })
     .await
-    .map_err(|e| ApiError::internal(format!("join: {e}")))??;
-    Ok(Json(items))
 }
 
 pub async fn workers(State(st): State<AppState>) -> ApiResult<Json<Vec<WorkerView>>> {
-    let server = st.server.clone();
-    let online_window = st.online_window_secs;
-    let items = tokio::task::spawn_blocking(move || -> Result<Vec<WorkerView>, ApiError> {
+    read_endpoint(&st, |st| -> Result<Vec<WorkerView>, ApiError> {
+        let server = &st.server;
         let items = server.ports.workers.list_workers()?;
 
-        let (stats_1h, stats_24h, est_rates) = worker_stats(&server);
+        let (stats_1h, stats_24h, est_rates) = worker_stats(server);
         let stats_1h = stats_1h.unwrap_or_default();
         let stats_24h = stats_24h.unwrap_or_default();
         let est_rates = est_rates.unwrap_or_default();
@@ -234,7 +238,7 @@ pub async fn workers(State(st): State<AppState>) -> ApiResult<Json<Vec<WorkerVie
                 id: wk.id.clone(),
                 note: wk.note.clone(),
                 last_seen: wk.last_seen,
-                online: now - wk.last_seen < online_window,
+                online: bqs_core::is_online(wk.last_seen, now, st.online_window_secs),
                 threads: wk.threads,
                 completed_games: wk.completed_games,
                 client_version: wk.client_version.clone(),
@@ -253,8 +257,6 @@ pub async fn workers(State(st): State<AppState>) -> ApiResult<Json<Vec<WorkerVie
         Ok(out)
     })
     .await
-    .map_err(|e| ApiError::internal(format!("join: {e}")))??;
-    Ok(Json(items))
 }
 
 const MAX_WORKER_NOTE: usize = 64;
@@ -270,32 +272,30 @@ pub async fn worker_note(
     Path(id): Path<String>,
     bytes: axum::body::Bytes,
 ) -> ApiResult<Json<OkView>> {
-    let req: WorkerNoteRequest = decode_body(&bytes, MAX_CONTROL_BODY)?;
-    let note = req.note.trim().to_string();
+    write_endpoint(
+        &st,
+        bytes,
+        MAX_CONTROL_BODY,
+        move |st, req: WorkerNoteRequest| -> Result<OkView, ApiError> {
+            let note = req.note.trim().to_string();
 
-    if note.chars().count() > MAX_WORKER_NOTE {
-        return Err(ApiError::bad_request(format!(
-            "备注最长 {MAX_WORKER_NOTE} 字符"
-        )));
-    }
-    let server = st.server.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
-        let exists = server
-            .ports
-            .workers
-            .list_workers()?
-            .iter()
-            .any(|w| w.id == id);
-        if !exists {
-            return Err(ApiError::not_found(format!("worker not found: {id}")));
-        }
-        server.ports.workers.set_worker_note(&id, &note)?;
-        tracing::info!("[workers] worker={id} note={note:?}");
-        Ok(())
-    })
+            if note.chars().count() > MAX_WORKER_NOTE {
+                return Err(ApiError::bad_request(format!(
+                    "备注最长 {MAX_WORKER_NOTE} 字符"
+                )));
+            }
+            let workers = &st.server.ports.workers;
+
+            let exists = workers.list_workers()?.iter().any(|w| w.id == id);
+            if !exists {
+                return Err(ApiError::not_found(format!("worker not found: {id}")));
+            }
+            workers.set_worker_note(&id, &note)?;
+            tracing::info!("[workers] worker={id} note={note:?}");
+            Ok(OkView { ok: true })
+        },
+    )
     .await
-    .map_err(|e| ApiError::internal(format!("join: {e}")))??;
-    Ok(Json(OkView { ok: true }))
 }
 
 fn to_task_view(t: bqs_core::dispatch::RunningTask) -> TaskView {
@@ -313,17 +313,18 @@ fn to_task_view(t: bqs_core::dispatch::RunningTask) -> TaskView {
 }
 
 pub async fn tasks(State(st): State<AppState>) -> ApiResult<Json<Vec<TaskView>>> {
-    let server = st.server.clone();
-    let items = tokio::task::spawn_blocking(move || server.disp.running_tasks_webui())
-        .await
-        .map_err(|e| ApiError::internal(format!("join: {e}")))?;
-    Ok(Json(items.into_iter().map(to_task_view).collect()))
+    read_endpoint(&st, |st| {
+        Ok(st
+            .server
+            .disp
+            .running_tasks_webui()
+            .into_iter()
+            .map(to_task_view)
+            .collect())
+    })
+    .await
 }
 
 pub async fn task_stats(State(st): State<AppState>) -> ApiResult<Json<TaskStateStats>> {
-    let server = st.server.clone();
-    let view = tokio::task::spawn_blocking(move || server.disp.task_state_snapshot())
-        .await
-        .map_err(|e| ApiError::internal(format!("join: {e}")))?;
-    Ok(Json(view))
+    read_endpoint(&st, |st| Ok(st.server.disp.task_state_snapshot())).await
 }

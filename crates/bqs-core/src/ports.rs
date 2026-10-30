@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bqs_judgment::Hexanomial;
 
-use crate::{types::*, CoreResult};
+use crate::{CoreResult, types::*};
 
 pub trait SettingsStore: Send + Sync {
     fn get_setting(&self, key: &str) -> CoreResult<Option<String>>;

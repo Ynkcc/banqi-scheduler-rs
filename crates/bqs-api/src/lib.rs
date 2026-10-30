@@ -1,9 +1,7 @@
-
-
 pub mod handlers_control;
 pub mod handlers_episodes;
-pub mod handlers_jobs;
 pub mod handlers_eval;
+pub mod handlers_jobs;
 pub mod handlers_replay;
 pub mod handlers_status;
 pub mod handlers_storage;
@@ -24,11 +22,9 @@ use serde::de::DeserializeOwned;
 
 use bqs_core::server::Server;
 
-
 pub const MAX_BODY_LIMIT: usize = 16 * 1024;
 pub const MAX_CONTROL_BODY: usize = 4096;
 pub const MAX_TRAIN_CONFIG_BODY: usize = 16 * 1024;
-
 
 #[derive(Clone)]
 pub struct AppState {
@@ -40,7 +36,6 @@ pub struct AppState {
     pub webui_dist: Option<Arc<PathBuf>>,
 }
 
-
 #[derive(Debug)]
 pub struct ApiError {
     status: StatusCode,
@@ -49,19 +44,34 @@ pub struct ApiError {
 
 impl ApiError {
     pub fn internal(msg: impl Into<String>) -> Self {
-        Self { status: StatusCode::INTERNAL_SERVER_ERROR, message: msg.into() }
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: msg.into(),
+        }
     }
     pub fn bad_request(msg: impl Into<String>) -> Self {
-        Self { status: StatusCode::BAD_REQUEST, message: msg.into() }
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: msg.into(),
+        }
     }
     pub fn not_found(msg: impl Into<String>) -> Self {
-        Self { status: StatusCode::NOT_FOUND, message: msg.into() }
+        Self {
+            status: StatusCode::NOT_FOUND,
+            message: msg.into(),
+        }
     }
     pub fn conflict(msg: impl Into<String>) -> Self {
-        Self { status: StatusCode::CONFLICT, message: msg.into() }
+        Self {
+            status: StatusCode::CONFLICT,
+            message: msg.into(),
+        }
     }
     pub fn bad_gateway(msg: impl Into<String>) -> Self {
-        Self { status: StatusCode::BAD_GATEWAY, message: msg.into() }
+        Self {
+            status: StatusCode::BAD_GATEWAY,
+            message: msg.into(),
+        }
     }
 }
 
@@ -80,7 +90,6 @@ impl IntoResponse for ApiError {
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
-
 pub fn decode_body<T: DeserializeOwned>(bytes: &Bytes, max: usize) -> Result<T, ApiError> {
     if bytes.len() > max {
         return Err(ApiError::bad_request("http: request body too large"));
@@ -89,6 +98,32 @@ pub fn decode_body<T: DeserializeOwned>(bytes: &Bytes, max: usize) -> Result<T, 
         .map_err(|e| ApiError::bad_request(format!("invalid json body: {e}")))
 }
 
+pub async fn read_endpoint<T, F>(st: &AppState, f: F) -> ApiResult<Json<T>>
+where
+    F: FnOnce(&AppState) -> Result<T, ApiError> + Send + 'static,
+    T: Send + 'static,
+{
+    let st = st.clone();
+    let out = tokio::task::spawn_blocking(move || f(&st))
+        .await
+        .map_err(|e| ApiError::internal(format!("join: {e}")))??;
+    Ok(Json(out))
+}
+
+pub async fn write_endpoint<T, B, F>(
+    st: &AppState,
+    bytes: Bytes,
+    max: usize,
+    f: F,
+) -> ApiResult<Json<T>>
+where
+    B: DeserializeOwned + Send + 'static,
+    F: FnOnce(&AppState, B) -> Result<T, ApiError> + Send + 'static,
+    T: Send + 'static,
+{
+    let body: B = decode_body(&bytes, max)?;
+    read_endpoint(st, move |st| f(st, body)).await
+}
 
 pub fn int_query(query: Option<&str>, key: &str) -> i64 {
     let Some(q) = query else { return 0 };
@@ -100,7 +135,6 @@ pub fn int_query(query: Option<&str>, key: &str) -> i64 {
     }
     0
 }
-
 
 pub fn to_profile_view(p: &bqs_storage::StorageProfile) -> views::StorageProfileView {
     views::StorageProfileView {
@@ -114,7 +148,6 @@ pub fn to_profile_view(p: &bqs_storage::StorageProfile) -> views::StorageProfile
     }
 }
 
-
 pub fn mask_key(k: &str) -> String {
     if k.is_empty() {
         String::new()
@@ -125,19 +158,21 @@ pub fn mask_key(k: &str) -> String {
     }
 }
 
-
 pub fn valid_profile_name(name: &str) -> bool {
     (1..=32).contains(&name.len())
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
-
 
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
-
         .route("/api/status", get(handlers_status::status))
         .route("/api/networks", get(handlers_status::networks))
-        .route("/api/networks/{sha}/promote", post(handlers_status::promote))
+        .route(
+            "/api/networks/{sha}/promote",
+            post(handlers_status::promote),
+        )
         .route("/api/matches", get(handlers_status::matches))
         .route("/api/eval", get(handlers_eval::eval))
         .route("/api/eval/trigger", post(handlers_eval::trigger))
@@ -149,7 +184,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/workers/{id}/note", put(handlers_status::worker_note))
         .route("/api/trainers", get(handlers_trainers::trainers))
         .route("/api/episodes", get(handlers_episodes::episodes))
-
         .route(
             "/api/episodes/{id}/replay",
             get(handlers_replay::episode_replay_list),
@@ -166,7 +200,10 @@ pub fn router(state: AppState) -> Router {
             get(handlers_trainers::train_config_get).put(handlers_trainers::train_config_put),
         )
         .route("/api/storage", get(handlers_storage::storage_get))
-        .route("/api/storage/active", get(handlers_storage::storage_active_get))
+        .route(
+            "/api/storage/active",
+            get(handlers_storage::storage_active_get),
+        )
         .route(
             "/api/storage/profiles/{name}",
             get(handlers_storage::profile_get)
@@ -174,17 +211,20 @@ pub fn router(state: AppState) -> Router {
                 .delete(handlers_storage::profile_delete),
         )
         .route("/api/storage/activate", post(handlers_storage::activate))
-
-        .route("/api/jobs", get(handlers_jobs::list_jobs).post(handlers_jobs::submit_job))
+        .route(
+            "/api/jobs",
+            get(handlers_jobs::list_jobs).post(handlers_jobs::submit_job),
+        )
         .route("/api/jobs/{id}/{action}", post(handlers_jobs::control_job))
-
         .route("/api/control", post(handlers_control::control))
         .layer(DefaultBodyLimit::max(MAX_BODY_LIMIT))
         .with_state(state.clone());
 
-    Router::new().merge(api).fallback(any(static_handler)).with_state(state)
+    Router::new()
+        .merge(api)
+        .fallback(any(static_handler))
+        .with_state(state)
 }
-
 
 fn content_type(name: &str) -> &'static str {
     let ext = Path::new(name)
@@ -212,11 +252,7 @@ fn content_type(name: &str) -> &'static str {
     }
 }
 
-
-async fn static_handler(
-    State(st): State<AppState>,
-    req: Request<axum::body::Body>,
-) -> Response {
+async fn static_handler(State(st): State<AppState>, req: Request<axum::body::Body>) -> Response {
     if req.method() != Method::GET && req.method() != Method::HEAD {
         return ApiError::bad_request("method not allowed").into_response();
     }
@@ -231,14 +267,17 @@ async fn static_handler(
         let name = if rel.is_empty() { "index.html" } else { rel };
         if let Some(dist) = &st.webui_dist {
             if let Ok(data) = tokio::fs::read(dist.join(name)).await {
-                return ([(axum::http::header::CONTENT_TYPE, content_type(name))], data)
+                return (
+                    [(axum::http::header::CONTENT_TYPE, content_type(name))],
+                    data,
+                )
                     .into_response();
             }
             if let Ok(index) = tokio::fs::read(dist.join("index.html")).await {
-                return ([(
-                    axum::http::header::CONTENT_TYPE,
-                    "text/html; charset=utf-8",
-                )], index)
+                return (
+                    [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                    index,
+                )
                     .into_response();
             }
         }
@@ -250,12 +289,10 @@ async fn static_handler(
         .into_response()
 }
 
-
 #[cfg(test)]
 mod contract {
     use super::*;
     use crate::views::*;
-
 
     fn keys<T: serde::Serialize>(v: &T) -> Vec<String> {
         match serde_json::to_value(v).unwrap() {
@@ -266,7 +303,10 @@ mod contract {
 
     fn assert_keys(got: &[String], want: &[&str]) {
         for k in want {
-            assert!(got.iter().any(|g| g == k), "缺少字段 {k}（前端按名字取值，缺字段是破坏性变更）");
+            assert!(
+                got.iter().any(|g| g == k),
+                "缺少字段 {k}（前端按名字取值，缺字段是破坏性变更）"
+            );
         }
         for g in got {
             assert!(
@@ -276,7 +316,6 @@ mod contract {
         }
     }
 
-
     #[test]
     fn status_top_level() {
         let v = StatusView {
@@ -285,7 +324,12 @@ mod contract {
             initial_revealed: 0,
             data_kind: "resnet".into(),
             min_client_version: String::new(),
-            sprt: SprtView { elo0: 0.0, elo1: 15.0, alpha: 0.05, beta: 0.05 },
+            sprt: SprtView {
+                elo0: 0.0,
+                elo1: 15.0,
+                alpha: 0.05,
+                beta: 0.05,
+            },
             best: None,
             counts: CountsView {
                 networks: 0,
@@ -319,29 +363,53 @@ mod contract {
         assert_keys(
             &keys(&v),
             &[
-                "variant", "paused", "initialRevealed", "dataKind", "minClientVersion",
-                "sprt", "best", "counts", "eval", "shouldStop", "stopReason",
-                "autoPaused", "autoPauseReason",
+                "variant",
+                "paused",
+                "initialRevealed",
+                "dataKind",
+                "minClientVersion",
+                "sprt",
+                "best",
+                "counts",
+                "eval",
+                "shouldStop",
+                "stopReason",
+                "autoPaused",
+                "autoPauseReason",
             ],
         );
         assert_keys(&keys(&v.sprt), &["elo0", "elo1", "alpha", "beta"]);
         assert_keys(
             &keys(&v.eval),
             &[
-                "enabled", "opponents", "games", "taskGames", "mctsSims",
-                "everyNPromotions", "noProgressN", "noProgressEps", "rollbackEps",
-                "floorWinRate", "stopWinRate", "mode", "pending",
+                "enabled",
+                "opponents",
+                "games",
+                "taskGames",
+                "mctsSims",
+                "everyNPromotions",
+                "noProgressN",
+                "noProgressEps",
+                "rollbackEps",
+                "floorWinRate",
+                "stopWinRate",
+                "mode",
+                "pending",
             ],
         );
         assert_keys(
             &keys(&v.counts),
             &[
-                "networks", "candidates", "matchesRunning", "episodes",
-                "episodeGames", "workers", "evalResults",
+                "networks",
+                "candidates",
+                "matchesRunning",
+                "episodes",
+                "episodeGames",
+                "workers",
+                "evalResults",
             ],
         );
     }
-
 
     #[test]
     fn network_view() {
@@ -353,9 +421,11 @@ mod contract {
             status: "best".into(),
             notes: String::new(),
         };
-        assert_keys(&keys(&v), &["sha", "parentSha", "createdAt", "isBest", "status", "notes"]);
+        assert_keys(
+            &keys(&v),
+            &["sha", "parentSha", "createdAt", "isBest", "status", "notes"],
+        );
     }
-
 
     #[test]
     fn match_view() {
@@ -376,15 +446,24 @@ mod contract {
         assert_keys(
             &keys(&v),
             &[
-                "id", "candidate", "opponent", "status", "pairs", "numGames",
-                "targetGames", "score", "llr", "lower", "upper", "verdict",
+                "id",
+                "candidate",
+                "opponent",
+                "status",
+                "pairs",
+                "numGames",
+                "targetGames",
+                "score",
+                "llr",
+                "lower",
+                "upper",
+                "verdict",
             ],
         );
         let json = serde_json::to_value(&v).unwrap();
         assert_eq!(json["pairs"].as_array().unwrap().len(), 6);
         assert!(json["score"].is_null());
     }
-
 
     #[test]
     fn worker_view() {
@@ -410,14 +489,26 @@ mod contract {
         assert_keys(
             &keys(&v),
             &[
-                "id", "note", "lastSeen", "online", "threads", "completedGames",
-                "clientVersion", "memoryMb", "healthStatus", "lastError",
-                "episodes1h", "games1h", "episodes24h", "games24h",
-                "estGamesPerHour", "estPerThreadHour", "estSamples",
+                "id",
+                "note",
+                "lastSeen",
+                "online",
+                "threads",
+                "completedGames",
+                "clientVersion",
+                "memoryMb",
+                "healthStatus",
+                "lastError",
+                "episodes1h",
+                "games1h",
+                "episodes24h",
+                "games24h",
+                "estGamesPerHour",
+                "estPerThreadHour",
+                "estSamples",
             ],
         );
     }
-
 
     #[test]
     fn eval_view() {
@@ -467,20 +558,45 @@ mod contract {
         };
         assert_keys(
             &keys(&v),
-            &["config", "shouldStop", "stopReason", "latest", "trends", "running"],
+            &[
+                "config",
+                "shouldStop",
+                "stopReason",
+                "latest",
+                "trends",
+                "running",
+            ],
         );
         assert_keys(
             &keys(&point),
             &[
-                "networkSha", "opponentSpec", "wins", "draws", "losses", "redWins",
-                "blackWins", "drawNoCapture", "drawTruncation", "numGames", "winRate",
-                "avgMoves", "createdAt",
+                "networkSha",
+                "opponentSpec",
+                "wins",
+                "draws",
+                "losses",
+                "redWins",
+                "blackWins",
+                "drawNoCapture",
+                "drawTruncation",
+                "numGames",
+                "winRate",
+                "avgMoves",
+                "createdAt",
             ],
         );
         let trend = &v.trends[0];
-        assert_keys(&keys(trend), &["opponent", "versions", "noProgress", "latestWinRate", "points"]);
+        assert_keys(
+            &keys(trend),
+            &[
+                "opponent",
+                "versions",
+                "noProgress",
+                "latestWinRate",
+                "points",
+            ],
+        );
     }
-
 
     #[test]
     fn trainers_view() {
@@ -514,24 +630,42 @@ mod contract {
             auto_pause_reason: String::new(),
             trainers: vec![tv],
         };
-        assert_keys(&keys(&v), &["config", "autoPaused", "autoPauseReason", "trainers"]);
+        assert_keys(
+            &keys(&v),
+            &["config", "autoPaused", "autoPauseReason", "trainers"],
+        );
         assert_keys(
             &keys(&v.config),
             &[
-                "enabled", "mode", "trainerOnlineSeconds", "stalledSeconds",
-                "backlogPauseBatches", "pauseReanalysis",
+                "enabled",
+                "mode",
+                "trainerOnlineSeconds",
+                "stalledSeconds",
+                "backlogPauseBatches",
+                "pauseReanalysis",
             ],
         );
         assert_keys(
             &keys(&v.trainers[0]),
             &[
-                "id", "lastSeen", "online", "variant", "dataKind", "consumedKey",
-                "consumedId", "registeredMaxId", "unconsumedBatches", "samplesConsumed",
-                "backlog", "buffered", "healthStatus", "lastError", "progress",
+                "id",
+                "lastSeen",
+                "online",
+                "variant",
+                "dataKind",
+                "consumedKey",
+                "consumedId",
+                "registeredMaxId",
+                "unconsumedBatches",
+                "samplesConsumed",
+                "backlog",
+                "buffered",
+                "healthStatus",
+                "lastError",
+                "progress",
             ],
         );
     }
-
 
     #[test]
     fn train_config_view() {
@@ -553,14 +687,19 @@ mod contract {
             gt_zero: false,
             r#enum: vec![],
         };
-        let v = TrainConfigView { overrides: Default::default(), fields: vec![with_enum, no_enum] };
+        let v = TrainConfigView {
+            overrides: Default::default(),
+            fields: vec![with_enum, no_enum],
+        };
         assert_keys(&keys(&v), &["overrides", "fields"]);
         let json = serde_json::to_value(&v).unwrap();
         let f0 = &json["fields"][0];
         assert!(f0.get("enum").is_some(), "enum 字段存在时应输出");
-        assert!(json["fields"][1].get("enum").is_none(), "空 enum 应被省略（omitempty）");
+        assert!(
+            json["fields"][1].get("enum").is_none(),
+            "空 enum 应被省略（omitempty）"
+        );
     }
-
 
     #[test]
     fn episode_views() {
@@ -586,16 +725,32 @@ mod contract {
         assert_keys(
             &keys(&ev),
             &[
-                "id", "workerId", "taskId", "networkSha", "gameCount", "totalSteps",
-                "winner", "dataKind", "objectKey", "opponentSha", "opponentSpec",
-                "matchId", "redWins", "blackWins", "drawNoCapture", "drawTruncation",
+                "id",
+                "workerId",
+                "taskId",
+                "networkSha",
+                "gameCount",
+                "totalSteps",
+                "winner",
+                "dataKind",
+                "objectKey",
+                "opponentSha",
+                "opponentSpec",
+                "matchId",
+                "redWins",
+                "blackWins",
+                "drawNoCapture",
+                "drawTruncation",
                 "createdAt",
             ],
         );
-        let page = EpisodePageView { items: vec![], next_before: 0, has_more: false };
+        let page = EpisodePageView {
+            items: vec![],
+            next_before: 0,
+            has_more: false,
+        };
         assert_keys(&keys(&page), &["items", "nextBefore", "hasMore"]);
     }
-
 
     #[test]
     fn storage_views() {
@@ -617,12 +772,22 @@ mod contract {
         };
         assert_keys(
             &keys(&pv),
-            &["name", "endpoint", "region", "accessKey", "hasSecret", "bucket", "pathStyle"],
+            &[
+                "name",
+                "endpoint",
+                "region",
+                "accessKey",
+                "hasSecret",
+                "bucket",
+                "pathStyle",
+            ],
         );
-        let sv = StorageView { active: "default".into(), profiles: vec![] };
+        let sv = StorageView {
+            active: "default".into(),
+            profiles: vec![],
+        };
         assert_keys(&keys(&sv), &["active", "profiles"]);
     }
-
 
     #[test]
     fn eval_config_get_view() {
@@ -635,22 +800,30 @@ mod contract {
             },
         };
         assert_keys(&keys(&v), &["override", "effective"]);
-        assert_keys(&keys(&v.effective), &["enabled", "opponents", "stopWinRate"]);
+        assert_keys(
+            &keys(&v.effective),
+            &["enabled", "opponents", "stopWinRate"],
+        );
     }
-
 
     #[test]
     fn eval_trigger_view() {
-        let v = EvalTriggerView { ok: true, triggered: 2, message: "已入队 2 条评估".into() };
+        let v = EvalTriggerView {
+            ok: true,
+            triggered: 2,
+            message: "已入队 2 条评估".into(),
+        };
         assert_keys(&keys(&v), &["ok", "triggered", "message"]);
     }
-
 
     #[test]
     fn replay_views() {
         use crate::views::*;
 
-        let bag = HiddenBagView { red: [5, 2, 2, 2, 2, 2, 1], black: [0; 7] };
+        let bag = HiddenBagView {
+            red: [5, 2, 2, 2, 2, 2, 1],
+            black: [0; 7],
+        };
         assert_keys(&keys(&bag), &["red", "black"]);
 
         let summary = ReplayGameSummaryView {
@@ -663,7 +836,14 @@ mod contract {
         };
         assert_keys(
             &keys(&summary),
-            &["index", "steps", "gameLength", "winner", "termination", "hasSeed"],
+            &[
+                "index",
+                "steps",
+                "gameLength",
+                "winner",
+                "termination",
+                "hasSeed",
+            ],
         );
 
         let list = ReplayListView {
@@ -673,7 +853,10 @@ mod contract {
             game_count: 1,
             games: vec![summary],
         };
-        assert_keys(&keys(&list), &["id", "kind", "variant", "gameCount", "games"]);
+        assert_keys(
+            &keys(&list),
+            &["id", "kind", "variant", "gameCount", "games"],
+        );
 
         let step = ReplayStepView {
             ply: 0,
@@ -706,21 +889,54 @@ mod contract {
         };
         let step_json = serde_json::to_value(&step).unwrap();
         for k in [
-            "ply", "player", "action", "from", "to", "kind", "isChance", "revealed",
-            "captured", "moveCounter", "scores", "board", "revealedAt", "hiddenBag",
-            "boardSource", "producer", "searchValue", "playerValue", "hiddenCount",
-            "searchDepth", "searchNodes", "chosenValueGap", "explRandom",
-            "labelerFallback", "labelerAction", "policyActions", "policyValues",
+            "ply",
+            "player",
+            "action",
+            "from",
+            "to",
+            "kind",
+            "isChance",
+            "revealed",
+            "captured",
+            "moveCounter",
+            "scores",
+            "board",
+            "revealedAt",
+            "hiddenBag",
+            "boardSource",
+            "producer",
+            "searchValue",
+            "playerValue",
+            "hiddenCount",
+            "searchDepth",
+            "searchNodes",
+            "chosenValueGap",
+            "explRandom",
+            "labelerFallback",
+            "labelerAction",
+            "policyActions",
+            "policyValues",
         ] {
             assert!(step_json.get(k).is_some(), "ReplayStep 缺字段 {k}");
         }
 
-        let mut quiet = ReplayStepView { is_chance: false, revealed: String::new(), captured: String::new(), policy_actions: None, policy_values: None, labeler_action: None, ..step.clone() };
+        let mut quiet = ReplayStepView {
+            is_chance: false,
+            revealed: String::new(),
+            captured: String::new(),
+            policy_actions: None,
+            policy_values: None,
+            labeler_action: None,
+            ..step.clone()
+        };
         quiet.is_chance = false;
         quiet.revealed = String::new();
         quiet.captured = String::new();
         let quiet_json = serde_json::to_value(&quiet).unwrap();
-        assert!(quiet_json.get("isChance").is_none(), "isChance=false 应省略");
+        assert!(
+            quiet_json.get("isChance").is_none(),
+            "isChance=false 应省略"
+        );
         assert!(quiet_json.get("revealed").is_none(), "revealed 空 应省略");
         assert!(quiet_json.get("captured").is_none(), "captured 空 应省略");
 
@@ -758,10 +974,27 @@ mod contract {
         assert_keys(
             &keys(&game),
             &[
-                "index", "steps", "gameLength", "winner", "termination", "seed",
-                "hasSeed", "sideA", "sideB", "redIsA", "aSideOnly", "initialBoard",
-                "initialShown", "initialBag", "finalBoard", "finalShown", "finalBag",
-                "moves", "labelerAgree", "labelerTotal", "explCount",
+                "index",
+                "steps",
+                "gameLength",
+                "winner",
+                "termination",
+                "seed",
+                "hasSeed",
+                "sideA",
+                "sideB",
+                "redIsA",
+                "aSideOnly",
+                "initialBoard",
+                "initialShown",
+                "initialBag",
+                "finalBoard",
+                "finalShown",
+                "finalBag",
+                "moves",
+                "labelerAgree",
+                "labelerTotal",
+                "explCount",
             ],
         );
     }

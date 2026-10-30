@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::{
+    CoreError, CoreResult,
     ports::{
         Clock, EpisodeStore, EvalStore, FeaturePackDraft, FeaturePackStore, JobRow, JobStore,
         JobTaskLink, MatchStore, NetworkStore, ObjectSigner, Ports, SettingsStore,
@@ -12,7 +13,6 @@ use crate::{
         Episode, EpisodeDraft, EvalDelta, EvalQueueEntry, EvalResult, FeaturePack, Match, Network,
         Trainer, Worker,
     },
-    CoreError, CoreResult,
 };
 
 #[derive(Debug, Default)]

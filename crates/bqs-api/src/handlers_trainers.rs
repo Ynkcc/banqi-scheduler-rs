@@ -1,15 +1,15 @@
-use axum::extract::State;
 use axum::Json;
+use axum::extract::State;
 use serde::Deserialize;
 
 use crate::views::{
-    balance_mode_name, data_kind_name, OkView, TrainConfigView, TrainerView, TrainersView,
+    OkView, TrainConfigView, TrainerView, TrainersView, balance_mode_name, data_kind_name,
 };
-use crate::{decode_body, ApiError, ApiResult, AppState, MAX_TRAIN_CONFIG_BODY};
+use crate::{ApiError, ApiResult, AppState, MAX_TRAIN_CONFIG_BODY, decode_body, read_endpoint};
 
 pub async fn trainers(State(st): State<AppState>) -> ApiResult<Json<TrainersView>> {
-    let server = st.server.clone();
-    let view = tokio::task::spawn_blocking(move || -> Result<TrainersView, ApiError> {
+    read_endpoint(&st, |st| -> Result<TrainersView, ApiError> {
+        let server = &st.server;
         let cfg = &server.cfg.balance;
 
         let online_window = if cfg.trainer_online_seconds > 0 {
@@ -29,7 +29,7 @@ pub async fn trainers(State(st): State<AppState>) -> ApiResult<Json<TrainersView
             out.push(TrainerView {
                 id: t.id.clone(),
                 last_seen: t.last_seen,
-                online: now - t.last_seen <= online_window,
+                online: bqs_core::is_online(t.last_seen, now, online_window),
                 variant: t.variant.clone(),
                 data_kind: data_kind_name(t.kind).to_string(),
                 consumed_key: t.consumed_key.clone(),
@@ -59,8 +59,6 @@ pub async fn trainers(State(st): State<AppState>) -> ApiResult<Json<TrainersView
         })
     })
     .await
-    .map_err(|e| ApiError::internal(format!("join: {e}")))??;
-    Ok(Json(view))
 }
 
 pub async fn train_config_get(State(st): State<AppState>) -> ApiResult<Json<TrainConfigView>> {

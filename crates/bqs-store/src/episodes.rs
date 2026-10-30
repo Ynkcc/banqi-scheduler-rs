@@ -1,8 +1,8 @@
+use bqs_core::CoreResult;
 use bqs_core::ports::{
     EpisodeDataStats, EpisodeRateEstimate, EpisodeStore, GenerationStats, KindStats,
 };
 use bqs_core::types::{Episode, EpisodeDraft};
-use bqs_core::CoreResult;
 
 use std::collections::BTreeMap;
 
@@ -12,8 +12,18 @@ use rusqlite::OptionalExtension;
 
 pub(crate) const KIND_NONE: i64 = 2;
 
-const EPISODE_COLUMNS: &str =
-    "id, worker_id, task_id, network_sha, game_count, total_steps, winner, \
+pub const EPISODE_PAGE_DEFAULT_LIMIT: i64 = 100;
+pub const EPISODE_PAGE_MAX_LIMIT: i64 = 500;
+
+pub fn clamp_episode_page_limit(limit: i64) -> i64 {
+    if limit <= 0 || limit > EPISODE_PAGE_MAX_LIMIT {
+        EPISODE_PAGE_DEFAULT_LIMIT
+    } else {
+        limit
+    }
+}
+
+const EPISODE_COLUMNS: &str = "id, worker_id, task_id, network_sha, game_count, total_steps, winner, \
      object_key, created_at, kind, opponent_sha, opponent_spec, match_id, \
      red_wins, black_wins, draw_no_capture, draw_truncation";
 
@@ -99,31 +109,24 @@ impl EpisodeStore for Store {
                 "SELECT object_key FROM episodes
 				 WHERE id > COALESCE((SELECT id FROM episodes WHERE object_key = ?), 0) AND kind != ?"
             );
-            if kind.is_some() {
+
+            let mut args: Vec<Box<dyn rusqlite::ToSql>> =
+                vec![Box::new(after_key.to_string()), Box::new(KIND_NONE)];
+            if let Some(k) = kind {
                 query.push_str(" AND kind = ?");
+                args.push(Box::new(k));
             }
             query.push_str(" ORDER BY id ASC LIMIT ?");
+            args.push(Box::new(limit));
             let mut stmt = conn.prepare(&query).map_err(StoreError::from)?;
-            match kind {
-                Some(k) => {
-                    let rows = stmt
-                        .query_map(rusqlite::params![after_key, KIND_NONE, k, limit], |row| {
-                            row.get::<_, String>(0)
-                        })
-                        .map_err(StoreError::from)?;
-                    rows.collect::<Result<Vec<_>, _>>()
-                        .map_err(StoreError::from)
-                }
-                None => {
-                    let rows = stmt
-                        .query_map(rusqlite::params![after_key, KIND_NONE, limit], |row| {
-                            row.get::<_, String>(0)
-                        })
-                        .map_err(StoreError::from)?;
-                    rows.collect::<Result<Vec<_>, _>>()
-                        .map_err(StoreError::from)
-                }
-            }
+            let rows = stmt
+                .query_map(
+                    rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())),
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(StoreError::from)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         })
     }
 
@@ -140,25 +143,23 @@ impl EpisodeStore for Store {
     }
 
     fn list_episodes_page(&self, before_id: i64, limit: i64) -> CoreResult<Vec<Episode>> {
-        let limit = if limit <= 0 || limit > 500 {
-            100
-        } else {
-            limit
-        };
+        let limit = clamp_episode_page_limit(limit);
         self.with_conn(|conn| {
             let mut query = format!("SELECT {EPISODE_COLUMNS} FROM episodes");
+            let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
             if before_id > 0 {
                 query.push_str(" WHERE id < ?");
+                args.push(Box::new(before_id));
             }
             query.push_str(" ORDER BY id DESC LIMIT ?");
+            args.push(Box::new(limit));
             let mut stmt = conn.prepare(&query).map_err(StoreError::from)?;
-            let rows = if before_id > 0 {
-                stmt.query_map(rusqlite::params![before_id, limit], scan_episode_row)
-                    .map_err(StoreError::from)?
-            } else {
-                stmt.query_map(rusqlite::params![limit], scan_episode_row)
-                    .map_err(StoreError::from)?
-            };
+            let rows = stmt
+                .query_map(
+                    rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())),
+                    scan_episode_row,
+                )
+                .map_err(StoreError::from)?;
             rows.collect::<Result<Vec<_>, _>>()
                 .map_err(StoreError::from)
         })
@@ -197,13 +198,16 @@ impl EpisodeStore for Store {
                     },
                 ))
             };
-            let rows = if window_secs > 0 {
-                let cutoff = self.now() - window_secs;
-                stmt.query_map(rusqlite::params![cutoff], scan)
-                    .map_err(StoreError::from)?
-            } else {
-                stmt.query_map([], scan).map_err(StoreError::from)?
-            };
+            let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            if window_secs > 0 {
+                args.push(Box::new(self.now() - window_secs));
+            }
+            let rows = stmt
+                .query_map(
+                    rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())),
+                    scan,
+                )
+                .map_err(StoreError::from)?;
             for row in rows {
                 let (id, st) = row.map_err(StoreError::from)?;
                 out.insert(id, st);

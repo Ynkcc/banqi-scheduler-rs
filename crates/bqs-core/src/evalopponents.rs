@@ -31,7 +31,7 @@ pub fn validate_eval_opponents(opponents: &[String]) -> Result<(), String> {
                     "未知评估对手 {other:?}（可选 {EVAL_OPPONENT_RANDOM} / \
                      {EVAL_OPPONENT_REVEAL_FIRST} / {EVAL_OPPONENT_CAPTURE_FIRST} / \
                      {EVAL_OPPONENT_MATERIAL_EXPECTIMAX}）"
-                ))
+                ));
             }
         }
     }

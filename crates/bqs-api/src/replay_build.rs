@@ -1,5 +1,3 @@
-
-
 use bq_env::config::Variant;
 use bq_env::types::{Piece, PieceType, Player, Slot};
 use bq_env::{PositionSnapshot, SnapshotEnv};
@@ -9,7 +7,6 @@ use bqs_core::types::Episode;
 use bqs_proto::{EpisodeBatch, GameRecord};
 
 use crate::views::{HiddenBagView, ReplayGameView, ReplayStepView};
-
 
 fn action_to_coords(rows: usize, cols: usize) -> Vec<(usize, usize)> {
     let n = rows * cols;
@@ -45,7 +42,6 @@ fn action_to_coords(rows: usize, cols: usize) -> Vec<(usize, usize)> {
     }
     out
 }
-
 
 fn f32_at(b: &[u8], i: usize) -> f32 {
     let s = i * 4;
@@ -83,10 +79,13 @@ fn piece_from_layout_byte(b: u8) -> Option<Piece> {
         PieceType::Advisor,
         PieceType::General,
     ][(b & 0x7) as usize];
-    let pl = if (b >> 3) & 1 == 0 { Player::Red } else { Player::Black };
+    let pl = if (b >> 3) & 1 == 0 {
+        Player::Red
+    } else {
+        Player::Black
+    };
     Some(Piece::new(ty, pl))
 }
-
 
 fn hidden_identity(snap: &PositionSnapshot, sq: usize, layout: Option<&[Piece]>) -> Option<Piece> {
     snap.true_board
@@ -95,7 +94,6 @@ fn hidden_identity(snap: &PositionSnapshot, sq: usize, layout: Option<&[Piece]>)
         .copied()
         .or_else(|| layout.and_then(|l| l.get(sq)).copied())
 }
-
 
 fn decode_snapshots(rec: &GameRecord, steps: usize) -> Result<Vec<PositionSnapshot>, String> {
     if rec.snapshots.len() != steps {
@@ -111,7 +109,6 @@ fn decode_snapshots(rec: &GameRecord, steps: usize) -> Result<Vec<PositionSnapsh
         .collect()
 }
 
-
 pub fn build_game(
     batch: &EpisodeBatch,
     ep: &Episode,
@@ -125,15 +122,11 @@ pub fn build_game(
         ));
     }
     let rec = &batch.records[index];
-    let variant: Variant = batch
-        .variant
-        .parse()
-        .map_err(|e| format!("replay: {e}"))?;
+    let variant: Variant = batch.variant.parse().map_err(|e| format!("replay: {e}"))?;
     let cfg = variant.config();
     let positions = cfg.total_positions;
     let steps = rec.steps as usize;
     let table = action_to_coords(cfg.rows, cfg.cols);
-
 
     let layout: Option<Vec<Piece>> = if rec.initial_layout.len() == positions {
         Some(
@@ -147,14 +140,16 @@ pub fn build_game(
         None
     };
 
-
     let snaps = decode_snapshots(rec, steps)?;
-
 
     let mut actions = Vec::with_capacity(steps);
     for i in 0..steps {
         actions.push(u16_at(&rec.actions, i).ok_or_else(|| {
-            format!("replay: actions 字节数 {} != steps*2={}", rec.actions.len(), steps * 2)
+            format!(
+                "replay: actions 字节数 {} != steps*2={}",
+                rec.actions.len(),
+                steps * 2
+            )
         })?);
     }
     if rec.players.len() != steps {
@@ -165,7 +160,6 @@ pub fn build_game(
         ));
     }
     let players_i8 = |i: usize| rec.players[i] as i8;
-
 
     let final_snapshot: Option<Vec<u8>> = if steps > 0 {
         let last_pre = &snaps[steps - 1];
@@ -182,7 +176,6 @@ pub fn build_game(
         None
     };
 
-
     let mut moves = Vec::with_capacity(steps);
     for (ply, &action) in actions.iter().enumerate() {
         let Some((from, to)) = table.get(action as usize).copied() else {
@@ -193,7 +186,6 @@ pub fn build_game(
         };
         let pre = &snaps[ply];
         let (is_flip, is_chance, revealed, captured) = if (action as usize) < positions {
-
             if !matches!(pre.slots[to], Slot::Hidden) {
                 return Err(format!("replay: step {ply} 翻棋目标 {to} 与快照明暗不符"));
             }
@@ -202,7 +194,9 @@ pub fn build_game(
             (true, true, Some(id.short_name()), None)
         } else {
             if !matches!(pre.slots[from], Slot::Revealed(_)) {
-                return Err(format!("replay: step {ply} 起点格 {from} 与快照不符（无棋子）"));
+                return Err(format!(
+                    "replay: step {ply} 起点格 {from} 与快照不符（无棋子）"
+                ));
             }
             match pre.slots[to] {
                 Slot::Empty => (false, false, None, None),
@@ -212,13 +206,15 @@ pub fn build_game(
 
                     (false, true, Some(id.short_name()), Some(id.short_name()))
                 }
-                Slot::Revealed(victim) => {
-                    (false, false, None, Some(victim.short_name()))
-                }
+                Slot::Revealed(victim) => (false, false, None, Some(victim.short_name())),
             }
         };
         moves.push(ReplayMove {
-            player: if players_i8(ply) < 0 { "Black".into() } else { "Red".into() },
+            player: if players_i8(ply) < 0 {
+                "Black".into()
+            } else {
+                "Red".into()
+            },
             action: action as usize,
             from,
             to,
@@ -241,7 +237,6 @@ pub fn build_game(
     };
     let game = bq_replay::build_replay(&input)?;
 
-
     let policy_offsets: Vec<u32> = (0..=steps + 1)
         .take_while(|&i| i * 4 + 4 <= rec.labeler_policy_offsets.len())
         .map(|i| u32_at(&rec.labeler_policy_offsets, i))
@@ -254,7 +249,14 @@ pub fn build_game(
     for (ply, m) in game.moves.iter().enumerate() {
         let action = actions[ply];
         let st = &m;
-        let ReplayStep { board, revealed_at, hidden_bag, scores, kind, .. } = st;
+        let ReplayStep {
+            board,
+            revealed_at,
+            hidden_bag,
+            scores,
+            kind,
+            ..
+        } = st;
 
         let move_counter = if *kind == bq_replay::StepKind::Move {
             st.move_counter.saturating_sub(1)
@@ -340,7 +342,6 @@ pub fn build_game(
         labeler_agree /= labeler_total as f64;
     }
 
-
     let red_is_a = steps > 0 && players_i8(0) > 0;
     Ok(ReplayGameView {
         index,
@@ -373,7 +374,6 @@ pub fn build_game(
     })
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,10 +381,8 @@ mod tests {
     use bq_env::GameEnv;
     use prost::Message;
 
-
     fn synth_record(steps: usize, with_diags: bool) -> (GameRecord, Vec<Vec<u8>>) {
         let mut env = DarkChessEnv::default();
-
 
         let mut initial_layout: Vec<u8> = Vec::with_capacity(32);
         for player in [0u8, 1u8] {
@@ -394,7 +392,6 @@ mod tests {
                 initial_layout.extend(std::iter::repeat_n(player << 3 | ty, count));
             }
         }
-        let cfg = Variant::DarkChess4x8.config();
         let mut actions = Vec::new();
         let mut players = Vec::new();
         let mut snapshots = Vec::new();
@@ -418,9 +415,22 @@ mod tests {
             }
             let action = *env.legal_actions().first().unwrap();
             snapshots.push(env.to_snapshot().encode());
-            hidden_counts.extend_from_slice(&(env.to_snapshot().slots.iter().filter(|s| matches!(s, Slot::Hidden)).count() as u32).to_le_bytes());
+            hidden_counts.extend_from_slice(
+                &(env
+                    .to_snapshot()
+                    .slots
+                    .iter()
+                    .filter(|s| matches!(s, Slot::Hidden))
+                    .count() as u32)
+                    .to_le_bytes(),
+            );
             actions.extend_from_slice(&(action as u16).to_le_bytes());
-            players.push(if env.to_snapshot().current_player == Player::Red { 1u8 } else { 0xFF });            producers.push(0u8);
+            players.push(if env.to_snapshot().current_player == Player::Red {
+                1u8
+            } else {
+                0xFF
+            });
+            producers.push(0u8);
             if with_diags {
                 value_labels.extend_from_slice(&0.25f32.to_le_bytes());
                 own_values.extend_from_slice(&(-0.5f32).to_le_bytes());
@@ -575,7 +585,6 @@ mod tests {
 
     #[test]
     fn proto_roundtrip_preserves_fields() {
-
         let (rec, _) = synth_record(5, true);
         let b = batch(rec);
         let bytes = b.encode_to_vec();

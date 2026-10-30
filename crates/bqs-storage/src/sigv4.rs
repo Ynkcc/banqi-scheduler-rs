@@ -210,14 +210,8 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 mod tests {
     use super::*;
     use crate::StorageProfile;
-    use bqs_core::ports::Clock;
 
-    struct FixedClock(i64);
-    impl Clock for FixedClock {
-        fn now(&self) -> i64 {
-            self.0
-        }
-    }
+    use bqs_core::test_support::FakeClock;
 
     fn profile() -> StorageProfile {
         StorageProfile {
@@ -232,7 +226,7 @@ mod tests {
     }
 
     fn presigner() -> SigV4 {
-        SigV4::from_profile(&profile(), Arc::new(FixedClock(1_700_000_000))).unwrap()
+        SigV4::from_profile(&profile(), FakeClock::new(1_700_000_000)).unwrap()
     }
 
     #[test]
@@ -274,9 +268,10 @@ mod tests {
         assert_eq!(pairs[4], "X-Amz-SignedHeaders=host");
         let sig = pairs[5].strip_prefix("X-Amz-Signature=").unwrap();
         assert_eq!(sig.len(), 64);
-        assert!(sig
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase() || c.is_ascii_digit()));
+        assert!(
+            sig.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase() || c.is_ascii_digit())
+        );
     }
 
     #[test]
@@ -284,7 +279,7 @@ mod tests {
         let mut p = profile();
         p.endpoint = "http://127.0.0.1:9000".into();
         p.path_style = true;
-        let s = SigV4::from_profile(&p, Arc::new(FixedClock(1_700_000_000))).unwrap();
+        let s = SigV4::from_profile(&p, FakeClock::new(1_700_000_000)).unwrap();
         let url = s.presign("PUT", "networks/sha1.onnx", 3600).unwrap();
         assert_eq!(
             url.split('?').next().unwrap(),
@@ -331,7 +326,7 @@ mod tests {
 
         let mut p2 = profile();
         p2.secret_key = "OTHER".into();
-        let s2 = SigV4::from_profile(&p2, Arc::new(FixedClock(1_700_000_000))).unwrap();
+        let s2 = SigV4::from_profile(&p2, FakeClock::new(1_700_000_000)).unwrap();
         assert_ne!(base, sig_of(&s2.presign("GET", "k/1", 600).unwrap()));
     }
 
@@ -358,7 +353,7 @@ mod tests {
     fn endpoint_and_ttl_validation() {
         let mut p = profile();
         p.endpoint = "minio.local:9000".into();
-        let s = SigV4::from_profile(&p, Arc::new(FixedClock(0))).unwrap();
+        let s = SigV4::from_profile(&p, FakeClock::new(0)).unwrap();
         assert_eq!(
             s.presign("GET", "k", 60)
                 .unwrap()
@@ -369,7 +364,7 @@ mod tests {
         );
 
         p.endpoint = String::new();
-        let s = SigV4::from_profile(&p, Arc::new(FixedClock(0))).unwrap();
+        let s = SigV4::from_profile(&p, FakeClock::new(0)).unwrap();
         assert_eq!(
             s.presign("GET", "k", 60)
                 .unwrap()
@@ -384,7 +379,7 @@ mod tests {
 
         let mut p2 = profile();
         p2.bucket = String::new();
-        assert!(SigV4::from_profile(&p2, Arc::new(FixedClock(0))).is_err());
+        assert!(SigV4::from_profile(&p2, FakeClock::new(0)).is_err());
     }
 
     #[test]

@@ -6,6 +6,7 @@ description = "banqi-scheduler WebUI JSON API：axum HTTP 服务（JSON 字段�
 
 [dependencies]
 bqs-core = { workspace = true }
+bqs-store = { workspace = true }
 bqs-storage = { workspace = true }
 bqs-proto = { workspace = true }
 prost = { workspace = true }

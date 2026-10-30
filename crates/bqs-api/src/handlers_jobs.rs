@@ -1,125 +1,18 @@
-use axum::extract::{Path, Query, State};
 use axum::Json;
+use axum::extract::{Path, Query, State};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use bqs_core::data_kind;
 use bqs_core::jobs::{
-    CollectSpecJson, EvalSpecJson, JobSpecJson, RatingSpecJson, SearchSpecJson, SelfPlaySpecJson,
+    CollectSpecJson, JobSpecJson, PlayerSpecJson, RatingSpecJson, SearchSpecJson, SeedStrategyJson,
+    SelfPlaySpecJson,
 };
 use bqs_proto::{
-    CollectPlayerSpec, CollectionJobSpec, EvalJobSpec, JobKind, RatingJobSpec, SeedStrategy,
-    SelfPlayJobSpec, SubmitJobRequest,
+    CollectionJobSpec, JobKind, RatingJobSpec, SeedStrategy, SelfPlayJobSpec, SubmitJobRequest,
 };
 
 use crate::{ApiError, ApiResult, AppState};
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct SearchParamsBody {
-    pub mcts_sims: u32,
-    pub mcts_max_considered_actions: u32,
-    pub mcts_c_scale: f64,
-    pub mcts_gumbel_scale: f64,
-    pub temperature: f32,
-    pub playout_cap_random: bool,
-    pub expectimax_node_budget: u64,
-    pub expectimax_max_depth: u32,
-
-    pub labeler_mode: String,
-    pub labeler_budget_mult: u32,
-    pub expl_enabled: bool,
-    pub expl_topk: u32,
-    pub expl_temp_start: f64,
-    pub expl_temp_end: f64,
-    pub expl_temp_decay_steps: u32,
-}
-
-impl SearchParamsBody {
-    fn to_proto(&self) -> Option<bqs_proto::CollectSearchParams> {
-        let all_zero = self.mcts_sims == 0
-            && self.mcts_max_considered_actions == 0
-            && self.mcts_c_scale == 0.0
-            && self.mcts_gumbel_scale == 0.0
-            && self.temperature == 0.0
-            && !self.playout_cap_random
-            && self.expectimax_node_budget == 0
-            && self.expectimax_max_depth == 0
-            && self.labeler_mode.is_empty()
-            && self.labeler_budget_mult == 0
-            && !self.expl_enabled
-            && self.expl_topk == 0
-            && self.expl_temp_start == 0.0
-            && self.expl_temp_end == 0.0
-            && self.expl_temp_decay_steps == 0;
-        if all_zero {
-            return None;
-        }
-        Some(bqs_proto::CollectSearchParams {
-            mcts_sims: self.mcts_sims,
-            mcts_max_considered_actions: self.mcts_max_considered_actions,
-            mcts_c_scale: self.mcts_c_scale,
-            mcts_gumbel_scale: self.mcts_gumbel_scale,
-            temperature: self.temperature,
-            playout_cap_random: self.playout_cap_random,
-            expectimax_node_budget: self.expectimax_node_budget,
-            expectimax_max_depth: self.expectimax_max_depth,
-            labeler_mode: self.labeler_mode.clone(),
-            labeler_budget_mult: self.labeler_budget_mult,
-            expl_enabled: self.expl_enabled,
-            expl_topk: self.expl_topk,
-            expl_temp_start: self.expl_temp_start,
-            expl_temp_end: self.expl_temp_end,
-            expl_temp_decay_steps: self.expl_temp_decay_steps,
-        })
-    }
-
-    fn from_json(s: &Option<SearchSpecJson>) -> Option<Self> {
-        let s = s.as_ref()?;
-        Some(Self {
-            mcts_sims: s.mcts_sims,
-            mcts_max_considered_actions: s.mcts_max_considered_actions,
-            mcts_c_scale: s.mcts_c_scale,
-            mcts_gumbel_scale: s.mcts_gumbel_scale,
-            temperature: s.temperature,
-            playout_cap_random: s.playout_cap_random,
-            expectimax_node_budget: s.expectimax_node_budget,
-            expectimax_max_depth: s.expectimax_max_depth,
-            labeler_mode: s.labeler_mode.clone(),
-            labeler_budget_mult: s.labeler_budget_mult,
-            expl_enabled: s.expl_enabled,
-            expl_topk: s.expl_topk,
-            expl_temp_start: s.expl_temp_start,
-            expl_temp_end: s.expl_temp_end,
-            expl_temp_decay_steps: s.expl_temp_decay_steps,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct PlayerBody {
-    pub kind: String,
-    pub network_sha: String,
-    pub search: Option<SearchParamsBody>,
-}
-
-impl PlayerBody {
-    fn to_proto(&self) -> CollectPlayerSpec {
-        CollectPlayerSpec {
-            kind: self.kind.clone(),
-            network_sha: self.network_sha.clone(),
-            search: self.search.as_ref().and_then(|s| s.to_proto()),
-        }
-    }
-
-    fn from_json(p: &bqs_core::jobs::PlayerSpecJson) -> Self {
-        Self {
-            kind: p.kind.clone(),
-            network_sha: p.network_sha.clone(),
-            search: SearchParamsBody::from_json(&p.search),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -133,16 +26,17 @@ pub struct SeedStrategyBody {
 
 impl SeedStrategyBody {
     fn to_proto(&self) -> Result<SeedStrategy, String> {
-        let kind =
-            match self.kind.as_str() {
-                "fixed" => bqs_proto::SeedStrategyKind::SeedFixed as i32,
-                "random" => bqs_proto::SeedStrategyKind::SeedRandom as i32,
-                "incremental" => bqs_proto::SeedStrategyKind::SeedIncremental as i32,
-                "range" => bqs_proto::SeedStrategyKind::SeedRange as i32,
-                other => return Err(format!(
+        let kind = match self.kind.as_str() {
+            "fixed" => bqs_proto::SeedStrategyKind::SeedFixed as i32,
+            "random" => bqs_proto::SeedStrategyKind::SeedRandom as i32,
+            "incremental" => bqs_proto::SeedStrategyKind::SeedIncremental as i32,
+            "range" => bqs_proto::SeedStrategyKind::SeedRange as i32,
+            other => {
+                return Err(format!(
                     "unknown seedStrategy.kind \"{other}\"（可选 fixed/random/incremental/range）"
-                )),
-            };
+                ));
+            }
+        };
         Ok(SeedStrategy {
             kind,
             fixed_seed: self.fixed_seed,
@@ -152,7 +46,7 @@ impl SeedStrategyBody {
         })
     }
 
-    fn from_json(s: &bqs_core::jobs::SeedStrategyJson) -> Self {
+    fn from_json(s: &SeedStrategyJson) -> Self {
         let kind = match bqs_proto::SeedStrategyKind::try_from(s.kind) {
             Ok(bqs_proto::SeedStrategyKind::SeedFixed) => "fixed",
             Ok(bqs_proto::SeedStrategyKind::SeedRandom) => "random",
@@ -177,8 +71,8 @@ pub struct CollectBody {
 
     pub scenario: String,
     pub seed_strategy: SeedStrategyBody,
-    pub player_a: PlayerBody,
-    pub player_b: PlayerBody,
+    pub player_a: PlayerSpecJson,
+    pub player_b: PlayerSpecJson,
 
     pub data_kind: String,
     pub total_games: u64,
@@ -192,10 +86,10 @@ impl CollectBody {
             other => {
                 return Err(format!(
                     "unknown scenario \"{other}\"（可选 standard/all_revealed）"
-                ))
+                ));
             }
         };
-        let data_kind = parse_data_kind(&self.data_kind)?;
+        let data_kind = data_kind::parse(&self.data_kind).map(data_kind::to_proto)?;
         Ok(CollectionJobSpec {
             variant: self.variant.clone(),
             scenario,
@@ -215,9 +109,9 @@ impl CollectBody {
                 _ => "standard".into(),
             },
             seed_strategy: SeedStrategyBody::from_json(&c.seed_strategy),
-            player_a: PlayerBody::from_json(&c.player_a),
-            player_b: PlayerBody::from_json(&c.player_b),
-            data_kind: data_kind_name(c.data_kind).into(),
+            player_a: c.player_a.clone(),
+            player_b: c.player_b.clone(),
+            data_kind: data_kind::display_name(c.data_kind as i64).into(),
             total_games: c.total_games,
         }
     }
@@ -227,11 +121,12 @@ impl CollectBody {
 #[serde(default, rename_all = "camelCase")]
 pub struct SelfPlayBody {
     pub variant: String,
+
     pub data_kind: String,
     pub network_sha: String,
     pub opponent_sha: String,
     pub mix_ratio: f64,
-    pub search: Option<SearchParamsBody>,
+    pub search: Option<SearchSpecJson>,
 
     pub total_games: u64,
 }
@@ -240,7 +135,7 @@ impl SelfPlayBody {
     fn to_proto(&self) -> Result<SelfPlayJobSpec, String> {
         Ok(SelfPlayJobSpec {
             variant: self.variant.clone(),
-            data_kind: parse_data_kind(&self.data_kind)?,
+            data_kind: data_kind::parse(&self.data_kind).map(data_kind::to_proto)?,
             network_sha: self.network_sha.clone(),
             opponent_sha: self.opponent_sha.clone(),
             mix_ratio: self.mix_ratio,
@@ -252,50 +147,30 @@ impl SelfPlayBody {
     fn from_json(s: &SelfPlaySpecJson) -> Self {
         Self {
             variant: s.variant.clone(),
-            data_kind: data_kind_name(s.data_kind).into(),
+            data_kind: data_kind::display_name(s.data_kind as i64).into(),
             network_sha: s.network_sha.clone(),
             opponent_sha: s.opponent_sha.clone(),
             mix_ratio: s.mix_ratio,
-            search: SearchParamsBody::from_json(&s.search),
+            search: s.search.clone(),
             total_games: s.total_games,
         }
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct EvalBody {
-    pub variant: String,
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RatingStatsView {
+    pub ll: i64,
+    pub ld: i64,
+    pub dd: i64,
+    pub wl: i64,
+    pub dw: i64,
+    pub ww: i64,
+    pub num_games: i64,
+    pub match_status: String,
 
-    pub network_sha: String,
-    pub opponent_kind: String,
-    pub opponent_network_sha: String,
-    pub search: Option<SearchParamsBody>,
-    pub total_games: u64,
-}
-
-impl EvalBody {
-    fn to_proto(&self) -> Result<EvalJobSpec, String> {
-        Ok(EvalJobSpec {
-            variant: self.variant.clone(),
-            network_sha: self.network_sha.clone(),
-            opponent_kind: self.opponent_kind.clone(),
-            opponent_network_sha: self.opponent_network_sha.clone(),
-            search: self.search.as_ref().and_then(|s| s.to_proto()),
-            total_games: self.total_games,
-        })
-    }
-
-    fn from_json(e: &EvalSpecJson) -> Self {
-        Self {
-            variant: e.variant.clone(),
-            network_sha: e.network_sha.clone(),
-            opponent_kind: e.opponent_kind.clone(),
-            opponent_network_sha: e.opponent_network_sha.clone(),
-            search: SearchParamsBody::from_json(&e.search),
-            total_games: e.total_games,
-        }
-    }
+    pub side_a_kind: String,
+    pub side_b_kind: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -314,9 +189,9 @@ pub struct RatingBody {
     pub sprt_alpha: f64,
     pub sprt_beta: f64,
 
-    pub side_a: Option<PlayerBody>,
+    pub side_a: Option<PlayerSpecJson>,
 
-    pub side_b: Option<PlayerBody>,
+    pub side_b: Option<PlayerSpecJson>,
 }
 
 impl RatingBody {
@@ -346,8 +221,8 @@ impl RatingBody {
             sprt_elo1: r.sprt_elo1,
             sprt_alpha: r.sprt_alpha,
             sprt_beta: r.sprt_beta,
-            side_a: Some(PlayerBody::from_json(&side_a)),
-            side_b: Some(PlayerBody::from_json(&side_b)),
+            side_a: Some(side_a),
+            side_b: Some(side_b),
         }
     }
 }
@@ -361,24 +236,8 @@ pub struct SubmitJobBody {
     pub requester: String,
     pub collect: Option<CollectBody>,
     pub selfplay: Option<SelfPlayBody>,
-    pub eval: Option<EvalBody>,
+    pub eval: Option<bqs_core::jobs::EvalSpecJson>,
     pub rating: Option<RatingBody>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RatingStatsView {
-    pub ll: i64,
-    pub ld: i64,
-    pub dd: i64,
-    pub wl: i64,
-    pub dw: i64,
-    pub ww: i64,
-    pub num_games: i64,
-    pub match_status: String,
-
-    pub side_a_kind: String,
-    pub side_b_kind: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -437,20 +296,19 @@ fn kind_name(k: JobKind) -> &'static str {
     }
 }
 
-fn parse_data_kind(s: &str) -> Result<i32, String> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "resnet" | "onnx" => Ok(bqs_proto::DataKind::DataResnet as i32),
-        "nnue" => Ok(bqs_proto::DataKind::DataNnue as i32),
-        other => Err(format!("未知数据类别 {other:?}（可选 resnet / nnue）")),
-    }
+fn take_spec<T>(spec: Option<T>, kind: &str) -> Result<T, ApiError> {
+    spec.ok_or_else(|| ApiError::bad_request(format!("kind={kind} 需要 {kind} 规格")))
 }
 
-fn data_kind_name(k: i32) -> &'static str {
-    if k == bqs_proto::DataKind::DataNnue as i32 {
-        "nnue"
-    } else {
-        "resnet"
+fn spec_echo(parsed: Option<&JobSpecJson>) -> serde_json::Value {
+    match parsed {
+        Some(JobSpecJson::Collect(c)) => serde_json::to_value(CollectBody::from_json(c)),
+        Some(JobSpecJson::SelfPlay(s)) => serde_json::to_value(SelfPlayBody::from_json(s)),
+        Some(JobSpecJson::Eval(e)) => serde_json::to_value(e),
+        Some(JobSpecJson::Rating(rt)) => serde_json::to_value(RatingBody::from_json(rt)),
+        None => Ok(serde_json::Value::Null),
     }
+    .unwrap_or(serde_json::Value::Null)
 }
 
 pub async fn submit_job(
@@ -466,8 +324,7 @@ pub async fn submit_job(
         priority: body.priority,
         collect: match kind {
             JobKind::JobCollect => Some(
-                body.collect
-                    .ok_or_else(|| ApiError::bad_request("kind=collect 需要 collect 规格"))?
+                take_spec(body.collect, "collect")?
                     .to_proto()
                     .map_err(ApiError::bad_request)?,
             ),
@@ -475,28 +332,18 @@ pub async fn submit_job(
         },
         selfplay: match kind {
             JobKind::JobSelfplay => Some(
-                body.selfplay
-                    .ok_or_else(|| ApiError::bad_request("kind=selfplay 需要 selfplay 规格"))?
+                take_spec(body.selfplay, "selfplay")?
                     .to_proto()
                     .map_err(ApiError::bad_request)?,
             ),
             _ => None,
         },
         eval: match kind {
-            JobKind::JobEval => Some(
-                body.eval
-                    .ok_or_else(|| ApiError::bad_request("kind=eval 需要 eval 规格"))?
-                    .to_proto()
-                    .map_err(ApiError::bad_request)?,
-            ),
+            JobKind::JobEval => Some(take_spec(body.eval, "eval")?.to_proto()),
             _ => None,
         },
         rating: match kind {
-            JobKind::JobRating => Some(
-                body.rating
-                    .ok_or_else(|| ApiError::bad_request("kind=rating 需要 rating 规格"))?
-                    .to_proto(),
-            ),
+            JobKind::JobRating => Some(take_spec(body.rating, "rating")?.to_proto()),
             _ => None,
         },
     };
@@ -544,14 +391,7 @@ pub async fn list_jobs(
         .iter()
         .map(|r| {
             let parsed = JobSpecJson::parse(&r.spec_json);
-            let spec = match &parsed {
-                Some(JobSpecJson::Collect(c)) => serde_json::to_value(CollectBody::from_json(c)),
-                Some(JobSpecJson::SelfPlay(s)) => serde_json::to_value(SelfPlayBody::from_json(s)),
-                Some(JobSpecJson::Eval(e)) => serde_json::to_value(EvalBody::from_json(e)),
-                Some(JobSpecJson::Rating(rt)) => serde_json::to_value(RatingBody::from_json(rt)),
-                None => Ok(serde_json::Value::Null),
-            }
-            .unwrap_or(serde_json::Value::Null);
+            let spec = spec_echo(parsed.as_ref());
 
             let rating_stats = match (&parsed, JobKind::try_from(r.kind as i32)) {
                 (Some(JobSpecJson::Rating(rt)), Ok(JobKind::JobRating)) if rt.match_id != 0 => st
@@ -608,7 +448,7 @@ pub async fn control_job(
         other => {
             return Err(ApiError::bad_request(format!(
                 "未知控制动作 {other:?}（可选 pause / resume / cancel）"
-            )))
+            )));
         }
     }
     let (accepted, message, state) = st

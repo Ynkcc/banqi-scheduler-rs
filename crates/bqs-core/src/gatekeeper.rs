@@ -6,11 +6,11 @@ use bqs_judgment::{Hexanomial, Verdict};
 use bqs_proto::{MatchResult, MatchResultAck};
 
 use crate::{
+    CoreError, CoreResult,
     dispatch::RunningTask,
     evalcoord::EvalCoordinator,
     ports::{MatchStore, NetworkStore, Ports},
     types::network_status,
-    CoreError, CoreResult,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -188,7 +188,7 @@ mod tests {
     fn seeded(f: &Fakes) {
         f.networks.seed_network("old_best", None, "onnx");
         f.networks.seed_network("cand", Some("old_best"), "onnx");
-        f.networks.promote_best("old_best");
+        f.networks.promote_best("old_best").unwrap();
     }
 
     const CFG: &str =

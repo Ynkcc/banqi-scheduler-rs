@@ -1,4 +1,4 @@
-use crate::sprt::{judge, new_bounds, Hexanomial, Verdict};
+use crate::sprt::{Hexanomial, Verdict, judge, new_bounds};
 
 pub fn consecutive_no_progress(rates: &[f64], eps: f64) -> usize {
     let mut stale = 0;

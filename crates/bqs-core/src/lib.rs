@@ -6,6 +6,7 @@ pub mod variants;
 pub mod assembler;
 pub mod balance;
 pub mod control;
+pub mod data_kind;
 pub mod dispatch;
 pub mod evalcoord;
 pub mod evalopponents;
@@ -19,7 +20,7 @@ pub mod trainconfig;
 
 pub mod server;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 pub mod test_support;
 
 #[derive(Debug, thiserror::Error)]
@@ -33,3 +34,7 @@ pub enum CoreError {
 }
 
 pub type CoreResult<T> = Result<T, CoreError>;
+
+pub fn is_online(last_seen: i64, now: i64, window: i64) -> bool {
+    now - last_seen < window
+}

@@ -1,6 +1,6 @@
+use bqs_core::CoreResult;
 use bqs_core::ports::{EvalStore, StoreCounts};
 use bqs_core::types::{EvalDelta, EvalQueueEntry, EvalResult};
-use bqs_core::CoreResult;
 
 use crate::{Store, StoreError};
 

@@ -4,11 +4,11 @@ use std::sync::{Arc, Mutex};
 use bqs_config::{Config, DataKind};
 
 use crate::{
+    CoreError, CoreResult,
     evalcoord::{EvalOverride, SETTING_EVAL_PROMOTIONS},
     evalopponents::validate_eval_opponents,
     ports::{Ports, SettingsStore},
-    trainconfig::{TrainConfig, SETTING_TRAIN_CONFIG},
-    CoreError, CoreResult,
+    trainconfig::{SETTING_TRAIN_CONFIG, TrainConfig},
 };
 
 const SETTING_PAUSE_SELF_PLAY: &str = "pause_self_play";
@@ -23,11 +23,7 @@ const SETTING_EVAL_OVERRIDE: &str = "eval_override";
 pub type HotDataKind = DataKind;
 
 fn parse_data_kind(s: &str) -> Result<DataKind, String> {
-    match s {
-        "resnet" => Ok(DataKind::Resnet),
-        "nnue" => Ok(DataKind::Nnue),
-        other => Err(format!("未知数据类别 {other:?}（可选 resnet / nnue）")),
-    }
+    crate::data_kind::parse(s)
 }
 
 fn validation_error(msg: impl Into<String>) -> CoreError {

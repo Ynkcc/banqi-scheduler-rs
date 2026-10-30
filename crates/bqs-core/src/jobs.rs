@@ -9,35 +9,48 @@ use bqs_proto::{
 };
 
 use crate::{
-    consts,
+    CoreResult, consts,
     control::Control,
     dispatch::TaskDispatcher,
     ports::{Clock, JobRow, JobStore, MatchStore, NetworkStore},
-    CoreResult,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct SearchSpecJson {
+    #[serde(alias = "mcts_sims")]
     pub mcts_sims: u32,
+    #[serde(alias = "mcts_max_considered_actions")]
     pub mcts_max_considered_actions: u32,
+    #[serde(alias = "mcts_c_scale")]
     pub mcts_c_scale: f64,
+    #[serde(alias = "mcts_gumbel_scale")]
     pub mcts_gumbel_scale: f64,
     pub temperature: f32,
+    #[serde(alias = "playout_cap_random")]
     pub playout_cap_random: bool,
+    #[serde(alias = "expectimax_node_budget")]
     pub expectimax_node_budget: u64,
+    #[serde(alias = "expectimax_max_depth")]
     pub expectimax_max_depth: u32,
+    #[serde(alias = "labeler_mode")]
     pub labeler_mode: String,
+    #[serde(alias = "labeler_budget_mult")]
     pub labeler_budget_mult: u32,
+    #[serde(alias = "expl_enabled")]
     pub expl_enabled: bool,
+    #[serde(alias = "expl_topk")]
     pub expl_topk: u32,
+    #[serde(alias = "expl_temp_start")]
     pub expl_temp_start: f64,
+    #[serde(alias = "expl_temp_end")]
     pub expl_temp_end: f64,
+    #[serde(alias = "expl_temp_decay_steps")]
     pub expl_temp_decay_steps: u32,
 }
 
 impl SearchSpecJson {
-    fn from_proto(s: Option<CollectSearchParams>) -> Self {
+    pub fn from_proto(s: Option<CollectSearchParams>) -> Self {
         match s {
             Some(s) => Self {
                 mcts_sims: s.mcts_sims,
@@ -60,24 +73,27 @@ impl SearchSpecJson {
         }
     }
 
-    fn to_proto(&self) -> Option<CollectSearchParams> {
+    pub fn is_zero(&self) -> bool {
+        self.mcts_sims == 0
+            && self.mcts_max_considered_actions == 0
+            && self.mcts_c_scale == 0.0
+            && self.mcts_gumbel_scale == 0.0
+            && self.temperature == 0.0
+            && !self.playout_cap_random
+            && self.expectimax_node_budget == 0
+            && self.expectimax_max_depth == 0
+            && self.labeler_mode.is_empty()
+            && self.labeler_budget_mult == 0
+            && !self.expl_enabled
+            && self.expl_topk == 0
+            && self.expl_temp_start == 0.0
+            && self.expl_temp_end == 0.0
+            && self.expl_temp_decay_steps == 0
+    }
+
+    pub fn to_proto(&self) -> Option<CollectSearchParams> {
         let s = &self;
-        if s.mcts_sims == 0
-            && s.mcts_max_considered_actions == 0
-            && s.mcts_c_scale == 0.0
-            && s.mcts_gumbel_scale == 0.0
-            && s.temperature == 0.0
-            && !s.playout_cap_random
-            && s.expectimax_node_budget == 0
-            && s.expectimax_max_depth == 0
-            && s.labeler_mode.is_empty()
-            && s.labeler_budget_mult == 0
-            && !s.expl_enabled
-            && s.expl_topk == 0
-            && s.expl_temp_start == 0.0
-            && s.expl_temp_end == 0.0
-            && s.expl_temp_decay_steps == 0
-        {
+        if s.is_zero() {
             return None;
         }
         Some(CollectSearchParams {
@@ -101,15 +117,16 @@ impl SearchSpecJson {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct PlayerSpecJson {
     pub kind: String,
+    #[serde(alias = "network_sha")]
     pub network_sha: String,
     pub search: Option<SearchSpecJson>,
 }
 
 impl PlayerSpecJson {
-    fn from_proto(p: Option<CollectPlayerSpec>) -> Self {
+    pub fn from_proto(p: Option<CollectPlayerSpec>) -> Self {
         match p {
             Some(p) => Self {
                 kind: p.kind,
@@ -130,12 +147,16 @@ impl PlayerSpecJson {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct SeedStrategyJson {
     pub kind: i32,
+    #[serde(alias = "fixed_seed")]
     pub fixed_seed: u64,
+    #[serde(alias = "base_seed")]
     pub base_seed: u64,
+    #[serde(alias = "min_seed")]
     pub min_seed: u64,
+    #[serde(alias = "max_seed")]
     pub max_seed: u64,
 }
 
@@ -165,14 +186,19 @@ impl SeedStrategyJson {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct CollectSpecJson {
     pub variant: String,
     pub scenario: i32,
+    #[serde(alias = "seed_strategy")]
     pub seed_strategy: SeedStrategyJson,
+    #[serde(alias = "player_a")]
     pub player_a: PlayerSpecJson,
+    #[serde(alias = "player_b")]
     pub player_b: PlayerSpecJson,
+    #[serde(alias = "data_kind")]
     pub data_kind: i32,
+    #[serde(alias = "total_games")]
     pub total_games: u64,
 }
 
@@ -203,14 +229,19 @@ impl CollectSpecJson {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct SelfPlaySpecJson {
     pub variant: String,
+    #[serde(alias = "data_kind")]
     pub data_kind: i32,
+    #[serde(alias = "network_sha")]
     pub network_sha: String,
+    #[serde(alias = "opponent_sha")]
     pub opponent_sha: String,
+    #[serde(alias = "mix_ratio")]
     pub mix_ratio: f64,
     pub search: Option<SearchSpecJson>,
+    #[serde(alias = "total_games")]
     pub total_games: u64,
 }
 
@@ -241,13 +272,17 @@ impl SelfPlaySpecJson {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct EvalSpecJson {
     pub variant: String,
+    #[serde(alias = "network_sha")]
     pub network_sha: String,
+    #[serde(alias = "opponent_kind")]
     pub opponent_kind: String,
+    #[serde(alias = "opponent_network_sha")]
     pub opponent_network_sha: String,
     pub search: Option<SearchSpecJson>,
+    #[serde(alias = "total_games")]
     pub total_games: u64,
 }
 
@@ -276,18 +311,28 @@ impl EvalSpecJson {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct RatingSpecJson {
     pub variant: String,
+    #[serde(alias = "candidate_sha")]
     pub candidate_sha: String,
+    #[serde(alias = "opponent_sha")]
     pub opponent_sha: String,
+    #[serde(alias = "total_games")]
     pub total_games: u64,
+    #[serde(alias = "sprt_elo0")]
     pub sprt_elo0: f64,
+    #[serde(alias = "sprt_elo1")]
     pub sprt_elo1: f64,
+    #[serde(alias = "sprt_alpha")]
     pub sprt_alpha: f64,
+    #[serde(alias = "sprt_beta")]
     pub sprt_beta: f64,
+    #[serde(alias = "side_a")]
     pub side_a: PlayerSpecJson,
+    #[serde(alias = "side_b")]
     pub side_b: PlayerSpecJson,
+    #[serde(alias = "match_id")]
     pub match_id: i64,
 }
 
@@ -401,6 +446,23 @@ fn splitmix64(mut x: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+fn require_registered_sha(nets: &dyn NetworkStore, sha: &str, note: &str) -> Result<(), String> {
+    if sha.is_empty() {
+        return Ok(());
+    }
+    let registered = nets
+        .get_network(sha)
+        .map_err(|e| format!("查询网络登记失败: {e}"))?;
+    if registered.is_none() {
+        return Err(format!("network_not_registered sha={sha}{note}"));
+    }
+    Ok(())
+}
+
+fn check_model_sha(sha: &str, msg: String) -> Result<(), String> {
+    if sha.is_empty() { Ok(()) } else { Err(msg) }
+}
+
 fn validate_player(p: &PlayerSpecJson, nets: &dyn NetworkStore) -> Result<(), String> {
     let Some(kind) = bq_policy::player_kind::canonical(&p.kind) else {
         return Err(format!(
@@ -409,24 +471,17 @@ fn validate_player(p: &PlayerSpecJson, nets: &dyn NetworkStore) -> Result<(), St
             bq_policy::player_kind::PLAYER_KINDS.join("/")
         ));
     };
-    let is_model = bq_policy::player_kind::requires_model(kind);
-    if is_model {
+    if bq_policy::player_kind::requires_model(kind) {
         if p.network_sha.is_empty() {
             return Err(format!("player_kind={kind} 需要 network_sha"));
         }
-        let registered = nets
-            .get_network(&p.network_sha)
-            .map_err(|e| format!("查询网络登记失败: {e}"))?;
-        if registered.is_none() {
-            return Err(format!(
-                "network_not_registered sha={}（模型类棋手的网络必须已登记）",
-                p.network_sha
-            ));
-        }
-    } else if !p.network_sha.is_empty() {
-        return Err(format!("player_kind={kind} 的 network_sha 必须为空"));
+        require_registered_sha(nets, &p.network_sha, "（模型类棋手的网络必须已登记）")
+    } else {
+        check_model_sha(
+            &p.network_sha,
+            format!("player_kind={kind} 的 network_sha 必须为空"),
+        )
     }
-    Ok(())
 }
 
 fn validate_variant(v: &str) -> Result<(), String> {
@@ -493,6 +548,31 @@ impl JobManager {
         }
     }
 
+    fn insert_new_job(
+        &self,
+        kind: JobKind,
+        priority: i64,
+        total: i64,
+        spec: &JobSpecJson,
+    ) -> CoreResult<String> {
+        let job_id = crate::sources::new_id();
+        let now = self.now();
+        self.store.insert_job(JobRow {
+            job_id: job_id.clone(),
+            kind: kind as i64,
+            priority,
+            state: "running".into(),
+            total_games: total,
+            completed_games: 0,
+            dispatched_games: 0,
+            spec_json: spec.to_json(),
+            created_at: now,
+            updated_at: now,
+            next_seq: 0,
+        })?;
+        Ok(job_id)
+    }
+
     pub fn submit(&self, req: &SubmitJobRequest) -> CoreResult<(bool, String, String)> {
         let Ok(kind) = JobKind::try_from(req.kind) else {
             return Ok((
@@ -506,100 +586,90 @@ impl JobManager {
         } else {
             req.priority as i64
         };
-        let spec: JobSpecJson =
-            match kind {
-                JobKind::JobCollect => {
-                    let Some(c) = &req.collect else {
-                        return Ok((
-                            false,
-                            "collect spec required for JOB_COLLECT".into(),
-                            String::new(),
-                        ));
-                    };
-                    match self.validate_collect(c) {
-                        Ok(()) => JobSpecJson::Collect(CollectSpecJson::from_proto(c.clone())),
-                        Err(m) => return Ok((false, m, String::new())),
-                    }
+        let spec: JobSpecJson = match kind {
+            JobKind::JobCollect => {
+                let Some(c) = &req.collect else {
+                    return Ok((
+                        false,
+                        "collect spec required for JOB_COLLECT".into(),
+                        String::new(),
+                    ));
+                };
+                match self.validate_collect(c) {
+                    Ok(()) => JobSpecJson::Collect(CollectSpecJson::from_proto(c.clone())),
+                    Err(m) => return Ok((false, m, String::new())),
                 }
-                JobKind::JobSelfplay => {
-                    let Some(s) = &req.selfplay else {
-                        return Ok((
-                            false,
-                            "selfplay spec required for JOB_SELFPLAY".into(),
-                            String::new(),
-                        ));
-                    };
-                    match self.validate_selfplay(s) {
-                        Ok(()) => JobSpecJson::SelfPlay(SelfPlaySpecJson::from_proto(s.clone())),
-                        Err(m) => return Ok((false, m, String::new())),
-                    }
+            }
+            JobKind::JobSelfplay => {
+                let Some(s) = &req.selfplay else {
+                    return Ok((
+                        false,
+                        "selfplay spec required for JOB_SELFPLAY".into(),
+                        String::new(),
+                    ));
+                };
+                match self.validate_selfplay(s) {
+                    Ok(()) => JobSpecJson::SelfPlay(SelfPlaySpecJson::from_proto(s.clone())),
+                    Err(m) => return Ok((false, m, String::new())),
                 }
-                JobKind::JobEval => {
-                    let Some(e) = &req.eval else {
-                        return Ok((
-                            false,
-                            "eval spec required for JOB_EVAL".into(),
-                            String::new(),
-                        ));
-                    };
-                    match self.validate_eval(e) {
-                        Ok(()) => JobSpecJson::Eval(EvalSpecJson::from_proto(e.clone())),
-                        Err(m) => return Ok((false, m, String::new())),
-                    }
+            }
+            JobKind::JobEval => {
+                let Some(e) = &req.eval else {
+                    return Ok((
+                        false,
+                        "eval spec required for JOB_EVAL".into(),
+                        String::new(),
+                    ));
+                };
+                match self.validate_eval(e) {
+                    Ok(()) => JobSpecJson::Eval(EvalSpecJson::from_proto(e.clone())),
+                    Err(m) => return Ok((false, m, String::new())),
                 }
-                JobKind::JobRating => {
-                    let Some(r) = &req.rating else {
-                        return Ok((
-                            false,
-                            "rating spec required for JOB_RATING".into(),
-                            String::new(),
-                        ));
-                    };
+            }
+            JobKind::JobRating => {
+                let Some(r) = &req.rating else {
+                    return Ok((
+                        false,
+                        "rating spec required for JOB_RATING".into(),
+                        String::new(),
+                    ));
+                };
 
-                    let (side_a, side_b) = match self.validate_and_resolve_rating(r) {
-                        Ok(v) => v,
-                        Err(m) => return Ok((false, m, String::new())),
-                    };
-                    let mut spec = RatingSpecJson::from_proto(r.clone());
-                    spec.side_a = side_a.clone();
-                    spec.side_b = side_b.clone();
+                let (side_a, side_b) = match self.validate_and_resolve_rating(r) {
+                    Ok(v) => v,
+                    Err(m) => return Ok((false, m, String::new())),
+                };
+                let mut spec = RatingSpecJson::from_proto(r.clone());
+                spec.side_a = side_a.clone();
+                spec.side_b = side_b.clone();
 
-                    let match_id = self.matches.create_match(
-                        &side_a.network_sha,
-                        &side_b.network_sha,
-                        (spec.total_games / 2) as i64,
-                    )?;
-                    spec.match_id = match_id;
-                    tracing::info!(
+                let match_id = self.matches.create_match(
+                    &side_a.network_sha,
+                    &side_b.network_sha,
+                    (spec.total_games / 2) as i64,
+                )?;
+                spec.match_id = match_id;
+                tracing::info!(
                     "[job] rating match created match={} side_a={}:{} side_b={}:{} target_pairs={}",
-                    match_id, side_a.kind, side_a.network_sha, side_b.kind, side_b.network_sha,
+                    match_id,
+                    side_a.kind,
+                    side_a.network_sha,
+                    side_b.kind,
+                    side_b.network_sha,
                     spec.total_games / 2
                 );
-                    JobSpecJson::Rating(spec)
-                }
-            };
-        let job_id = crate::sources::new_id();
-        let now = self.now();
-        self.store.insert_job(JobRow {
-            job_id: job_id.clone(),
-            kind: kind as i64,
-            priority,
-            state: "running".into(),
-            total_games: spec_total(&spec) as i64,
-            completed_games: 0,
-            dispatched_games: 0,
-            spec_json: spec.to_json(),
-            created_at: now,
-            updated_at: now,
-            next_seq: 0,
-        })?;
+                JobSpecJson::Rating(spec)
+            }
+        };
+        let total = spec_total(&spec) as i64;
+        let job_id = self.insert_new_job(kind, priority, total, &spec)?;
         tracing::info!(
             "[job] submitted requester={} id={} kind={} priority={} total={}",
             req.requester,
             job_id,
             kind.as_str_name(),
             priority,
-            spec_total(&spec)
+            total
         );
 
         self.preemption_sweep(true);
@@ -643,19 +713,8 @@ impl JobManager {
             return Err("selfplay.data_kind 必须为 DATA_RESNET / DATA_NNUE".into());
         }
 
-        for (label, sha) in [
-            ("network_sha", &s.network_sha),
-            ("opponent_sha", &s.opponent_sha),
-        ] {
-            if !sha.is_empty() {
-                let registered = self
-                    .nets
-                    .get_network(sha)
-                    .map_err(|e| format!("查询网络登记失败: {e}"))?;
-                if registered.is_none() {
-                    return Err(format!("network_not_registered {label}={sha}"));
-                }
-            }
+        for sha in [&s.network_sha, &s.opponent_sha] {
+            require_registered_sha(self.nets.as_ref(), sha, "")?;
         }
         Ok(())
     }
@@ -680,30 +739,19 @@ impl JobManager {
             if e.opponent_network_sha.is_empty() {
                 return Err("eval.opponent_network_sha required for model opponent".into());
             }
-            let registered = self
-                .nets
-                .get_network(&e.opponent_network_sha)
-                .map_err(|err| format!("查询网络登记失败: {err}"))?;
-            if registered.is_none() {
-                return Err(format!(
-                    "network_not_registered sha={}（eval 对手网络必须已登记）",
-                    e.opponent_network_sha
-                ));
-            }
-        } else if !e.opponent_network_sha.is_empty() {
-            return Err("eval.opponent_network_sha 必须为空（非模型类对手）".into());
+            require_registered_sha(
+                self.nets.as_ref(),
+                &e.opponent_network_sha,
+                "（eval 对手网络必须已登记）",
+            )?;
+        } else {
+            check_model_sha(
+                &e.opponent_network_sha,
+                "eval.opponent_network_sha 必须为空（非模型类对手）".into(),
+            )?;
         }
 
-        if !e.network_sha.is_empty() {
-            let registered = self
-                .nets
-                .get_network(&e.network_sha)
-                .map_err(|err| format!("查询网络登记失败: {err}"))?;
-            if registered.is_none() {
-                return Err(format!("network_not_registered sha={}", e.network_sha));
-            }
-        }
-        Ok(())
+        require_registered_sha(self.nets.as_ref(), &e.network_sha, "")
     }
 
     fn validate_and_resolve_rating(
@@ -747,16 +795,11 @@ impl JobManager {
         if r.candidate_sha.is_empty() {
             return Err("rating.candidate_sha required（被测网络必填）".into());
         }
-        let registered = self
-            .nets
-            .get_network(&r.candidate_sha)
-            .map_err(|err| format!("查询网络登记失败: {err}"))?;
-        if registered.is_none() {
-            return Err(format!(
-                "network_not_registered sha={}（rating 候选网络必须已登记）",
-                r.candidate_sha
-            ));
-        }
+        require_registered_sha(
+            self.nets.as_ref(),
+            &r.candidate_sha,
+            "（rating 候选网络必须已登记）",
+        )?;
 
         let opponent_sha = if r.opponent_sha.is_empty() {
             match self
@@ -768,20 +811,15 @@ impl JobManager {
                 None => {
                     return Err(
                         "no_best_network_registered（对手空 = 当前 best，但尚无 best 网络）".into(),
-                    )
+                    );
                 }
             }
         } else {
-            let registered = self
-                .nets
-                .get_network(&r.opponent_sha)
-                .map_err(|err| format!("查询网络登记失败: {err}"))?;
-            if registered.is_none() {
-                return Err(format!(
-                    "network_not_registered sha={}（rating 对手网络必须已登记）",
-                    r.opponent_sha
-                ));
-            }
+            require_registered_sha(
+                self.nets.as_ref(),
+                &r.opponent_sha,
+                "（rating 对手网络必须已登记）",
+            )?;
             r.opponent_sha.clone()
         };
         let mk = |sha: &str| PlayerSpecJson {
@@ -808,30 +846,30 @@ impl JobManager {
         out.kind = kind.to_string();
         if bq_policy::player_kind::requires_model(kind) {
             if out.network_sha.is_empty() {
-                match self.nets.get_best().map_err(|e| format!("查询 best 网络失败: {e}"))? {
+                match self
+                    .nets
+                    .get_best()
+                    .map_err(|e| format!("查询 best 网络失败: {e}"))?
+                {
                     Some(b) => out.network_sha = b.sha,
                     None => {
                         return Err(format!(
                             "no_best_network_registered（rating.{label} 模型类 sha 空 = 当前 best，但尚无 best 网络）"
-                        ))
+                        ));
                     }
                 }
             } else {
-                let registered = self
-                    .nets
-                    .get_network(&out.network_sha)
-                    .map_err(|err| format!("查询网络登记失败: {err}"))?;
-                if registered.is_none() {
-                    return Err(format!(
-                        "network_not_registered sha={}（rating.{label} 模型类网络必须已登记）",
-                        out.network_sha
-                    ));
-                }
+                require_registered_sha(
+                    self.nets.as_ref(),
+                    &out.network_sha,
+                    &format!("（rating.{label} 模型类网络必须已登记）"),
+                )?;
             }
-        } else if !out.network_sha.is_empty() {
-            return Err(format!(
-                "rating.{label} player_kind={kind} 的 network_sha 必须为空"
-            ));
+        } else {
+            check_model_sha(
+                &out.network_sha,
+                format!("rating.{label} player_kind={kind} 的 network_sha 必须为空"),
+            )?;
         }
         Ok(out)
     }
@@ -1130,31 +1168,19 @@ impl JobManager {
         }
         let spec = SelfPlaySpecJson {
             variant: self.cfg.selfplay.variant.clone(),
-            data_kind: match self.ctl.data_kind() {
-                bqs_config::DataKind::Resnet => bqs_proto::DataKind::DataResnet as i32,
-                bqs_config::DataKind::Nnue => bqs_proto::DataKind::DataNnue as i32,
-            },
+            data_kind: crate::data_kind::to_proto(self.ctl.data_kind()),
             network_sha: String::new(),
             opponent_sha: String::new(),
             mix_ratio: 0.0,
             search: None,
             total_games: 0,
         };
-        let now = self.now();
-        let job_id = crate::sources::new_id();
-        self.store.insert_job(JobRow {
-            job_id: job_id.clone(),
-            kind: JobKind::JobSelfplay as i64,
-            priority: self.default_priority(JobKind::JobSelfplay),
-            state: "running".into(),
-            total_games: 0,
-            completed_games: 0,
-            dispatched_games: 0,
-            spec_json: JobSpecJson::SelfPlay(spec).to_json(),
-            created_at: now,
-            updated_at: now,
-            next_seq: 0,
-        })?;
+        let job_id = self.insert_new_job(
+            JobKind::JobSelfplay,
+            self.default_priority(JobKind::JobSelfplay),
+            0,
+            &JobSpecJson::SelfPlay(spec),
+        )?;
         tracing::info!("[job] bootstrapped persistent selfplay job id={job_id}");
         Ok(())
     }
@@ -1200,21 +1226,12 @@ impl JobManager {
             search: None,
             total_games: total as u64,
         });
-        let now = self.now();
-        let job_id = crate::sources::new_id();
-        self.store.insert_job(JobRow {
-            job_id: job_id.clone(),
-            kind: JobKind::JobEval as i64,
-            priority: self.default_priority(JobKind::JobEval),
-            state: "running".into(),
-            total_games: total,
-            completed_games: 0,
-            dispatched_games: 0,
-            spec_json: spec.to_json(),
-            created_at: now,
-            updated_at: now,
-            next_seq: 0,
-        })?;
+        let job_id = self.insert_new_job(
+            JobKind::JobEval,
+            self.default_priority(JobKind::JobEval),
+            total,
+            &spec,
+        )?;
         tracing::info!(
             "[job] auto eval job id={} network={sha} opponent={opponent_kind} total={total}",
             job_id

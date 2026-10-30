@@ -1,14 +1,13 @@
+use axum::Json;
 use axum::extract::State;
 use axum::http::Uri;
-use axum::Json;
 
 use bqs_core::types::Episode;
 
-use crate::views::{data_kind_name, DataStatsView, EpisodePageView, EpisodeView};
-use crate::{int_query, ApiError, ApiResult, AppState};
+use crate::views::{DataStatsView, EpisodePageView, EpisodeView, data_kind_name};
+use crate::{ApiError, ApiResult, AppState, int_query, read_endpoint};
 
-const DEFAULT_EPISODE_LIMIT: i64 = 100;
-const MAX_EPISODE_LIMIT: i64 = 500;
+use bqs_store::clamp_episode_page_limit;
 
 fn to_episode_view(e: &Episode) -> EpisodeView {
     EpisodeView {
@@ -34,13 +33,9 @@ fn to_episode_view(e: &Episode) -> EpisodeView {
 
 pub async fn episodes(State(st): State<AppState>, uri: Uri) -> ApiResult<Json<EpisodePageView>> {
     let before = int_query(uri.query(), "before");
-    let mut limit = int_query(uri.query(), "limit");
-    if limit <= 0 || limit > MAX_EPISODE_LIMIT {
-        limit = DEFAULT_EPISODE_LIMIT;
-    }
-    let server = st.server.clone();
-    let page = tokio::task::spawn_blocking(move || -> Result<EpisodePageView, ApiError> {
-        let items = server.ports.episodes.list_episodes_page(before, limit)?;
+    let limit = clamp_episode_page_limit(int_query(uri.query(), "limit"));
+    read_endpoint(&st, move |st| -> Result<EpisodePageView, ApiError> {
+        let items = st.server.ports.episodes.list_episodes_page(before, limit)?;
         let next = items.last().map(|e| e.id).unwrap_or(before);
         Ok(EpisodePageView {
             items: items.iter().map(to_episode_view).collect(),
@@ -49,20 +44,17 @@ pub async fn episodes(State(st): State<AppState>, uri: Uri) -> ApiResult<Json<Ep
         })
     })
     .await
-    .map_err(|e| crate::ApiError::internal(format!("join: {e}")))??;
-    Ok(Json(page))
 }
 
 pub async fn data_stats(State(st): State<AppState>) -> ApiResult<Json<DataStatsView>> {
-    let server = st.server.clone();
-    let view = tokio::task::spawn_blocking(move || -> Result<DataStatsView, ApiError> {
+    read_endpoint(&st, |st| -> Result<DataStatsView, ApiError> {
+        let server = &st.server;
         let stats = server.ports.episodes.episode_data_stats()?;
         let to_views = |m: std::collections::BTreeMap<i64, bqs_core::ports::KindStats>| {
             m.into_iter()
                 .map(|(k, v)| (data_kind_name(k).to_string(), v.into()))
                 .collect()
         };
-
         let recent = server
             .ports
             .episodes
@@ -79,6 +71,4 @@ pub async fn data_stats(State(st): State<AppState>) -> ApiResult<Json<DataStatsV
         })
     })
     .await
-    .map_err(|e| crate::ApiError::internal(format!("join: {e}")))??;
-    Ok(Json(view))
 }

@@ -1,6 +1,6 @@
+use bqs_core::CoreResult;
 use bqs_core::ports::{TrainerRegistryStore, TrainerStore};
 use bqs_core::types::Trainer;
-use bqs_core::CoreResult;
 
 use crate::{Store, StoreError};
 

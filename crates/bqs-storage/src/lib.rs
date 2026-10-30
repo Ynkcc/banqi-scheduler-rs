@@ -179,7 +179,11 @@ impl Manager {
             tracing::info!(
                 "[storage] 以 [storage] 引导段创建 default profile: bucket={} endpoint={} path_style={}",
                 p.bucket,
-                if p.endpoint.is_empty() { "(空)" } else { &p.endpoint },
+                if p.endpoint.is_empty() {
+                    "(空)"
+                } else {
+                    &p.endpoint
+                },
                 p.path_style
             );
             profiles.push(p.clone());

@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
 use bqs_config::Config;
-use bqs_judgment::{judge, new_bounds, Hexanomial, Verdict};
+use bqs_judgment::{Hexanomial, Verdict, judge, new_bounds};
 use bqs_proto::{MatchResult, MatchResultAck, TaskKind};
 
 use crate::{
+    CoreError, CoreResult,
     dispatch::{RunningTask, TaskDispatcher, TaskState},
     evalcoord::EvalCoordinator,
     gatekeeper::Gatekeeper,
     jobs::{JobManager, RatingSpecJson},
     ports::{MatchStore, NetworkStore},
-    CoreError, CoreResult,
 };
 
 pub fn lookup_report_task(
@@ -214,7 +214,12 @@ impl ReportRouter {
         }
         tracing::info!(
             "[rating] match={} job={} verdict={} llr={:.3} cap={} concluded={concluded} promoted={promoted} pairs={}",
-            m.id, task.job_id, verdict.as_str(), llr, cap_reached, agg.pairs.labeled()
+            m.id,
+            task.job_id,
+            verdict.as_str(),
+            llr,
+            cap_reached,
+            agg.pairs.labeled()
         );
         Ok(MatchResultAck {
             accepted: true,

@@ -1,13 +1,12 @@
+use bqs_core::CoreResult;
 use bqs_core::ports::WorkerStore;
 use bqs_core::types::Worker;
-use bqs_core::CoreResult;
 
 use crate::{Store, StoreError};
 
 use rusqlite::OptionalExtension;
 
-const WORKER_COLUMNS: &str =
-    "id, last_seen, threads, completed_games, client_version, memory_mb, note, health_status, last_error";
+const WORKER_COLUMNS: &str = "id, last_seen, threads, completed_games, client_version, memory_mb, note, health_status, last_error";
 
 fn scan_worker_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Worker> {
     Ok(Worker {
