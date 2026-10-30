@@ -54,6 +54,13 @@ pub struct SearchSpecJson {
     pub playout_cap_random: bool,
     pub expectimax_node_budget: u64,
     pub expectimax_max_depth: u32,
+    pub labeler_mode: String,
+    pub labeler_budget_mult: u32,
+    pub expl_enabled: bool,
+    pub expl_topk: u32,
+    pub expl_temp_start: f64,
+    pub expl_temp_end: f64,
+    pub expl_temp_decay_steps: u32,
 }
 
 impl SearchSpecJson {
@@ -68,6 +75,13 @@ impl SearchSpecJson {
                 playout_cap_random: s.playout_cap_random,
                 expectimax_node_budget: s.expectimax_node_budget,
                 expectimax_max_depth: s.expectimax_max_depth,
+                labeler_mode: s.labeler_mode,
+                labeler_budget_mult: s.labeler_budget_mult,
+                expl_enabled: s.expl_enabled,
+                expl_topk: s.expl_topk,
+                expl_temp_start: s.expl_temp_start,
+                expl_temp_end: s.expl_temp_end,
+                expl_temp_decay_steps: s.expl_temp_decay_steps,
             },
             None => Self::default(),
         }
@@ -83,6 +97,13 @@ impl SearchSpecJson {
             && !s.playout_cap_random
             && s.expectimax_node_budget == 0
             && s.expectimax_max_depth == 0
+            && s.labeler_mode.is_empty()
+            && s.labeler_budget_mult == 0
+            && !s.expl_enabled
+            && s.expl_topk == 0
+            && s.expl_temp_start == 0.0
+            && s.expl_temp_end == 0.0
+            && s.expl_temp_decay_steps == 0
         {
             return None;
         }
@@ -95,6 +116,13 @@ impl SearchSpecJson {
             playout_cap_random: s.playout_cap_random,
             expectimax_node_budget: s.expectimax_node_budget,
             expectimax_max_depth: s.expectimax_max_depth,
+            labeler_mode: s.labeler_mode.clone(),
+            labeler_budget_mult: s.labeler_budget_mult,
+            expl_enabled: s.expl_enabled,
+            expl_topk: s.expl_topk,
+            expl_temp_start: s.expl_temp_start,
+            expl_temp_end: s.expl_temp_end,
+            expl_temp_decay_steps: s.expl_temp_decay_steps,
         })
     }
 }

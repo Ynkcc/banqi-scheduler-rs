@@ -648,6 +648,20 @@ message CollectSearchParams {
   bool playout_cap_random = 6;
   uint64 expectimax_node_budget = 7;       // expectimax_*：节点预算
   uint32 expectimax_max_depth = 8;         // expectimax_*：最大深度
+  // ---- 标注器（value_labels 标注者；仅 expectimax_* 棋手生效）----
+  // "none" = 强制关闭；"rule" = 规则材料评估器；"best" = 产方自身评估器
+  //（expectimax_nnue 产方 = 其 NNUE 评估器；expectimax_rule 产方等价 rule）。
+  // 空 = 不覆盖，回落 worker 本地 expectimax_labeler_mode。
+  string labeler_mode = 9;
+  // 标注器节点预算倍率（0 = 本地默认；标注器预算 = expectimax_node_budget × 倍率）
+  uint32 labeler_budget_mult = 10;
+  // ---- Expectimax 探索采样（根值温度 Top-K 软采样；仅 expectimax_* 棋手生效）----
+  // true = 强制开启（expl_enabled 本地默认 false，开启是 NNUE 数据多样性前提）
+  bool expl_enabled = 11;
+  uint32 expl_topk = 12;                   // 0 = 本地默认
+  double expl_temp_start = 13;             // 0 = 本地默认
+  double expl_temp_end = 14;               // 0 = 本地默认
+  uint32 expl_temp_decay_steps = 15;       // 0 = 本地默认
 }
 
 // 采集需求规格（JOB_COLLECT 载荷；派发时随 TaskResponse.collect_spec 原样透传）
