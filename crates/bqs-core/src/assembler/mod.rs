@@ -1,0 +1,94 @@
+mod producer;
+mod tasks;
+
+#[cfg(test)]
+mod tests;
+
+pub use producer::{
+    ProducerSelect, SelfplayMode, episode_key, games_for_threads, network_key, select_producer,
+};
+
+pub use crate::data_kind::{
+    proto_for_format as data_kind_for_format,
+    proto_for_weight_format as stack_data_kind_for_weight_format,
+    weight_format_for_proto as stack_format_for_data_kind,
+};
+
+use std::sync::Arc;
+
+use bqs_config::Config;
+
+use crate::{CoreResult, consts, control::Control, ports::{NetworkStore, ObjectSigner}};
+
+pub struct TaskAssembler {
+    nets: Arc<dyn NetworkStore>,
+    signer: Arc<dyn ObjectSigner>,
+    cfg: Arc<Config>,
+    ctl: Arc<Control>,
+}
+
+impl TaskAssembler {
+    pub fn new(
+        nets: Arc<dyn NetworkStore>,
+        signer: Arc<dyn ObjectSigner>,
+        cfg: Arc<Config>,
+        ctl: Arc<Control>,
+    ) -> Self {
+        Self {
+            nets,
+            signer,
+            cfg,
+            ctl,
+        }
+    }
+
+    fn ttl_secs(&self) -> i64 {
+        consts::PRESIGN_TTL.as_secs() as i64
+    }
+
+    pub fn extra_config(&self) -> String {
+        let mut revealed = self.ctl.initial_revealed();
+        if revealed < 0 {
+            revealed = 0;
+        }
+        let mut mix = self.cfg.selfplay.mix_ratio;
+        if mix <= 0.0 || mix > 1.0 {
+            mix = 0.0;
+        }
+        if revealed == 0 && mix == 0.0 {
+            return String::new();
+        }
+        let mut obj = serde_json::Map::new();
+        if revealed != 0 {
+            obj.insert(
+                "initial_revealed_pieces".into(),
+                serde_json::json!(revealed),
+            );
+        }
+        if mix != 0.0 {
+            obj.insert("mix_ratio".into(), serde_json::json!(mix));
+        }
+        serde_json::Value::Object(obj).to_string()
+    }
+
+    pub fn games_for(&self, threads: i32) -> i64 {
+        games_for_threads(
+            self.cfg.selfplay.threads_baseline,
+            self.cfg.selfplay.games_per_task as i64,
+            threads,
+        )
+    }
+
+    fn with_network_download(
+        &self,
+        req: &bqs_proto::TaskRequest,
+        resp: &mut bqs_proto::TaskResponse,
+        sha: &str,
+        key: &str,
+    ) -> CoreResult<()> {
+        if req.current_network != sha {
+            resp.network_url = self.signer.presign_get(key, self.ttl_secs())?;
+        }
+        Ok(())
+    }
+}
