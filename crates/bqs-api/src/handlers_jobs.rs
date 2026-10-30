@@ -1,30 +1,18 @@
-//! handlers_jobs.rs — 统一 Job 机制端点（/api/jobs）。
-//!
-//! 契约与 gRPC SubmitJob / ListJobs / ControlJob 一致（同一 JobManager 门面）：
-//! - POST /api/jobs（提交，规格校验失败 400 附原因）
-//! - GET  /api/jobs?state=&kind=（进度列表，completedGames 为上报口径不含在飞）
-//! - POST /api/jobs/{id}/{pause|resume|cancel}（终态不可再控制 → 409）
-
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use bqs_core::jobs::{
-    CollectSpecJson, EvalSpecJson, JobSpecJson, RatingSpecJson, SelfPlaySpecJson, SearchSpecJson,
+    CollectSpecJson, EvalSpecJson, JobSpecJson, RatingSpecJson, SearchSpecJson, SelfPlaySpecJson,
 };
 use bqs_proto::{
-    CollectionJobSpec, CollectPlayerSpec, EvalJobSpec, JobKind, RatingJobSpec, SeedStrategy,
+    CollectPlayerSpec, CollectionJobSpec, EvalJobSpec, JobKind, RatingJobSpec, SeedStrategy,
     SelfPlayJobSpec, SubmitJobRequest,
 };
 
 use crate::{ApiError, ApiResult, AppState};
 
-// ---------------------------------------------------------------------------
-// 请求 / 响应视图
-// ---------------------------------------------------------------------------
-
-/// 搜索参数（0 值 = 回落 worker 本地默认）。
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SearchParamsBody {
@@ -36,7 +24,7 @@ pub struct SearchParamsBody {
     pub playout_cap_random: bool,
     pub expectimax_node_budget: u64,
     pub expectimax_max_depth: u32,
-    /// "" = 本地默认；none = 强制关闭；rule / best
+
     pub labeler_mode: String,
     pub labeler_budget_mult: u32,
     pub expl_enabled: bool,
@@ -107,7 +95,6 @@ impl SearchParamsBody {
     }
 }
 
-/// 单方棋手规格。
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PlayerBody {
@@ -134,11 +121,9 @@ impl PlayerBody {
     }
 }
 
-/// 种子策略。
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SeedStrategyBody {
-    /// fixed | random | incremental | range
     pub kind: String,
     pub fixed_seed: u64,
     pub base_seed: u64,
@@ -148,13 +133,16 @@ pub struct SeedStrategyBody {
 
 impl SeedStrategyBody {
     fn to_proto(&self) -> Result<SeedStrategy, String> {
-        let kind = match self.kind.as_str() {
-            "fixed" => bqs_proto::SeedStrategyKind::SeedFixed as i32,
-            "random" => bqs_proto::SeedStrategyKind::SeedRandom as i32,
-            "incremental" => bqs_proto::SeedStrategyKind::SeedIncremental as i32,
-            "range" => bqs_proto::SeedStrategyKind::SeedRange as i32,
-            other => return Err(format!("unknown seedStrategy.kind \"{other}\"（可选 fixed/random/incremental/range）")),
-        };
+        let kind =
+            match self.kind.as_str() {
+                "fixed" => bqs_proto::SeedStrategyKind::SeedFixed as i32,
+                "random" => bqs_proto::SeedStrategyKind::SeedRandom as i32,
+                "incremental" => bqs_proto::SeedStrategyKind::SeedIncremental as i32,
+                "range" => bqs_proto::SeedStrategyKind::SeedRange as i32,
+                other => return Err(format!(
+                    "unknown seedStrategy.kind \"{other}\"（可选 fixed/random/incremental/range）"
+                )),
+            };
         Ok(SeedStrategy {
             kind,
             fixed_seed: self.fixed_seed,
@@ -182,17 +170,16 @@ impl SeedStrategyBody {
     }
 }
 
-/// JOB_COLLECT 规格请求体。
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct CollectBody {
     pub variant: String,
-    /// standard | all_revealed
+
     pub scenario: String,
     pub seed_strategy: SeedStrategyBody,
     pub player_a: PlayerBody,
     pub player_b: PlayerBody,
-    /// resnet | nnue
+
     pub data_kind: String,
     pub total_games: u64,
 }
@@ -202,7 +189,11 @@ impl CollectBody {
         let scenario = match self.scenario.as_str() {
             "" | "standard" => bqs_proto::OpeningScenario::ScenarioStandard as i32,
             "all_revealed" => bqs_proto::OpeningScenario::ScenarioAllRevealed as i32,
-            other => return Err(format!("unknown scenario \"{other}\"（可选 standard/all_revealed）")),
+            other => {
+                return Err(format!(
+                    "unknown scenario \"{other}\"（可选 standard/all_revealed）"
+                ))
+            }
         };
         let data_kind = parse_data_kind(&self.data_kind)?;
         Ok(CollectionJobSpec {
@@ -232,7 +223,6 @@ impl CollectBody {
     }
 }
 
-/// JOB_SELFPLAY 规格请求体。
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SelfPlayBody {
@@ -242,7 +232,7 @@ pub struct SelfPlayBody {
     pub opponent_sha: String,
     pub mix_ratio: f64,
     pub search: Option<SearchParamsBody>,
-    /// 0 = 持续型
+
     pub total_games: u64,
 }
 
@@ -272,12 +262,11 @@ impl SelfPlayBody {
     }
 }
 
-/// JOB_EVAL 规格请求体。
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct EvalBody {
     pub variant: String,
-    /// 空 = 当前 best
+
     pub network_sha: String,
     pub opponent_kind: String,
     pub opponent_network_sha: String,
@@ -309,31 +298,24 @@ impl EvalBody {
     }
 }
 
-/// JOB_RATING 规格请求体（手动 SPRT 对打）。
-///
-/// 双方棋手自由组合：sideA/sideB（结构与 collect 的 playerA/playerB 一致，
-/// 模型类 networkSha 空 = 当前 best，非网络类必须为空）任一填写时优先生效；
-/// 旧字段 candidateSha/opponentSha 保持工作（归一化为 expectimax_nnue 两侧）。
-/// 手动 SPRT 对打永不触发晋级判定（纯相对强度测量 + SPRT 判停）。
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct RatingBody {
-    /// 空 = 调度器 selfplay.variant
     pub variant: String,
-    /// 被测网络（旧字段路径必填，须已登记）
+
     pub candidate_sha: String,
-    /// 对手网络；空 = 当前 best
+
     pub opponent_sha: String,
-    /// 局数上限（≥2 偶数；0 = 仅由 SPRT 判停）
+
     pub total_games: u64,
-    /// 0 = 回落调度器 [sprt] 配置
+
     pub sprt_elo0: f64,
     pub sprt_elo1: f64,
     pub sprt_alpha: f64,
     pub sprt_beta: f64,
-    /// 主视角方（sides 形态，与 sideB 成对填写）
+
     pub side_a: Option<PlayerBody>,
-    /// 对手方
+
     pub side_b: Option<PlayerBody>,
 }
 
@@ -370,13 +352,11 @@ impl RatingBody {
     }
 }
 
-/// POST /api/jobs 请求体（kind 决定哪个规格字段必填）。
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SubmitJobBody {
-    /// collect | selfplay | eval | rating
     pub kind: String,
-    /// 0 = 用该 kind 的默认优先级
+
     pub priority: u32,
     pub requester: String,
     pub collect: Option<CollectBody>,
@@ -385,7 +365,6 @@ pub struct SubmitJobBody {
     pub rating: Option<RatingBody>,
 }
 
-/// rating job 六桶统计进度（来自对发行聚合；未派发时为 null）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RatingStatsView {
@@ -397,12 +376,11 @@ pub struct RatingStatsView {
     pub ww: i64,
     pub num_games: i64,
     pub match_status: String,
-    /// 双方棋手 kind 摘要（归一化后的 sides；旧版行按旧字段还原）
+
     pub side_a_kind: String,
     pub side_b_kind: String,
 }
 
-/// GET /api/jobs 条目视图。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobView {
@@ -415,14 +393,13 @@ pub struct JobView {
     pub dispatched_games: u64,
     pub created_at: i64,
     pub updated_at: i64,
-    /// 规格回显（结构与提交体一致）
+
     pub spec: serde_json::Value,
-    /// rating job 专属：对打六桶统计（其余 kind 为 null）
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rating_stats: Option<RatingStatsView>,
 }
 
-/// POST /api/jobs 响应。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmitJobView {
@@ -431,7 +408,6 @@ pub struct SubmitJobView {
     pub job_id: String,
 }
 
-/// POST /api/jobs/{id}/{action} 响应。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobControlView {
@@ -439,10 +415,6 @@ pub struct JobControlView {
     pub message: String,
     pub state: String,
 }
-
-// ---------------------------------------------------------------------------
-// 词表映射
-// ---------------------------------------------------------------------------
 
 fn parse_job_kind(s: &str) -> Result<JobKind, ApiError> {
     match s.trim().to_ascii_lowercase().as_str() {
@@ -481,11 +453,6 @@ fn data_kind_name(k: i32) -> &'static str {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Handlers
-// ---------------------------------------------------------------------------
-
-/// POST /api/jobs — 提交 job。
 pub async fn submit_job(
     State(st): State<AppState>,
     bytes: axum::body::Bytes,
@@ -498,34 +465,38 @@ pub async fn submit_job(
         kind: kind as i32,
         priority: body.priority,
         collect: match kind {
-            JobKind::JobCollect => Some(body
-                .collect
-                .ok_or_else(|| ApiError::bad_request("kind=collect 需要 collect 规格"))?
-                .to_proto()
-                .map_err(ApiError::bad_request)?),
+            JobKind::JobCollect => Some(
+                body.collect
+                    .ok_or_else(|| ApiError::bad_request("kind=collect 需要 collect 规格"))?
+                    .to_proto()
+                    .map_err(ApiError::bad_request)?,
+            ),
             _ => None,
         },
         selfplay: match kind {
-            JobKind::JobSelfplay => Some(body
-                .selfplay
-                .ok_or_else(|| ApiError::bad_request("kind=selfplay 需要 selfplay 规格"))?
-                .to_proto()
-                .map_err(ApiError::bad_request)?),
+            JobKind::JobSelfplay => Some(
+                body.selfplay
+                    .ok_or_else(|| ApiError::bad_request("kind=selfplay 需要 selfplay 规格"))?
+                    .to_proto()
+                    .map_err(ApiError::bad_request)?,
+            ),
             _ => None,
         },
         eval: match kind {
-            JobKind::JobEval => Some(body
-                .eval
-                .ok_or_else(|| ApiError::bad_request("kind=eval 需要 eval 规格"))?
-                .to_proto()
-                .map_err(ApiError::bad_request)?),
+            JobKind::JobEval => Some(
+                body.eval
+                    .ok_or_else(|| ApiError::bad_request("kind=eval 需要 eval 规格"))?
+                    .to_proto()
+                    .map_err(ApiError::bad_request)?,
+            ),
             _ => None,
         },
         rating: match kind {
-            JobKind::JobRating => Some(body
-                .rating
-                .ok_or_else(|| ApiError::bad_request("kind=rating 需要 rating 规格"))?
-                .to_proto()),
+            JobKind::JobRating => Some(
+                body.rating
+                    .ok_or_else(|| ApiError::bad_request("kind=rating 需要 rating 规格"))?
+                    .to_proto(),
+            ),
             _ => None,
         },
     };
@@ -535,12 +506,20 @@ pub async fn submit_job(
         .submit(&req)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     if accepted {
-        tracing::info!("[webui] job submitted requester={} kind={} id={}", requester, body.kind, job_id);
+        tracing::info!(
+            "[webui] job submitted requester={} kind={} id={}",
+            requester,
+            body.kind,
+            job_id
+        );
     }
-    Ok(Json(SubmitJobView { accepted, message, job_id }))
+    Ok(Json(SubmitJobView {
+        accepted,
+        message,
+        job_id,
+    }))
 }
 
-/// GET /api/jobs?state=&kind= — job 进度列表。
 #[derive(Debug, Deserialize)]
 pub struct ListJobsQuery {
     pub state: Option<String>,
@@ -573,7 +552,7 @@ pub async fn list_jobs(
                 None => Ok(serde_json::Value::Null),
             }
             .unwrap_or(serde_json::Value::Null);
-            // rating job 的六桶统计进度（对发行聚合快照；对打未建/缺失为 null）
+
             let rating_stats = match (&parsed, JobKind::try_from(r.kind as i32)) {
                 (Some(JobSpecJson::Rating(rt)), Ok(JobKind::JobRating)) if rt.match_id != 0 => st
                     .server
@@ -620,7 +599,6 @@ pub async fn list_jobs(
     Ok(Json(HashMap::from([("jobs".to_string(), jobs)])))
 }
 
-/// POST /api/jobs/{id}/{action} — pause / resume / cancel。
 pub async fn control_job(
     State(st): State<AppState>,
     Path((job_id, action)): Path<(String, String)>,
@@ -639,12 +617,15 @@ pub async fn control_job(
         .control(&job_id, &action)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     if !accepted {
-        // 业务拒绝：不存在 → 404，终态再控制 → 409
         if message.contains("not_found") {
             return Err(ApiError::not_found(message));
         }
         return Err(ApiError::conflict(message));
     }
     tracing::info!("[webui] job {} {} → {}", job_id, action, state);
-    Ok(Json(JobControlView { accepted, message, state }))
+    Ok(Json(JobControlView {
+        accepted,
+        message,
+        state,
+    }))
 }

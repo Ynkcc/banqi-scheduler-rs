@@ -1,10 +1,3 @@
-//! 【所有权：core-judgment 成员】共享内存 fake ports（**仅测试编译**，经 lib.rs
-//! 的 `#[cfg(test)]` 门控引入）。
-//!
-//! 团队约定：`bqs-core` 的子系统单测统一用这里的 fake（避免 pipeline 与
-//! core-judgment 各建一套）。pipeline 若需要额外端口 fake，请在本文件追加实现，
-//! 不要另建文件。
-
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -21,10 +14,6 @@ use crate::{
     },
     CoreError, CoreResult,
 };
-
-// ---------------------------------------------------------------------------
-// 时钟
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Default)]
 pub struct FakeClock(AtomicI64);
@@ -51,10 +40,6 @@ impl Clock for FakeClock {
     }
 }
 
-// ---------------------------------------------------------------------------
-// settings
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Default)]
 pub struct FakeSettings {
     map: Mutex<HashMap<String, String>>,
@@ -75,21 +60,24 @@ impl SettingsStore for FakeSettings {
     }
 
     fn set_setting(&self, key: &str, value: &str) -> CoreResult<()> {
-        self.map.lock().unwrap().insert(key.to_string(), value.to_string());
+        self.map
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), value.to_string());
         Ok(())
     }
 
     fn inc_setting(&self, key: &str) -> CoreResult<i64> {
         let mut map = self.map.lock().unwrap();
-        let next = map.get(key).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0) + 1;
+        let next = map
+            .get(key)
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0)
+            + 1;
         map.insert(key.to_string(), next.to_string());
         Ok(next)
     }
 }
-
-// ---------------------------------------------------------------------------
-// networks
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Default)]
 struct NetworksInner {
@@ -104,7 +92,6 @@ pub struct FakeNetworks {
 }
 
 impl FakeNetworks {
-    /// 预置一个网络（candidate 状态；不触发晋级）。
     pub fn seed_network(&self, sha: &str, parent: Option<&str>, format: &str) {
         let mut g = self.inner.lock().unwrap();
         g.next_created_at += 1;
@@ -128,14 +115,17 @@ impl FakeNetworks {
     }
 
     pub fn status_of(&self, sha: &str) -> Option<String> {
-        self.inner.lock().unwrap().nets.get(sha).map(|n| n.status.clone())
+        self.inner
+            .lock()
+            .unwrap()
+            .nets
+            .get(sha)
+            .map(|n| n.status.clone())
     }
 
     pub fn contains(&self, sha: &str) -> bool {
         self.inner.lock().unwrap().nets.contains_key(sha)
     }
-
-    // —— 固有转发方法（测试无需 `use crate::ports::NetworkStore` 即可调用）——
 
     pub fn get_best(&self) -> CoreResult<Option<Network>> {
         NetworkStore::get_best(self)
@@ -254,10 +244,6 @@ impl NetworkStore for FakeNetworks {
     }
 }
 
-// ---------------------------------------------------------------------------
-// matches
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Default)]
 struct MatchesInner {
     next_id: i64,
@@ -270,7 +256,6 @@ pub struct FakeMatches {
 }
 
 impl FakeMatches {
-    /// 预置一个 running 对打，返回 id。
     pub fn seed_match(&self, candidate: &str, opponent: &str, target_games: i64) -> i64 {
         let mut g = self.inner.lock().unwrap();
         g.next_id += 1;
@@ -290,12 +275,16 @@ impl FakeMatches {
         id
     }
 
-    /// 直接改写累计局数（绕过聚合，模拟历史进度）。
     pub fn force_progress(&self, id: i64, num_games: i64) {
-        self.inner.lock().unwrap().matches.get_mut(&id).unwrap().num_games = num_games;
+        self.inner
+            .lock()
+            .unwrap()
+            .matches
+            .get_mut(&id)
+            .unwrap()
+            .num_games = num_games;
     }
 
-    /// 直接结转（模拟并发赢家已完成的 CAS）。
     pub fn force_conclude(&self, id: i64) {
         self.inner
             .lock()
@@ -306,9 +295,12 @@ impl FakeMatches {
             .status = crate::types::match_status::CONCLUDED.to_string();
     }
 
-    // —— 固有转发方法（测试无需 `use crate::ports::MatchStore` 即可调用）——
-
-    pub fn create_match(&self, candidate: &str, opponent: &str, target_games: i64) -> CoreResult<i64> {
+    pub fn create_match(
+        &self,
+        candidate: &str,
+        opponent: &str,
+        target_games: i64,
+    ) -> CoreResult<i64> {
         MatchStore::create_match(self, candidate, opponent, target_games)
     }
 
@@ -352,12 +344,24 @@ impl MatchStore for FakeMatches {
     }
 
     fn list_matches(&self) -> CoreResult<Vec<Match>> {
-        let mut out: Vec<Match> = self.inner.lock().unwrap().matches.values().cloned().collect();
+        let mut out: Vec<Match> = self
+            .inner
+            .lock()
+            .unwrap()
+            .matches
+            .values()
+            .cloned()
+            .collect();
         out.sort_by(|a, b| b.id.cmp(&a.id));
         Ok(out)
     }
 
-    fn add_match_games(&self, id: i64, delta: bqs_judgment::Hexanomial, games: i64) -> CoreResult<(Match, bool)> {
+    fn add_match_games(
+        &self,
+        id: i64,
+        delta: bqs_judgment::Hexanomial,
+        games: i64,
+    ) -> CoreResult<(Match, bool)> {
         let mut g = self.inner.lock().unwrap();
         let Some(m) = g.matches.get_mut(&id) else {
             return Err(CoreError::Store(format!("match {id} 不存在")));
@@ -397,10 +401,6 @@ impl MatchStore for FakeMatches {
     }
 }
 
-// ---------------------------------------------------------------------------
-// eval（含自带 settings：EvalStore 的 supertrait 是 SettingsStore）
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Default)]
 struct EvalInner {
     queue: Vec<EvalQueueEntry>,
@@ -425,8 +425,6 @@ impl FakeEval {
             .cloned()
     }
 
-    // —— 固有转发方法（测试无需 `use crate::ports::EvalStore` 即可调用）——
-
     pub fn load_eval_queue(&self) -> CoreResult<Vec<EvalQueueEntry>> {
         EvalStore::load_eval_queue(self)
     }
@@ -439,7 +437,14 @@ impl FakeEval {
         target_games: i64,
         per_task_games: i64,
     ) -> CoreResult<bool> {
-        EvalStore::enqueue_eval_job(self, network_sha, spec, opponent_sha, target_games, per_task_games)
+        EvalStore::enqueue_eval_job(
+            self,
+            network_sha,
+            spec,
+            opponent_sha,
+            target_games,
+            per_task_games,
+        )
     }
 
     pub fn delete_eval_job(&self, network_sha: &str, spec: &str) -> CoreResult<()> {
@@ -459,7 +464,11 @@ impl FakeEval {
         EvalStore::accumulate_eval_job(self, network_sha, spec, delta)
     }
 
-    pub fn get_eval_job(&self, network_sha: &str, spec: &str) -> CoreResult<Option<EvalQueueEntry>> {
+    pub fn get_eval_job(
+        &self,
+        network_sha: &str,
+        spec: &str,
+    ) -> CoreResult<Option<EvalQueueEntry>> {
         EvalStore::get_eval_job(self, network_sha, spec)
     }
 
@@ -580,7 +589,12 @@ impl EvalStore for FakeEval {
         }
     }
 
-    fn accumulate_eval_job(&self, network_sha: &str, spec: &str, delta: EvalDelta) -> CoreResult<EvalQueueEntry> {
+    fn accumulate_eval_job(
+        &self,
+        network_sha: &str,
+        spec: &str,
+        delta: EvalDelta,
+    ) -> CoreResult<EvalQueueEntry> {
         let mut g = self.inner.lock().unwrap();
         let Some(e) = g
             .queue
@@ -600,7 +614,7 @@ impl EvalStore for FakeEval {
         e.draw_no_capture += delta.draw_no_capture;
         e.draw_truncation += delta.draw_truncation;
         if delta.games > 0 {
-            e.attempts = 0; // 有进度即健康
+            e.attempts = 0;
         }
         Ok(e.clone())
     }
@@ -617,7 +631,6 @@ impl EvalStore for FakeEval {
             .find(|x| x.network_sha == r.network_sha && x.opponent_spec == r.opponent_spec)
         {
             Some(old) => {
-                // UNIQUE 覆盖 + 部分结果不劣化完整结果
                 if r.num_games >= old.num_games {
                     *old = r;
                 }
@@ -632,7 +645,11 @@ impl EvalStore for FakeEval {
         Ok(())
     }
 
-    fn get_eval_result(&self, network_sha: &str, opponent_spec: &str) -> CoreResult<Option<EvalResult>> {
+    fn get_eval_result(
+        &self,
+        network_sha: &str,
+        opponent_spec: &str,
+    ) -> CoreResult<Option<EvalResult>> {
         Ok(self
             .inner
             .lock()
@@ -651,21 +668,21 @@ impl EvalStore for FakeEval {
             .filter(|x| x.opponent_spec == opponent_spec)
             .cloned()
             .collect();
-        // 升序：created_at 优先，id 兜底
-        rows.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
+
+        rows.sort_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
         let skip = (rows.len() as i64 - limit).max(0) as usize;
         Ok(rows.into_iter().skip(skip).collect())
     }
 }
 
-// ---------------------------------------------------------------------------
-// trainers（权威积压口径）+ trainer registry + episodes
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Default)]
 pub struct FakeTrainers {
     list: Mutex<Vec<Trainer>>,
-    /// kind → 该类别已登记 episode 的 id 序列（kind_watermark 权威积压口径）
+
     episodes_by_kind: Mutex<HashMap<i64, Vec<i64>>>,
 }
 
@@ -692,15 +709,17 @@ impl TrainerStore for FakeTrainers {
         let g = self.episodes_by_kind.lock().unwrap();
         let ids = g.get(&kind).map(|v| v.as_slice()).unwrap_or(&[]);
         let beyond: Vec<i64> = ids.iter().copied().filter(|i| *i > after_id).collect();
-        Ok((beyond.iter().copied().max().unwrap_or(0), beyond.len() as i64))
+        Ok((
+            beyond.iter().copied().max().unwrap_or(0),
+            beyond.len() as i64,
+        ))
     }
 }
 
 #[derive(Debug, Default)]
 pub struct FakeRegistry {
     map: Mutex<HashMap<String, Trainer>>,
-    /// 与 [`FakeTrainers`] 的镜像（真实实现中两者是同一张 trainers 表）：
-    /// 心跳登记同步写入权威积压视图，心跳路径的即时重估才能看到新水位。
+
     mirror: Mutex<Option<Arc<FakeTrainers>>>,
 }
 
@@ -708,8 +727,6 @@ impl FakeRegistry {
     pub fn set_mirror(&self, t: Arc<FakeTrainers>) {
         *self.mirror.lock().unwrap() = Some(t);
     }
-
-    // —— 固有转发方法（测试无需 `use crate::ports::TrainerRegistryStore` 即可调用）——
 
     pub fn get_trainer(&self, id: &str) -> CoreResult<Option<Trainer>> {
         TrainerRegistryStore::get_trainer(self, id)
@@ -775,19 +792,38 @@ impl FakeEpisodes {
     }
 
     pub fn by_task(&self, task_id: &str) -> Option<Episode> {
-        self.inner.lock().unwrap().list.iter().find(|e| e.task_id == task_id).cloned()
+        self.inner
+            .lock()
+            .unwrap()
+            .list
+            .iter()
+            .find(|e| e.task_id == task_id)
+            .cloned()
     }
 }
 
 impl EpisodeStore for FakeEpisodes {
     fn get_episode_by_task(&self, task_id: &str) -> CoreResult<Option<Episode>> {
-        Ok(self.inner.lock().unwrap().list.iter().find(|e| e.task_id == task_id).cloned())
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .list
+            .iter()
+            .find(|e| e.task_id == task_id)
+            .cloned())
     }
 
     fn insert_episode(&self, draft: EpisodeDraft) -> CoreResult<i64> {
         let mut g = self.inner.lock().unwrap();
-        if g.list.iter().any(|e| !draft.task_id.is_empty() && e.task_id == draft.task_id) {
-            return Err(CoreError::Store(format!("duplicate task_id {}", draft.task_id)));
+        if g.list
+            .iter()
+            .any(|e| !draft.task_id.is_empty() && e.task_id == draft.task_id)
+        {
+            return Err(CoreError::Store(format!(
+                "duplicate task_id {}",
+                draft.task_id
+            )));
         }
         g.next_id += 1;
         let id = g.next_id;
@@ -813,9 +849,12 @@ impl EpisodeStore for FakeEpisodes {
         Ok(id)
     }
 
-    /// 与 Go 版 store.ListEpisodeKeys 语义一致：游标子查询独立于 kind 过滤、
-    /// 恒排除 kind=2（eval 回放记录不进消费管道）、limit<=0 取默认 200。
-    fn list_episode_keys(&self, after_key: &str, limit: i64, kind: Option<i64>) -> CoreResult<Vec<String>> {
+    fn list_episode_keys(
+        &self,
+        after_key: &str,
+        limit: i64,
+        kind: Option<i64>,
+    ) -> CoreResult<Vec<String>> {
         let g = self.inner.lock().unwrap();
         let mut limit = limit;
         if limit <= 0 || limit > 1000 {
@@ -835,7 +874,11 @@ impl EpisodeStore for FakeEpisodes {
             .map(|e| (e.id, e.object_key.clone()))
             .collect();
         pairs.sort_by_key(|(id, _)| *id);
-        Ok(pairs.into_iter().map(|(_, k)| k).take(limit as usize).collect())
+        Ok(pairs
+            .into_iter()
+            .map(|(_, k)| k)
+            .take(limit as usize)
+            .collect())
     }
 
     fn episode_id_by_key(&self, key: &str) -> CoreResult<Option<i64>> {
@@ -864,10 +907,6 @@ impl EpisodeStore for FakeEpisodes {
         Ok(rows)
     }
 }
-
-// ---------------------------------------------------------------------------
-// workers / feature packs / signer（pipeline 门面用例需要真实内存实现）
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Default)]
 pub struct FakeWorkers {
@@ -904,7 +943,12 @@ impl WorkerStore for FakeWorkers {
     }
 
     fn worker_version(&self, id: &str) -> CoreResult<Option<String>> {
-        Ok(self.map.lock().unwrap().get(id).map(|w| w.client_version.clone()))
+        Ok(self
+            .map
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|w| w.client_version.clone()))
     }
 
     fn list_workers(&self) -> CoreResult<Vec<Worker>> {
@@ -932,8 +976,6 @@ impl FakePacks {
         self.map.lock().unwrap().len()
     }
 
-    // —— 固有转发方法（测试无需 `use crate::ports::FeaturePackStore` 即可调用）——
-
     pub fn insert_feature_pack(&self, fp: FeaturePackDraft) -> CoreResult<()> {
         FeaturePackStore::insert_feature_pack(self, fp)
     }
@@ -950,27 +992,32 @@ impl FakePacks {
 impl FeaturePackStore for FakePacks {
     fn insert_feature_pack(&self, fp: FeaturePackDraft) -> CoreResult<()> {
         let mut map = self.map.lock().unwrap();
-        // ON CONFLICT DO NOTHING（保留首行；R2 对象内容由 sha256 校验，重复上传无害）
-        map.entry((fp.episode_object_key.clone(), fp.pack_version)).or_insert_with(|| FeaturePack {
-            id: 0,
-            episode_object_key: fp.episode_object_key,
-            pack_version: fp.pack_version,
-            object_key: fp.object_key,
-            created_at: fp.created_at,
-        });
+
+        map.entry((fp.episode_object_key.clone(), fp.pack_version))
+            .or_insert_with(|| FeaturePack {
+                id: 0,
+                episode_object_key: fp.episode_object_key,
+                pack_version: fp.pack_version,
+                object_key: fp.object_key,
+                created_at: fp.created_at,
+            });
         Ok(())
     }
 
-    fn get_feature_pack(&self, episode_object_key: &str, pack_version: i64) -> CoreResult<Option<FeaturePack>> {
-        Ok(self.map.lock().unwrap().get(&(episode_object_key.to_string(), pack_version)).cloned())
+    fn get_feature_pack(
+        &self,
+        episode_object_key: &str,
+        pack_version: i64,
+    ) -> CoreResult<Option<FeaturePack>> {
+        Ok(self
+            .map
+            .lock()
+            .unwrap()
+            .get(&(episode_object_key.to_string(), pack_version))
+            .cloned())
     }
 }
 
-// ---------------------------------------------------------------------------
-// jobs（统一 Job 机制）
-// ---------------------------------------------------------------------------
-
-/// jobs 表内存 fake（完整实现，供 JobManager 单测与装配束使用）。
 #[derive(Debug, Default)]
 pub struct FakeJobs {
     inner: Mutex<FakeJobsInner>,
@@ -985,7 +1032,11 @@ struct FakeJobsInner {
 
 impl JobStore for FakeJobs {
     fn insert_job(&self, row: JobRow) -> CoreResult<()> {
-        self.inner.lock().unwrap().jobs.insert(row.job_id.clone(), row);
+        self.inner
+            .lock()
+            .unwrap()
+            .jobs
+            .insert(row.job_id.clone(), row);
         Ok(())
     }
 
@@ -1001,7 +1052,11 @@ impl JobStore for FakeJobs {
             .filter(|j| state.is_none_or(|s| j.state == s) && kind.is_none_or(|k| j.kind == k))
             .cloned()
             .collect();
-        rows.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.created_at.cmp(&b.created_at)));
+        rows.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then(a.created_at.cmp(&b.created_at))
+        });
         Ok(rows)
     }
 
@@ -1043,7 +1098,11 @@ impl JobStore for FakeJobs {
     fn insert_job_task(&self, task_id: &str, job_id: &str, games: i64) -> CoreResult<()> {
         self.inner.lock().unwrap().tasks.insert(
             task_id.to_string(),
-            JobTaskLink { task_id: task_id.to_string(), job_id: job_id.to_string(), games },
+            JobTaskLink {
+                task_id: task_id.to_string(),
+                job_id: job_id.to_string(),
+                games,
+            },
         );
         Ok(())
     }
@@ -1071,12 +1130,14 @@ impl JobStore for FakeJobs {
 }
 
 impl FakeJobs {
-    /// 预置一个 job 行（测试种子数据）。
     pub fn seed_job(&self, row: JobRow) {
-        self.inner.lock().unwrap().jobs.insert(row.job_id.clone(), row);
+        self.inner
+            .lock()
+            .unwrap()
+            .jobs
+            .insert(row.job_id.clone(), row);
     }
 
-    /// 自增 id 生成器（测试构造 job_id 用）。
     pub fn next_id(&self) -> i64 {
         let mut inner = self.inner.lock().unwrap();
         inner.next_id += 1;
@@ -1084,7 +1145,6 @@ impl FakeJobs {
     }
 }
 
-/// 预签名 URL fake：`put:<key>` / `get:<key>`（测试断言对象键即可）。
 #[derive(Debug, Default)]
 pub struct FakeSigner;
 
@@ -1098,12 +1158,6 @@ impl ObjectSigner for FakeSigner {
     }
 }
 
-// ---------------------------------------------------------------------------
-// 端口束
-// ---------------------------------------------------------------------------
-
-/// 全套内存 fake；测试按需取字段（`f.eval` / `f.networks` / ...），
-/// 经 [`Fakes::ports`] 组装 `Ports`。
 #[derive(Debug, Default)]
 pub struct Fakes {
     pub clock: Arc<FakeClock>,
@@ -1124,8 +1178,7 @@ impl Fakes {
     pub fn new() -> Self {
         let trainers = Arc::new(FakeTrainers::default());
         let registry = Arc::new(FakeRegistry::default());
-        // 真实实现中 TrainerRegistryStore（心跳登记）与 TrainerStore（权威积压）
-        // 是同一张 trainers 表：fake 侧做镜像，保证「心跳到达即影响停滞判定」。
+
         registry.set_mirror(trainers.clone());
         Self {
             clock: FakeClock::new(1_000),

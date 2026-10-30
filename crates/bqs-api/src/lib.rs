@@ -1,25 +1,4 @@
-//! 【所有权：edge 成员】
-//!
-//! WebUI JSON API（axum，同进程 HTTP，默认仅本机，无鉴权勿暴露公网）。
-//!
-//! 参考实现（行为真源）：`banqi-scheduler/internal/api/`（server.go / handlers*.go /
-//! storage.go / helpers.go），JSON 字段名以 Go 版视图 tag 为准（`/api/status` 契约
-//! 由 Go 版 `contract_test.go` 锁定，本 crate 以 `tests::contract` 快照对照）——
-//! **前端零改动可用**。
-//!
-//! 路由（与 Go 版一致）：
-//! - 只读：/api/status / networks / matches / eval / workers / trainers /
-//!   episodes（分页）/ episodes/{id}/replay(/{index})（回放）/ data-stats /
-//!   tasks / task-stats / train-config / storage(+active, profiles/{name})
-//! - 控制：POST /api/networks/{sha}/promote、POST /api/control、
-//!   PUT /api/train-config、PUT|DELETE /api/storage/profiles/{name}、
-//!   POST /api/storage/activate、PUT /api/workers/{id}/note、POST /api/eval/trigger、
-//!   GET|PUT /api/eval-config
-//! - 静态：`server.webui_dist` 目录托管 + SPA 回落 index.html（未配置 → 503 提示）
-//!
-//! 约定：handlers 依赖 `bqs_core::Server` 的子系统 pub 字段读取查询方法
-//! （`srv.ports.*` / `srv.evalc.*` / `srv.disp.*` / `srv.ctl`）；需要新增 store 查询
-//! 时先与 main 协调扩展 `bqs_core::ports`（勿绕过端口）。
+
 
 pub mod handlers_control;
 pub mod handlers_episodes;
@@ -45,24 +24,23 @@ use serde::de::DeserializeOwned;
 
 use bqs_core::server::Server;
 
-/// 请求体大小上限：控制请求 4096 / 训练配置 16384（Go: maxControlBody /
-/// maxTrainConfigBody）；axum 无逐路由读限，取两者最大值全局收紧。
+
 pub const MAX_BODY_LIMIT: usize = 16 * 1024;
 pub const MAX_CONTROL_BODY: usize = 4096;
 pub const MAX_TRAIN_CONFIG_BODY: usize = 16 * 1024;
 
-/// API 状态束：`Manager` 不进 Server，与门面并列表达（装配由 bqs-server 完成）。
+
 #[derive(Clone)]
 pub struct AppState {
     pub server: Arc<Server>,
     pub storage: Arc<bqs_storage::Manager>,
-    /// worker 在线判定窗口（秒；Go: onlineWindow = server.worker_online_seconds）。
+
     pub online_window_secs: i64,
-    /// WebUI 静态资源目录（None = 不托管，命中回落路径一律 503）。
+
     pub webui_dist: Option<Arc<PathBuf>>,
 }
 
-/// 统一错误应答：`{"error": msg}`（Go: writeError）；msg 直接展示给运维。
+
 #[derive(Debug)]
 pub struct ApiError {
     status: StatusCode,
@@ -102,7 +80,7 @@ impl IntoResponse for ApiError {
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
-/// 解析 JSON 请求体（统一大小上限 + 统一 400 错误回包，对齐 Go decodeBody）。
+
 pub fn decode_body<T: DeserializeOwned>(bytes: &Bytes, max: usize) -> Result<T, ApiError> {
     if bytes.len() > max {
         return Err(ApiError::bad_request("http: request body too large"));
@@ -111,7 +89,7 @@ pub fn decode_body<T: DeserializeOwned>(bytes: &Bytes, max: usize) -> Result<T, 
         .map_err(|e| ApiError::bad_request(format!("invalid json body: {e}")))
 }
 
-/// URL 查询参数解析（Go: r.URL.Query().Get + ParseInt，解析失败按 0 处理）。
+
 pub fn int_query(query: Option<&str>, key: &str) -> i64 {
     let Some(q) = query else { return 0 };
     for pair in q.split('&') {
@@ -123,7 +101,7 @@ pub fn int_query(query: Option<&str>, key: &str) -> i64 {
     0
 }
 
-/// `bqs_storage::StorageProfile` → 对外掩码视图（secret 永不出域）。
+
 pub fn to_profile_view(p: &bqs_storage::StorageProfile) -> views::StorageProfileView {
     views::StorageProfileView {
         name: p.name.clone(),
@@ -136,7 +114,7 @@ pub fn to_profile_view(p: &bqs_storage::StorageProfile) -> views::StorageProfile
     }
 }
 
-/// accessKey 掩码（Go: maskKey：<=8 全掩码，否则前 4 + **** + 后 4）。
+
 pub fn mask_key(k: &str) -> String {
     if k.is_empty() {
         String::new()
@@ -147,20 +125,16 @@ pub fn mask_key(k: &str) -> String {
     }
 }
 
-/// profile 名白名单（Go: profileNameRe `^[A-Za-z0-9_-]{1,32}$`；避免引入 regex，
-/// 手写等价判定）。
+
 pub fn valid_profile_name(name: &str) -> bool {
     (1..=32).contains(&name.len())
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-// ---------------------------------------------------------------------------
-// 路由表（与 Go internal/api/server.go 的 mux 注册逐一对应）
-// ---------------------------------------------------------------------------
 
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
-        // 只读
+
         .route("/api/status", get(handlers_status::status))
         .route("/api/networks", get(handlers_status::networks))
         .route("/api/networks/{sha}/promote", post(handlers_status::promote))
@@ -175,7 +149,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/workers/{id}/note", put(handlers_status::worker_note))
         .route("/api/trainers", get(handlers_trainers::trainers))
         .route("/api/episodes", get(handlers_episodes::episodes))
-        // episode 回放（Go: replay.go；对象拉取 + gzip + proto 解码 + god 视角重建）
+
         .route(
             "/api/episodes/{id}/replay",
             get(handlers_replay::episode_replay_list),
@@ -200,10 +174,10 @@ pub fn router(state: AppState) -> Router {
                 .delete(handlers_storage::profile_delete),
         )
         .route("/api/storage/activate", post(handlers_storage::activate))
-        // 统一 Job 机制（collect / selfplay / eval job 的提交 / 进度 / 控制）
+
         .route("/api/jobs", get(handlers_jobs::list_jobs).post(handlers_jobs::submit_job))
         .route("/api/jobs/{id}/{action}", post(handlers_jobs::control_job))
-        // 控制
+
         .route("/api/control", post(handlers_control::control))
         .layer(DefaultBodyLimit::max(MAX_BODY_LIMIT))
         .with_state(state.clone());
@@ -211,11 +185,7 @@ pub fn router(state: AppState) -> Router {
     Router::new().merge(api).fallback(any(static_handler)).with_state(state)
 }
 
-// ---------------------------------------------------------------------------
-// 静态托管 + SPA 回落（Go: handleStatic；embed 产物 → 磁盘目录）
-// ---------------------------------------------------------------------------
 
-/// 扩展名 → Content-Type（Go: mime.TypeByExtension 的 WebUI 产物子集）。
 fn content_type(name: &str) -> &'static str {
     let ext = Path::new(name)
         .extension()
@@ -242,8 +212,7 @@ fn content_type(name: &str) -> &'static str {
     }
 }
 
-/// 静态文件 + SPA 回落：非 /api 路径先按名取文件，未命中回落 index.html；
-/// 未配置目录（或目录缺 index.html）→ 503 文本提示（Go 版语义）。
+
 async fn static_handler(
     State(st): State<AppState>,
     req: Request<axum::body::Body>,
@@ -256,7 +225,7 @@ async fn static_handler(
         return ApiError::not_found(format!("unknown api path: {path}")).into_response();
     }
     let rel = path.trim_start_matches('/');
-    // 防目录穿越（Go: path.Clean；这里直接拒绝含 .. 的段）
+
     let safe = !rel.split('/').any(|seg| seg == "..");
     if safe {
         let name = if rel.is_empty() { "index.html" } else { rel };
@@ -281,16 +250,13 @@ async fn static_handler(
         .into_response()
 }
 
-// ---------------------------------------------------------------------------
-// 契约快照测试（对照 Go contract_test.go 的字段集；fake 状态序列化后断言字段名）
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod contract {
     use super::*;
     use crate::views::*;
 
-    /// 视图序列化后的顶层键集合。
+
     fn keys<T: serde::Serialize>(v: &T) -> Vec<String> {
         match serde_json::to_value(v).unwrap() {
             serde_json::Value::Object(map) => map.keys().cloned().collect(),
@@ -310,7 +276,7 @@ mod contract {
         }
     }
 
-    /// /api/status 顶层契约（Go contract_test.go TestStatusContractSnapshot）。
+
     #[test]
     fn status_top_level() {
         let v = StatusView {
@@ -376,7 +342,7 @@ mod contract {
         );
     }
 
-    /// /api/status.best（networkView）与 /api/networks 条目契约。
+
     #[test]
     fn network_view() {
         let v = NetworkView {
@@ -390,7 +356,7 @@ mod contract {
         assert_keys(&keys(&v), &["sha", "parentSha", "createdAt", "isBest", "status", "notes"]);
     }
 
-    /// /api/matches 条目契约（pairs 为 6 元数组，Hexanomial 序列化）。
+
     #[test]
     fn match_view() {
         let v = MatchView {
@@ -419,7 +385,7 @@ mod contract {
         assert!(json["score"].is_null());
     }
 
-    /// /api/workers 条目契约。
+
     #[test]
     fn worker_view() {
         let v = WorkerView {
@@ -452,7 +418,7 @@ mod contract {
         );
     }
 
-    /// /api/eval 契约（config/latest/trends/running + 趋势点字段）。
+
     #[test]
     fn eval_view() {
         let point = EvalResultView {
@@ -515,7 +481,7 @@ mod contract {
         assert_keys(&keys(trend), &["opponent", "versions", "noProgress", "latestWinRate", "points"]);
     }
 
-    /// /api/trainers 契约（balance 配置 + trainer 快照）。
+
     #[test]
     fn trainers_view() {
         let tv = TrainerView {
@@ -566,7 +532,7 @@ mod contract {
         );
     }
 
-    /// /api/train-config 契约（overrides + fields，含 enum,omitempty 语义）。
+
     #[test]
     fn train_config_view() {
         let with_enum = TrainConfigFieldView {
@@ -595,7 +561,7 @@ mod contract {
         assert!(json["fields"][1].get("enum").is_none(), "空 enum 应被省略（omitempty）");
     }
 
-    /// /api/episodes 条目与分页信封契约。
+
     #[test]
     fn episode_views() {
         let ev = EpisodeView {
@@ -630,7 +596,7 @@ mod contract {
         assert_keys(&keys(&page), &["items", "nextBefore", "hasMore"]);
     }
 
-    /// /api/storage 契约（掩码语义：secret 永不出域）。
+
     #[test]
     fn storage_views() {
         assert_eq!(mask_key("abcd1234efgh"), "abcd****efgh");
@@ -657,7 +623,7 @@ mod contract {
         assert_keys(&keys(&sv), &["active", "profiles"]);
     }
 
-    /// /api/eval-config GET 契约（override + effective）。
+
     #[test]
     fn eval_config_get_view() {
         let v = EvalConfigGetView {
@@ -672,15 +638,14 @@ mod contract {
         assert_keys(&keys(&v.effective), &["enabled", "opponents", "stopWinRate"]);
     }
 
-    /// eval / eval trigger 响应契约。
+
     #[test]
     fn eval_trigger_view() {
         let v = EvalTriggerView { ok: true, triggered: 2, message: "已入队 2 条评估".into() };
         assert_keys(&keys(&v), &["ok", "triggered", "message"]);
     }
 
-    /// episode 回放契约（对齐 banqi-frontend types.ts 的
-    /// ReplayList/ReplayGameSummary/ReplayGame/ReplayStep/HiddenBag，camelCase）。
+
     #[test]
     fn replay_views() {
         use crate::views::*;
@@ -749,7 +714,7 @@ mod contract {
         ] {
             assert!(step_json.get(k).is_some(), "ReplayStep 缺字段 {k}");
         }
-        // omitempty 语义：false/空字符串省略（对齐 Go json tag）
+
         let mut quiet = ReplayStepView { is_chance: false, revealed: String::new(), captured: String::new(), policy_actions: None, policy_values: None, labeler_action: None, ..step.clone() };
         quiet.is_chance = false;
         quiet.revealed = String::new();
@@ -758,7 +723,7 @@ mod contract {
         assert!(quiet_json.get("isChance").is_none(), "isChance=false 应省略");
         assert!(quiet_json.get("revealed").is_none(), "revealed 空 应省略");
         assert!(quiet_json.get("captured").is_none(), "captured 空 应省略");
-        // 可空诊断字段：None 序列化为 null（TS: number[] | null）
+
         quiet.policy_actions = None;
         quiet.policy_values = None;
         quiet.labeler_action = None;

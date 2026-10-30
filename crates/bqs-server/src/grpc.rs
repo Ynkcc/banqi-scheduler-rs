@@ -1,19 +1,9 @@
-//! tonic 传输层：17 个 RPC 逐一 decode → `tokio::task::spawn_blocking`（内核同步）
-//! → `CoreError` 映射 `Status::internal`。
-//!
-//! 业务拒绝不走 Err（accepted=false / message 在回包字段里，与 Go 版语义一致）；
-//! `CoreError` 只表示真故障。
-//!
-//! 注：方法体形制完全一致但不走 macro_rules 生成——`#[async_trait]` 是 proc-macro，
-//! 无法转换尚未展开的宏体里的 async fn（E0195）。
-
 use std::sync::Arc;
 
 use bqs_core::server::Server;
 use bqs_proto::pb::scheduler_service_server::SchedulerService;
 use bqs_proto::*;
 
-/// gRPC 服务外壳：仅做线程池搬运与错误映射，无业务状态。
 pub struct SchedulerSvc(pub Arc<Server>);
 
 fn internal(err: bqs_core::CoreError) -> tonic::Status {
@@ -24,7 +14,6 @@ fn join_err(e: tokio::task::JoinError) -> tonic::Status {
     tonic::Status::internal(format!("task join: {e}"))
 }
 
-/// 通用转发：decode → spawn_blocking（内核同步）→ 错误映射。
 macro_rules! forward {
     ($server:expr, $req:expr, $call:ident) => {{
         let server = Arc::clone(&$server);
@@ -149,8 +138,6 @@ impl SchedulerService for SchedulerSvc {
         let reply = forward!(self.0, request.into_inner(), request_feature_pack)?;
         Ok(tonic::Response::new(reply))
     }
-
-    // ---- 统一 Job 管理（collect / selfplay / eval）----
 
     async fn submit_job(
         &self,

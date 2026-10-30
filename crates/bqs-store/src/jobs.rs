@@ -1,11 +1,3 @@
-//! 【所有权：infra 成员】jobs / job_tasks 表适配器（统一 Job 机制持久层）。
-//!
-//! 参考同目录 eval.rs / episodes.rs 的写法。要点：
-//! - `incr_job_completed` / `incr_job_dispatched` 必须单事务读改写（先落库后
-//!   终态的保序约定依赖单语句/单事务原子性）；
-//! - `list_jobs` 排序 = 派发源选择顺序：priority DESC、created_at ASC；
-//! - `job_tasks` 行在聚合完成后由调用方删除（CAS 防双计，映射只服务上报路径）。
-
 use bqs_core::ports::{JobRow, JobStore, JobTaskLink};
 use bqs_core::CoreResult;
 use rusqlite::OptionalExtension;
@@ -77,8 +69,16 @@ impl JobStore for Store {
                 .map_err(StoreError::from)?;
             stmt.query_row(rusqlite::params![job_id], |row| {
                 Ok(row_from(
-                    row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
-                    row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
                     row.get(10)?,
                 ))
             })
@@ -110,8 +110,16 @@ impl JobStore for Store {
             let kind_p = kind;
             let map = |row: &rusqlite::Row| {
                 Ok(row_from(
-                    row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
-                    row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
                     row.get(10)?,
                 ))
             };
@@ -185,12 +193,13 @@ impl JobStore for Store {
     fn incr_job_completed(&self, job_id: &str, games: i64, now: i64) -> CoreResult<JobRow> {
         self.with_conn(|conn| {
             conn.execute_batch("BEGIN").map_err(StoreError::from)?;
-            let write = conn.execute(
-                "UPDATE jobs SET completed_games = completed_games + ?2, updated_at = ?3
+            let write = conn
+                .execute(
+                    "UPDATE jobs SET completed_games = completed_games + ?2, updated_at = ?3
 				 WHERE job_id = ?1",
-                rusqlite::params![job_id, games, now],
-            )
-            .map_err(StoreError::from);
+                    rusqlite::params![job_id, games, now],
+                )
+                .map_err(StoreError::from);
             if let Err(e) = write {
                 let _ = conn.execute_batch("ROLLBACK");
                 return Err(StoreError::from(e).into());
@@ -199,9 +208,7 @@ impl JobStore for Store {
             match read {
                 Ok(row) => {
                     conn.execute_batch("COMMIT").map_err(StoreError::from)?;
-                    row.ok_or_else(|| {
-                        StoreError::Unexpected(format!("job {job_id} 聚合后消失"))
-                    })
+                    row.ok_or_else(|| StoreError::Unexpected(format!("job {job_id} 聚合后消失")))
                 }
                 Err(e) => {
                     let _ = conn.execute_batch("ROLLBACK");
@@ -228,7 +235,11 @@ impl JobStore for Store {
                 .prepare("SELECT task_id, job_id, games FROM job_tasks WHERE task_id = ?1")
                 .map_err(StoreError::from)?;
             stmt.query_row(rusqlite::params![task_id], |row| {
-                Ok(JobTaskLink { task_id: row.get(0)?, job_id: row.get(1)?, games: row.get(2)? })
+                Ok(JobTaskLink {
+                    task_id: row.get(0)?,
+                    job_id: row.get(1)?,
+                    games: row.get(2)?,
+                })
             })
             .optional()
             .map_err(StoreError::from)
@@ -237,8 +248,11 @@ impl JobStore for Store {
 
     fn delete_job_task(&self, task_id: &str) -> CoreResult<()> {
         self.with_conn(|conn| {
-            conn.execute("DELETE FROM job_tasks WHERE task_id = ?1", rusqlite::params![task_id])
-                .map_err(StoreError::from)?;
+            conn.execute(
+                "DELETE FROM job_tasks WHERE task_id = ?1",
+                rusqlite::params![task_id],
+            )
+            .map_err(StoreError::from)?;
             Ok(())
         })
     }
@@ -269,8 +283,16 @@ impl Store {
             .map_err(StoreError::from)?;
         stmt.query_row(rusqlite::params![job_id], |row| {
             Ok(row_from(
-                row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
-                row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
                 row.get(10)?,
             ))
         })
@@ -308,7 +330,7 @@ mod tests {
         let row = JS::get_job(&*s, "j1").unwrap().unwrap();
         assert!(row.spec_json.contains("\"match_id\":7"));
         assert_eq!(row.updated_at, 99);
-        // 不存在的 job：no-op（不报错）
+
         JS::update_job_spec(&*s, "ghost", "{}", 100).unwrap();
     }
 }

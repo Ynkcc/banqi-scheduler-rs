@@ -1,6 +1,3 @@
-//! 【所有权：infra 成员】workers 表端口：worker 心跳登记与查询。
-//! SQL 逐条对照 Go 版 internal/store/workers.go。
-
 use bqs_core::ports::WorkerStore;
 use bqs_core::types::Worker;
 use bqs_core::CoreResult;
@@ -9,7 +6,6 @@ use crate::{Store, StoreError};
 
 use rusqlite::OptionalExtension;
 
-/// workers 表的统一列序（对照 Go 版 workerColumns）。
 const WORKER_COLUMNS: &str =
     "id, last_seen, threads, completed_games, client_version, memory_mb, note, health_status, last_error";
 
@@ -28,10 +24,6 @@ fn scan_worker_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Worker> {
 }
 
 impl WorkerStore for Store {
-    /// UPSERT 单行心跳。last_seen 取自注入 Clock（Go 版 time.Now().Unix()）。
-    ///
-    /// 健康字段空串 = 旧客户端：CASE 保留上次上报值，避免旧客户端心跳清掉状态
-    /// （对照 Go 版 TouchWorker 的 COALESCE 语义）。心跳不写 note 列，备注保留。
     fn touch_worker(
         &self,
         id: &str,
@@ -59,7 +51,6 @@ impl WorkerStore for Store {
         })
     }
 
-    /// GetTask 版本管控：该 worker 上次声明的 client_version；未见过该 worker 返回 None。
     fn worker_version(&self, id: &str) -> CoreResult<Option<String>> {
         self.with_conn(|conn| {
             conn.query_row(
@@ -82,14 +73,11 @@ impl WorkerStore for Store {
             let rows = stmt
                 .query_map([], scan_worker_row)
                 .map_err(StoreError::from)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         })
     }
 
-    /// 运维备注（PUT /api/workers/{id}/note）。
-    /// worker 首次心跳上报前不存在——业务拒绝不是错误，这里幂等 no-op（对照
-    /// Go 版返回 sql.ErrNoRows 由 api 层转 404；Rust 端把该拒绝交给 api 层用
-    /// list/get 判断，store 层保持「Err 只表示真故障」的约定）。
     fn set_worker_note(&self, id: &str, note: &str) -> CoreResult<()> {
         self.with_conn(|conn| {
             conn.execute(
@@ -113,33 +101,37 @@ mod tests {
         WS::touch_worker(&*s, "w1", 4, 10, "v1", 8192, "ok", "").unwrap();
         let w = WS::list_workers(&*s).unwrap().remove(0);
         assert_eq!(
-            (w.threads, w.completed_games, w.client_version.as_str(), w.memory_mb),
+            (
+                w.threads,
+                w.completed_games,
+                w.client_version.as_str(),
+                w.memory_mb
+            ),
             (4, 10, "v1", 8192)
         );
         assert_eq!(w.health_status, "ok");
 
-        // 备注：心跳不覆盖
         WS::set_worker_note(&*s, "w1", "gpu-box").unwrap();
         WS::touch_worker(&*s, "w1", 8, 20, "v2", 16384, "ok", "").unwrap();
         let w = WS::list_workers(&*s).unwrap().remove(0);
         assert_eq!(w.note, "gpu-box");
         assert_eq!(w.completed_games, 20);
 
-        // 健康字段空串 = 旧客户端：保留上次上报值
         WS::touch_worker(&*s, "w1", 8, 21, "v2", 16384, "", "").unwrap();
         let w = WS::list_workers(&*s).unwrap().remove(0);
         assert_eq!(w.health_status, "ok");
 
-        // 非空则覆盖
         WS::touch_worker(&*s, "w1", 8, 22, "v2", 16384, "degraded", "oom").unwrap();
         let w = WS::list_workers(&*s).unwrap().remove(0);
         assert_eq!(w.health_status, "degraded");
         assert_eq!(w.last_error, "oom");
 
-        // 版本声明
-        assert_eq!(WS::worker_version(&*s, "w1").unwrap().as_deref(), Some("v2"));
+        assert_eq!(
+            WS::worker_version(&*s, "w1").unwrap().as_deref(),
+            Some("v2")
+        );
         assert_eq!(WS::worker_version(&*s, "ghost").unwrap(), None);
-        // 不存在 worker 的备注更新为 no-op（业务拒绝不报错）
+
         WS::set_worker_note(&*s, "ghost", "x").unwrap();
     }
 }

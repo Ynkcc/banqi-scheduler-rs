@@ -1,29 +1,19 @@
-//! 变体对局元信息（唯一真源：`banqi-core/crates/bq-env` 的 `Variant`）。
-//!
-//! 经跨仓库 path 依赖 `bq-env` 在编译期直接取数（`list_variant_metas()`），
-//! 不再有手工生成/拷贝的 `variants.json`——banqi-core 新增变体后，本 crate
-//! 重新编译即自动跟进，无需任何再生成步骤。
-//! 元信息经 `GetInfo.variant_meta` 下发给训练端（训练端不再本地声明对局元数据）。
-
 use std::sync::LazyLock;
 
-/// 变体对局元信息（与 proto `VariantMeta` 字段一一对应；由调用方转换为
-/// proto 消息。字段类型收窄为 proto 侧的 u32/i32）。
 #[derive(Debug, Clone)]
 pub struct VariantMeta {
-    /// 稳定标识（Variant::as_str()）
     pub id: String,
-    /// 显示名
+
     pub label: String,
     pub rows: u32,
     pub cols: u32,
-    /// 7 元，按 PieceType 索引（未激活型为 0）
+
     pub piece_counts: Vec<u32>,
-    /// 7 元，按 PieceType 索引
+
     pub piece_values: Vec<i32>,
     pub initial_health: i32,
     pub max_consecutive_moves_for_draw: u32,
-    /// 合法空间对称集（含 identity，由棋盘形状推导）
+
     pub symmetries: Vec<String>,
 }
 
@@ -50,12 +40,10 @@ pub static VARIANTS: LazyLock<Vec<VariantMeta>> = LazyLock::new(|| {
         .collect()
 });
 
-/// 按变体 id 查找元信息。
 pub fn lookup(variant: &str) -> Option<&'static VariantMeta> {
     VARIANTS.iter().find(|v| v.id == variant)
 }
 
-/// 变体词表（与 banqi-core::Variant::as_str() 一致）。
 pub fn all_ids() -> Vec<&'static str> {
     bq_env::env::config::Variant::ALL
         .iter()
@@ -76,7 +64,10 @@ mod tests {
 
     #[test]
     fn ids_match_bq_env_table() {
-        assert_eq!(all_ids(), VARIANTS.iter().map(|v| v.id.as_str()).collect::<Vec<_>>());
+        assert_eq!(
+            all_ids(),
+            VARIANTS.iter().map(|v| v.id.as_str()).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -94,7 +85,10 @@ mod tests {
         assert_eq!(v.rows, cfg.rows as u32);
         assert_eq!(v.cols, cfg.cols as u32);
         assert_eq!(v.initial_health, cfg.initial_health);
-        assert_eq!(v.max_consecutive_moves_for_draw, cfg.max_consecutive_moves_for_draw as u32);
+        assert_eq!(
+            v.max_consecutive_moves_for_draw,
+            cfg.max_consecutive_moves_for_draw as u32
+        );
         assert!(!v.symmetries.is_empty());
     }
 }

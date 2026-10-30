@@ -1,7 +1,3 @@
-//! 【所有权：infra 成员】trainers 表端口：BalanceMonitor 消费面（TrainerStore）
-//! 与 Server TrainerHeartbeat 登记面（TrainerRegistryStore）。
-//! SQL 逐条对照 Go 版 internal/store/trainers.go（含 EpisodeIDByKey 之外的全部方法）。
-
 use bqs_core::ports::{TrainerRegistryStore, TrainerStore};
 use bqs_core::types::Trainer;
 use bqs_core::CoreResult;
@@ -10,7 +6,6 @@ use crate::{Store, StoreError};
 
 use rusqlite::OptionalExtension;
 
-/// trainers 表的统一列序（对照 Go 版 trainerColumns）。
 const TRAINER_COLUMNS: &str = "id, last_seen, variant, kind, consumed_key, consumed_id, \
      samples_consumed, backlog, buffered, health_status, last_error, progress";
 
@@ -32,7 +27,6 @@ fn scan_trainer_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Trainer> {
 }
 
 impl TrainerStore for Store {
-    /// 按最近心跳倒序列出全部 trainer 快照（生成-消费平衡的感知数据源）。
     fn list_trainers(&self) -> CoreResult<Vec<Trainer>> {
         self.with_conn(|conn| {
             let mut stmt = conn
@@ -43,13 +37,11 @@ impl TrainerStore for Store {
             let rows = stmt
                 .query_map([], scan_trainer_row)
                 .map_err(StoreError::from)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         })
     }
 
-    /// 该类别的登记水位：返回 (maxID, beyond)——kind 匹配、id > after_id 的
-    /// 批次中的最大 id 与超出条数（权威积压口径，与 trainer 自报 backlog 相互印证）。
-    /// 对照 Go 版 KindWatermark：无匹配行时 MAX 置 0（COALESCE）。
     fn kind_watermark(&self, kind: i64, after_id: i64) -> CoreResult<(i64, i64)> {
         self.with_conn(|conn| {
             conn.query_row(
@@ -63,7 +55,6 @@ impl TrainerStore for Store {
 }
 
 impl TrainerRegistryStore for Store {
-    /// 读取单条 trainer 快照；不存在时返回 None。
     fn get_trainer(&self, id: &str) -> CoreResult<Option<Trainer>> {
         self.with_conn(|conn| {
             conn.query_row(
@@ -76,10 +67,6 @@ impl TrainerRegistryStore for Store {
         })
     }
 
-    /// UPSERT trainer 心跳快照。last_seen 取自注入 Clock（Go 版 time.Now().Unix()）。
-    ///
-    /// 健康字段（health_status / last_error / progress）空串 = 旧客户端：CASE 保留
-    /// 上次上报值（与 TouchWorker 同语义，对照 Go 版 TouchTrainer）。
     fn touch_trainer(&self, t: Trainer) -> CoreResult<()> {
         let now = self.now();
         self.with_conn(|conn| {
@@ -131,11 +118,20 @@ mod tests {
         let t = TRS::get_trainer(&*s, "t1").unwrap().unwrap();
         assert_eq!((t.kind, t.backlog, t.samples_consumed), (1, 5, 100));
 
-        // 健康字段空串 = 旧客户端：保留上次上报值
-        TRS::touch_trainer(&*s, Trainer { id: "t1".into(), health_status: "".into(), ..trainer("t1", 1) }).unwrap();
-        assert_eq!(TRS::get_trainer(&*s, "t1").unwrap().unwrap().health_status, "ok");
+        TRS::touch_trainer(
+            &*s,
+            Trainer {
+                id: "t1".into(),
+                health_status: "".into(),
+                ..trainer("t1", 1)
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            TRS::get_trainer(&*s, "t1").unwrap().unwrap().health_status,
+            "ok"
+        );
 
-        // 非空则覆盖
         let mut t2 = trainer("t1", 1);
         t2.health_status = "fatal".into();
         t2.last_error = "crash".into();
@@ -151,7 +147,6 @@ mod tests {
         assert_eq!(TS::list_trainers(&*s).unwrap().len(), 1);
     }
 
-    /// kind_watermark：MAX(id) + 超出条数（权威积压口径）。
     #[test]
     fn kind_watermark_counts() {
         let (_dir, s) = crate::testutil::open_temp_store();
@@ -161,7 +156,11 @@ mod tests {
         for (i, kind) in [1i64, 1, 0].into_iter().enumerate() {
             ES::insert_episode(
                 &*s,
-                EpisodeDraft { task_id: format!("tw-{i}"), kind, ..Default::default() },
+                EpisodeDraft {
+                    task_id: format!("tw-{i}"),
+                    kind,
+                    ..Default::default()
+                },
             )
             .unwrap();
         }
@@ -170,11 +169,11 @@ mod tests {
         assert!(max_id >= 2);
         assert_eq!(beyond, 2);
         let (max_id, beyond) = TS::kind_watermark(&*s, 1, max_id).unwrap();
-        assert_eq!((max_id, beyond), (0, 0)); // 水位之后无新增
+        assert_eq!((max_id, beyond), (0, 0));
         let (max_id, beyond) = TS::kind_watermark(&*s, 0, 0).unwrap();
         assert_eq!(beyond, 1);
         assert!(max_id >= 1);
-        let (_max, beyond) = TS::kind_watermark(&*s, 7, 0).unwrap(); // 无该类别
+        let (_max, beyond) = TS::kind_watermark(&*s, 7, 0).unwrap();
         assert_eq!(beyond, 0);
     }
 }

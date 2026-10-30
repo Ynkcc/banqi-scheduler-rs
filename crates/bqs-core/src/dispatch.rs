@@ -1,19 +1,3 @@
-//! 【所有权：core-pipeline 成员】
-//!
-//! TaskDispatcher：内存任务表 + 状态机（Assigned → Completed | Expired，终态不可逆）。
-//!
-//! 参考实现（行为真源，非逐行翻译）：`banqi-scheduler/internal/scheduler/dispatch.go`
-//! 与 `taskstate.go`。要点：
-//! - 内存表只做 task↔worker 归属校验 / 在飞判定 / CAS 上报权；进度以 DB 为准，重启即丢；
-//! - `claim_report`（CAS 抢占上报权，防 TOCTOU 双计）+ `rollback_report`
-//!   （聚合失败回滚终态，「先 DB 落库、后置终态」是修过真实 bug 的保序约定）；
-//! - Expired 也算「未上报过」：慢 worker 迟到上报仍可聚合；
-//! - `prune`：Done 保留 `DONE_TASK_RETENTION` / 未上报最长 `TASK_MAX_RETENTION`，
-//!   挂 GetTask 路径按 `PRUNE_INTERVAL` 节流（时间一律取自注入 Clock）；
-//! - 在飞局数快照（`in_flight_games`，供 eval 流式额度收缩）。
-//!
-//! 锁序：本子系统是叶子锁（只允许被 evalc 在持锁期间获取，禁止反向）。
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -23,24 +7,8 @@ use bqs_proto::TaskKind;
 
 use crate::{consts, ports::Clock, ports::Ports};
 
-/// selfplay / rating / derive 任务「已下发 → 超期」的默认期限。
-/// Go 版 taskstate.go：48 局 × 100k 预算在桌面约 3~4 分钟，10 分钟留 2.5x 余量。
 const TASK_DEADLINE_DEFAULT: Duration = Duration::from_secs(10 * 60);
 
-/// 任务生命周期状态机（状态只在 TaskDispatcher 内变更）：
-///
-/// ```text
-/// Assigned ──上报(episode / match result / eval)──▶ Completed（终态）
-///     └────────超期未上报（Deadline）──────────────▶ Expired  （终态，释放在飞名额）
-/// ```
-///
-/// 语义约定：
-/// - 首次上报（Assigned 或 Expired，`claim_report` CAS）→ Completed；此后重复
-///   上报保持 Completed（幂等短路）；
-/// - Expired 只表示「调度器视角超期未收到上报」，不代表任务在 worker 侧失败；
-///   迟到上报仍被接受（Deadline 只控制在飞名额，不否决数据），CAS 防重复计数；
-/// - 聚合/落库失败时 Completed 可回滚为 Assigned（`rollback_report`）；
-/// - 任务记录本身继续保留 `DONE_TASK_RETENTION` 时长供诊断，之后回收。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskState {
     Assigned,
@@ -58,36 +26,31 @@ impl TaskState {
     }
 }
 
-/// 内存任务表中的一条任务记录（`lookup` 一律返回快照副本，调用方只读）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunningTask {
-    /// 任务 id（内存表主键；register / register_in_flight 时由 dispatcher 回填）。
     pub task_id: String,
     pub worker_id: String,
     pub kind: TaskKind,
     pub state: TaskState,
-    /// 下发时间（Unix 秒，注入 Clock）
+
     pub assigned_at: i64,
-    /// 终态时间（0 = 在飞）
+
     pub finished_at: i64,
-    /// 是否已抢占上报权（CAS 口径）
+
     pub reported: bool,
-    /// 关联的 gatekeeper 对打（matches 表行）：rating 任务与混入 selfplay 任务
-    /// 非 0，ReportMatchResult 据此路由聚合；其余任务为 0。
+
     pub match_id: i64,
-    /// 主网络 sha（归属校验：ReportEpisode 的 network_sha 必须一致）。
+
     pub network_sha: String,
-    /// rating / 混入 selfplay 任务的对手网络 sha；eval 任务恒为空（对手不是网络）。
+
     pub opponent_sha: String,
-    /// eval 任务的对手标识（rule:capture_first 等）；其余任务为空。
+
     pub opponent_spec: String,
-    /// 本批局数（重搜任务 = 位置条数；derive 任务 = 1）。
+
     pub games: i64,
-    /// Assigned 状态的超期时间点（Unix 秒）；超期由 prune 迁移到 Expired。
-    /// eval 认领路径经 `register_in_flight` 绕过通用 deadline（见 Go 版 F4-P1）。
+
     pub deadline: i64,
-    /// 所属统一 Job 的 id（collect / selfplay / eval 任务非空；其余任务为空串）。
-    /// 抢占取消（按 job 取消在飞）与派发记账的内存依据；上报聚合依据落库（job_tasks）。
+
     pub job_id: String,
 }
 
@@ -113,19 +76,19 @@ impl Default for RunningTask {
 }
 
 impl RunningTask {
-    /// 以任务类别起步构造（其余字段由调用方填充；`register` 会重置状态机字段）。
     pub fn new(kind: TaskKind) -> Self {
-        Self { kind, ..Default::default() }
+        Self {
+            kind,
+            ..Default::default()
+        }
     }
 }
 
-/// 按任务类别给出「已下发 → 超期」的期限秒数。
-/// eval / reanalysis 沿用 15 分钟口径（与 `EVAL_TASK_STALE_AFTER` 同值——两者本就是
-/// 同一语义「超时未上报即让位重下发」）；collect 走 `COLLECT_TASK_DEADLINE`
-///（含搜索的采集对打更慢）。
 fn deadline_secs(kind: TaskKind) -> i64 {
     match kind {
-        TaskKind::TaskEval | TaskKind::TaskReanalysis => consts::EVAL_TASK_STALE_AFTER.as_secs() as i64,
+        TaskKind::TaskEval | TaskKind::TaskReanalysis => {
+            consts::EVAL_TASK_STALE_AFTER.as_secs() as i64
+        }
         TaskKind::TaskCollect => consts::COLLECT_TASK_DEADLINE.as_secs() as i64,
         _ => TASK_DEADLINE_DEFAULT.as_secs() as i64,
     }
@@ -134,12 +97,10 @@ fn deadline_secs(kind: TaskKind) -> i64 {
 #[derive(Default)]
 struct DispatcherInner {
     tasks: HashMap<String, RunningTask>,
-    /// 上次 prune 时间（节流相位；None = 尚未扫过）。
+
     last_prune: Option<i64>,
 }
 
-/// 内存任务表 + 状态机子系统。锁用 `std::sync::Mutex`；全部时间取自注入 Clock
-/// （测试注入 FakeClock 可精确控制 prune 时间边界）。
 pub struct TaskDispatcher {
     clock: Arc<dyn Clock>,
     inner: Mutex<DispatcherInner>,
@@ -147,12 +108,12 @@ pub struct TaskDispatcher {
 
 impl TaskDispatcher {
     pub fn new(_ports: &Ports, _cfg: Arc<Config>, clock: Arc<dyn Clock>) -> Self {
-        Self { clock, inner: Mutex::new(DispatcherInner::default()) }
+        Self {
+            clock,
+            inner: Mutex::new(DispatcherInner::default()),
+        }
     }
 
-    /// 登记新下发的任务：状态机从 Assigned 起步，Deadline 按任务类别设定
-    /// （超期由 prune 迁移到 Expired）。调用方只填业务字段（kind/worker/sha/
-    /// opponent/games/match_id），状态机字段与 task_id 由此处重置/回填。
     pub fn register(&self, task_id: &str, mut t: RunningTask) {
         let now = self.clock.now();
         t.task_id = task_id.to_string();
@@ -161,43 +122,42 @@ impl TaskDispatcher {
         t.finished_at = 0;
         t.reported = false;
         t.deadline = now + deadline_secs(t.kind);
-        self.inner.lock().unwrap().tasks.insert(task_id.to_string(), t);
+        self.inner
+            .lock()
+            .unwrap()
+            .tasks
+            .insert(task_id.to_string(), t);
     }
 
-    /// eval 认领路径的直入式登记：Deadline 由调用方按 eval 口径设置
-    /// （见 EvalCoordinator.claim_eval_task，绕过 register 的通用 deadline）。
-    /// task_id 同样由此处回填。
     pub fn register_in_flight(&self, task_id: &str, mut t: RunningTask) {
         t.task_id = task_id.to_string();
-        self.inner.lock().unwrap().tasks.insert(task_id.to_string(), t);
+        self.inner
+            .lock()
+            .unwrap()
+            .tasks
+            .insert(task_id.to_string(), t);
     }
 
-    /// 从任务表移除记录（eval 组装失败时释放在飞认领）。
     pub fn delete(&self, task_id: &str) {
         self.inner.lock().unwrap().tasks.remove(task_id);
     }
 
-    /// 覆盖任务的超期时间点（登记后的调用方定制：如 [jobs].collect_deadline_seconds）。
     pub fn override_deadline(&self, task_id: &str, deadline: i64) {
         if let Some(t) = self.inner.lock().unwrap().tasks.get_mut(task_id) {
             t.deadline = deadline;
         }
     }
 
-    /// 回填任务所属统一 Job 的 id（eval 认领路径先登记后映射时使用）。
     pub fn set_task_job(&self, task_id: &str, job_id: &str) {
         if let Some(t) = self.inner.lock().unwrap().tasks.get_mut(task_id) {
             t.job_id = job_id.to_string();
         }
     }
 
-    /// 读取任务记录。返回**快照副本**（Go 版 F4-P1 教训：共享可变状态在锁外读
-    /// 是 data race）；调用方只读，不得写回。
     pub fn lookup(&self, task_id: &str) -> Option<RunningTask> {
         self.inner.lock().unwrap().tasks.get(task_id).cloned()
     }
 
-    /// 状态迁移（Assigned → 终态）；终态不可逆，返回是否发生迁移。
     pub fn transition(&self, task_id: &str, to: TaskState) -> bool {
         let mut inner = self.inner.lock().unwrap();
         let Some(t) = inner.tasks.get_mut(task_id) else {
@@ -217,17 +177,10 @@ impl TaskDispatcher {
         true
     }
 
-    /// 标记任务已上报结束：Assigned → Completed。幂等：重复上报保持 Completed。
     pub fn mark_done(&self, task_id: &str) {
         self.transition(task_id, TaskState::Completed);
     }
 
-    /// CAS 抢占一次上报权：Assigned/Expired → Completed，返回抢占是否成功——
-    /// 只有首次上报的调用方进入聚合/落库路径，同 task_id 的并发重复上报全部在
-    /// 闸口失败（防「幂等闸口 → 数百行后才置终态」的 TOCTOU 双计窗口）。
-    ///
-    /// Expired 也算「未上报过」：Deadline 只控制「在飞名额 / 重复下发」，
-    /// 慢 worker 的迟到上报仍可参与聚合；CAS 保证每个 task_id 恰好聚合一次。
     pub fn claim_report(&self, task_id: &str) -> bool {
         let mut inner = self.inner.lock().unwrap();
         let Some(t) = inner.tasks.get_mut(task_id) else {
@@ -248,15 +201,14 @@ impl TaskDispatcher {
         true
     }
 
-    /// 聚合/落库失败回滚：Completed → Assigned。
-    ///
-    /// 与 claim_report 联合实现「落库成功才置终态」；回滚后（Deadline 已过）
-    /// prune 会再迁 Expired，迟到上报仍可重试聚合。
     pub fn rollback_report(&self, task_id: &str) {
         let mut inner = self.inner.lock().unwrap();
         if let Some(t) = inner.tasks.get_mut(task_id) {
             if t.state == TaskState::Completed {
-                tracing::info!(task_id, "[task-state] completed → assigned（聚合失败回滚，等待重试上报）");
+                tracing::info!(
+                    task_id,
+                    "[task-state] completed → assigned（聚合失败回滚，等待重试上报）"
+                );
                 t.state = TaskState::Assigned;
                 t.finished_at = 0;
                 t.reported = false;
@@ -264,14 +216,10 @@ impl TaskDispatcher {
         }
     }
 
-    /// 把在飞任务迁入 Completed 终态（幂等）。eval 收尾路径在 evalc.mu 之下调用
-    /// （跨子系统原子段：完成在飞与更新作业同段完成）。
     pub fn complete_in_flight(&self, task_id: &str) {
         self.transition(task_id, TaskState::Completed);
     }
 
-    /// 回收内存任务表中的超期记录（时间取自注入 Clock）。
-    /// 内部按 `PRUNE_INTERVAL` 节流，可在请求路径上安全高频调用。
     pub fn prune(&self) {
         let now = self.clock.now();
         let mut inner = self.inner.lock().unwrap();
@@ -285,16 +233,18 @@ impl TaskDispatcher {
         let mut expired = 0usize;
         let ids: Vec<String> = inner.tasks.keys().cloned().collect();
         for id in ids {
-            let Some(t) = inner.tasks.get_mut(&id) else { continue };
+            let Some(t) = inner.tasks.get_mut(&id) else {
+                continue;
+            };
             let age = now - t.assigned_at;
-            // 状态机：Assigned 超过 Deadline → Expired（释放在飞名额，显式追踪僵尸任务）
+
             if t.state == TaskState::Assigned && now >= t.deadline {
                 tracing::info!(task_id = %id, "[task-state] assigned → expired（超期未上报）");
                 t.state = TaskState::Expired;
                 t.finished_at = now;
                 expired += 1;
             }
-            // 回收：终态记录保留 doneTaskRetention 供重复上报给出明确错误；未上报记录最长 24h
+
             let terminal_retained = t.state != TaskState::Assigned
                 && now - t.finished_at >= consts::DONE_TASK_RETENTION.as_secs() as i64;
             if terminal_retained || age >= consts::TASK_MAX_RETENTION.as_secs() as i64 {
@@ -303,11 +253,13 @@ impl TaskDispatcher {
             }
         }
         if removed > 0 || expired > 0 {
-            tracing::info!("[task-state] 本轮迁移 {expired} 条 → expired，回收 {removed} 条，内存表剩余 {} 条", inner.tasks.len());
+            tracing::info!(
+                "[task-state] 本轮迁移 {expired} 条 → expired，回收 {removed} 条，内存表剩余 {} 条",
+                inner.tasks.len()
+            );
         }
     }
 
-    /// 全部未结束任务的快照（按下发时间倒序；WebUI 任务面板）。
     pub fn running(&self) -> Vec<RunningTask> {
         let inner = self.inner.lock().unwrap();
         let mut out: Vec<RunningTask> = inner
@@ -320,10 +272,6 @@ impl TaskDispatcher {
         out
     }
 
-    /// 统计指定 (kind, network, opponent) 已派发（Assigned）且未超期（未过
-    /// stale_after 窗口）的在飞任务局数合计（eval 流式作业的在飞额度口径）。
-    /// 本方法是跨子系统原子段（evalc.mu → disp.mu）的显式访问点：调用方持
-    /// evalc 锁时调用安全（disp 为叶子锁）。
     pub fn in_flight_games(
         &self,
         kind: TaskKind,
@@ -347,7 +295,6 @@ impl TaskDispatcher {
             .sum()
     }
 
-    /// 内存表当前条数（诊断用）。
     pub fn len(&self) -> usize {
         self.inner.lock().unwrap().tasks.len()
     }
@@ -356,17 +303,10 @@ impl TaskDispatcher {
         self.len() == 0
     }
 
-    /// 全部未结束任务的快照（WebUI /api/tasks；按下发时间倒序）。
-    /// Go 版 api.taskView 所需字段（taskId/workerId/kind/matchId/networkSha/
-    /// opponentSha/opponentSpec/games/createdAt）全部在 [`RunningTask`] 上，
-    /// api 层直接投影即可。调用方不应依赖强一致性——这是诊断视图。
     pub fn running_tasks_webui(&self) -> Vec<RunningTask> {
         self.running()
     }
 
-    /// 任务状态机快照（WebUI /api/task-stats；Go 版 stateSnapshot → TaskStateStats）：
-    /// 各状态计数 + 最近过期任务（僵尸诊断，按过期时间倒序，最多 32 条）+
-    /// 最老在途任务年龄（接近 Deadline 意味着 worker 掉队或任务积压）。
     pub fn task_state_snapshot(&self) -> TaskStateStats {
         let now = self.clock.now();
         let inner = self.inner.lock().unwrap();
@@ -395,17 +335,15 @@ impl TaskDispatcher {
                 });
             }
         }
-        // 按下发时间倒序取最近 32 条（Go 版注释的既定意图）
+
         out.expired.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         out.expired.truncate(MAX_EXPIRED_RECORDS);
         out
     }
 }
 
-/// WebUI /api/task-stats 的过期任务诊断列表上限（Go 版 maxExpiredRecords）。
 const MAX_EXPIRED_RECORDS: usize = 32;
 
-/// 各状态的任务计数（WebUI 任务状态面板）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct TaskStateCounts {
     pub assigned: i64,
@@ -413,13 +351,12 @@ pub struct TaskStateCounts {
     pub expired: i64,
 }
 
-/// 单条任务状态记录（只读快照；字段名与 Go 版 WebUI 契约一致 camelCase）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskStateRecord {
     pub task_id: String,
     pub worker_id: String,
-    /// proto TaskKind 名（TASK_SELFPLAY 等，与 Go pb String() 同口径）。
+
     pub kind: String,
     pub state: String,
     pub games: i64,
@@ -427,14 +364,12 @@ pub struct TaskStateRecord {
     pub age_seconds: i64,
 }
 
-/// 任务状态机快照：计数 + 最近过期任务（僵尸诊断）+ 最老在途任务年龄。
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskStateStats {
     pub counts: TaskStateCounts,
     pub expired: Vec<TaskStateRecord>,
-    /// 最老 Assigned 任务的年龄（秒）；无在途任务为 0。
-    /// 接近 Deadline 意味着 worker 掉队或任务积压。
+
     pub oldest_assigned_age_seconds: i64,
 }
 
@@ -466,7 +401,7 @@ mod tests {
         let t = d.lookup("t1").unwrap();
         assert_eq!(t.state, TaskState::Assigned);
         assert_eq!(t.assigned_at, 1000);
-        assert_eq!(t.deadline, 1000 + 600); // selfplay 默认 10 分钟
+        assert_eq!(t.deadline, 1000 + 600);
         assert!(!t.reported);
         assert!(d.lookup("nope").is_none());
     }
@@ -479,8 +414,14 @@ mod tests {
         d.register("r", task("w", TaskKind::TaskReanalysis, 10));
         d.register("s", task("w", TaskKind::TaskSelfplay, 10));
         d.register("x", task("w", TaskKind::TaskDeriveFeatures, 1));
-        assert_eq!(d.lookup("e").unwrap().deadline, 1000 + consts::EVAL_TASK_STALE_AFTER.as_secs() as i64);
-        assert_eq!(d.lookup("r").unwrap().deadline, 1000 + consts::EVAL_TASK_STALE_AFTER.as_secs() as i64);
+        assert_eq!(
+            d.lookup("e").unwrap().deadline,
+            1000 + consts::EVAL_TASK_STALE_AFTER.as_secs() as i64
+        );
+        assert_eq!(
+            d.lookup("r").unwrap().deadline,
+            1000 + consts::EVAL_TASK_STALE_AFTER.as_secs() as i64
+        );
         assert_eq!(d.lookup("s").unwrap().deadline, 1000 + 600);
         assert_eq!(d.lookup("x").unwrap().deadline, 1000 + 600);
     }
@@ -496,7 +437,7 @@ mod tests {
         assert_eq!(t.state, TaskState::Completed);
         assert!(t.reported);
         assert!(d.lookup("t1").unwrap().finished_at > 0);
-        // 未知任务
+
         assert!(!d.claim_report("nope"));
     }
 
@@ -505,11 +446,11 @@ mod tests {
         let clock = FakeClock::new(1000);
         let d = dispatcher(clock.clone());
         d.register("t1", task("w1", TaskKind::TaskEval, 10));
-        // 超期未上报 → prune 迁 Expired
+
         clock.advance(consts::EVAL_TASK_STALE_AFTER.as_secs() as i64);
         d.prune();
         assert_eq!(d.lookup("t1").unwrap().state, TaskState::Expired);
-        // 迟到上报仍可聚合（Deadline 只控制在飞名额，不否决数据）
+
         assert!(d.claim_report("t1"));
         assert_eq!(d.lookup("t1").unwrap().state, TaskState::Completed);
     }
@@ -524,10 +465,10 @@ mod tests {
         let t = d.lookup("t1").unwrap();
         assert_eq!(t.state, TaskState::Assigned);
         assert!(!t.reported);
-        // 非 Completed 状态 rollback 无害（幂等）
+
         d.rollback_report("t1");
         assert_eq!(d.lookup("t1").unwrap().state, TaskState::Assigned);
-        // 回滚后可重新抢占（DB 失败 → worker 重试路径）
+
         assert!(d.claim_report("t1"));
         assert_eq!(d.lookup("t1").unwrap().state, TaskState::Completed);
     }
@@ -538,18 +479,18 @@ mod tests {
         let d = dispatcher(clock.clone());
         d.register("t1", task("w1", TaskKind::TaskSelfplay, 4));
         d.mark_done("t1");
-        // 终态不可逆
+
         assert!(!d.transition("t1", TaskState::Expired));
         assert_eq!(d.lookup("t1").unwrap().state, TaskState::Completed);
-        // mark_done 幂等
+
         d.mark_done("t1");
         assert_eq!(d.lookup("t1").unwrap().state, TaskState::Completed);
-        // complete_in_flight 只作用于 Assigned
+
         d.register("t2", task("w1", TaskKind::TaskSelfplay, 4));
         d.complete_in_flight("t2");
         assert_eq!(d.lookup("t2").unwrap().state, TaskState::Completed);
-        d.complete_in_flight("t2"); // 幂等
-        // 未知任务
+        d.complete_in_flight("t2");
+
         assert!(!d.transition("nope", TaskState::Completed));
     }
 
@@ -557,11 +498,11 @@ mod tests {
     fn prune_deadline_boundary() {
         let clock = FakeClock::new(0);
         let d = dispatcher(clock.clone());
-        d.register("t1", task("w1", TaskKind::TaskSelfplay, 4)); // deadline 600s
+        d.register("t1", task("w1", TaskKind::TaskSelfplay, 4));
         clock.set(599);
         d.prune();
         assert_eq!(d.lookup("t1").unwrap().state, TaskState::Assigned);
-        // 越过 deadline（同时越过 60s 节流窗口）→ Expired
+
         clock.set(600 + consts::PRUNE_INTERVAL.as_secs() as i64);
         d.prune();
         assert_eq!(d.lookup("t1").unwrap().state, TaskState::Expired);
@@ -573,15 +514,14 @@ mod tests {
         let d = dispatcher(clock.clone());
         d.register("done", task("w1", TaskKind::TaskSelfplay, 4));
         d.mark_done("done");
-        // Done 保留 DONE_TASK_RETENTION（30m）
+
         clock.set(consts::DONE_TASK_RETENTION.as_secs() as i64 - 1);
         d.prune();
         assert!(d.lookup("done").is_some());
-        clock.advance(consts::PRUNE_INTERVAL.as_secs() as i64); // 同时越过节流窗口
+        clock.advance(consts::PRUNE_INTERVAL.as_secs() as i64);
         d.prune();
         assert!(d.lookup("done").is_none(), "终态记录超保留期应回收");
 
-        // 未上报记录最长 TASK_MAX_RETENTION（24h）：age 到点即回收（先迁 Expired 同轮删除）
         d.register("stale", task("w1", TaskKind::TaskEval, 10));
         clock.advance(consts::TASK_MAX_RETENTION.as_secs() as i64);
         d.prune();
@@ -592,19 +532,27 @@ mod tests {
     fn prune_throttled_by_interval() {
         let clock = FakeClock::new(0);
         let d = dispatcher(clock.clone());
-        d.register("t1", task("w1", TaskKind::TaskSelfplay, 4)); // deadline 600
+        d.register("t1", task("w1", TaskKind::TaskSelfplay, 4));
         clock.set(600);
-        d.prune(); // last_prune = 600
+        d.prune();
         assert_eq!(d.lookup("t1").unwrap().state, TaskState::Expired);
-        // t2 为 eval（deadline 1500）：600 + 900
+
         d.register("t2", task("w1", TaskKind::TaskEval, 4));
-        clock.set(659); // 距上次 prune 59s < 60s → 节流跳过
+        clock.set(659);
         d.prune();
-        assert_eq!(d.lookup("t2").unwrap().state, TaskState::Assigned, "节流窗口内不应回收");
-        clock.set(660); // 恰好 60s → 执行
+        assert_eq!(
+            d.lookup("t2").unwrap().state,
+            TaskState::Assigned,
+            "节流窗口内不应回收"
+        );
+        clock.set(660);
         d.prune();
-        assert_eq!(d.lookup("t2").unwrap().state, TaskState::Assigned, "eval deadline 未到不应过期");
-        clock.set(1500); // t2 deadline
+        assert_eq!(
+            d.lookup("t2").unwrap().state,
+            TaskState::Assigned,
+            "eval deadline 未到不应过期"
+        );
+        clock.set(1500);
         d.prune();
         assert_eq!(d.lookup("t2").unwrap().state, TaskState::Expired);
     }
@@ -621,21 +569,60 @@ mod tests {
             t
         });
         let stale = consts::EVAL_TASK_STALE_AFTER;
-        // 同 (kind, sha, spec) 合计
-        assert_eq!(d.in_flight_games(TaskKind::TaskEval, "n1", "random", 0, stale), 15);
-        assert_eq!(d.in_flight_games(TaskKind::TaskEval, "n1", "other", 0, stale), 7);
-        assert_eq!(d.in_flight_games(TaskKind::TaskEval, "nX", "random", 0, stale), 0);
-        // 超过 stale 窗口的不计（worker 掉线让位重派）
-        assert_eq!(d.in_flight_games(TaskKind::TaskEval, "n1", "random", stale.as_secs() as i64, stale), 0);
-        assert_eq!(d.in_flight_games(TaskKind::TaskEval, "n1", "random", stale.as_secs() as i64 - 1, stale), 15);
-        // Completed 不计
+
+        assert_eq!(
+            d.in_flight_games(TaskKind::TaskEval, "n1", "random", 0, stale),
+            15
+        );
+        assert_eq!(
+            d.in_flight_games(TaskKind::TaskEval, "n1", "other", 0, stale),
+            7
+        );
+        assert_eq!(
+            d.in_flight_games(TaskKind::TaskEval, "nX", "random", 0, stale),
+            0
+        );
+
+        assert_eq!(
+            d.in_flight_games(
+                TaskKind::TaskEval,
+                "n1",
+                "random",
+                stale.as_secs() as i64,
+                stale
+            ),
+            0
+        );
+        assert_eq!(
+            d.in_flight_games(
+                TaskKind::TaskEval,
+                "n1",
+                "random",
+                stale.as_secs() as i64 - 1,
+                stale
+            ),
+            15
+        );
+
         d.mark_done("a");
-        assert_eq!(d.in_flight_games(TaskKind::TaskEval, "n1", "random", 0, stale), 5);
-        // Expired 不计
+        assert_eq!(
+            d.in_flight_games(TaskKind::TaskEval, "n1", "random", 0, stale),
+            5
+        );
+
         d.register("e", task("w4", TaskKind::TaskEval, 3));
         clock.advance(stale.as_secs() as i64);
-        d.prune(); // b/e → Expired（a 已 Completed）
-        assert_eq!(d.in_flight_games(TaskKind::TaskEval, "n1", "random", stale.as_secs() as i64, stale), 0);
+        d.prune();
+        assert_eq!(
+            d.in_flight_games(
+                TaskKind::TaskEval,
+                "n1",
+                "random",
+                stale.as_secs() as i64,
+                stale
+            ),
+            0
+        );
     }
 
     #[test]
@@ -649,7 +636,7 @@ mod tests {
         let running = d.running();
         assert_eq!(running.len(), 1);
         assert_eq!(running[0].worker_id, "w2");
-        // Expired 也不再展示为「进行中」
+
         clock.advance(1000);
         d.prune();
         assert!(d.running().is_empty());
@@ -674,7 +661,7 @@ mod tests {
         let tasks = d.running_tasks_webui();
         assert_eq!(tasks.len(), 1);
         let t = &tasks[0];
-        // WebUI taskView 字段（Go handlers_status.go）：api 层直接投影
+
         assert_eq!(t.task_id, "t1", "task_id 由 register 回填");
         assert_eq!(t.worker_id, "w1");
         assert_eq!(t.kind.as_str_name(), "TASK_SELFPLAY");
@@ -684,7 +671,7 @@ mod tests {
         assert_eq!(t.opponent_spec, "rule:capture_first");
         assert_eq!(t.games, 4);
         assert_eq!(t.assigned_at, 100);
-        // eval 认领路径（register_in_flight）同样回填 task_id
+
         d.register_in_flight(
             "e1",
             RunningTask {
@@ -699,26 +686,26 @@ mod tests {
     fn task_state_snapshot_counts_and_diagnostics() {
         let clock = FakeClock::new(0);
         let d = dispatcher(clock.clone());
-        // completed（临近 prune 才置终态：终态记录保留期 30 分钟，早置会被 prune 回收）
+
         d.register("c1", task("w2", TaskKind::TaskRating, 4));
-        // 两条将过期的 eval（deadline 960 / 961）
+
         clock.set(960);
         d.register("e1", task("w3", TaskKind::TaskEval, 10));
         clock.advance(1);
         d.register("e2", task("w4", TaskKind::TaskReanalysis, 3));
-        // 一条仍在途的 selfplay（刚下发，deadline 远未到）
+
         clock.set(1860);
         d.register("a1", task("w1", TaskKind::TaskSelfplay, 4));
         d.mark_done("c1");
         clock.advance(1);
-        d.prune(); // e1/e2 → Expired；a1 保持 Assigned；c1 仍在保留期内
+        d.prune();
 
         let snap = d.task_state_snapshot();
         assert_eq!(snap.counts.assigned, 1);
         assert_eq!(snap.counts.completed, 1);
         assert_eq!(snap.counts.expired, 2);
         assert_eq!(snap.oldest_assigned_age_seconds, 1, "最老在途 = a1 的年龄");
-        // 过期记录按下发时间倒序（最近过期在前）
+
         assert_eq!(snap.expired.len(), 2);
         assert_eq!(snap.expired[0].task_id, "e2");
         assert_eq!(snap.expired[1].task_id, "e1");
@@ -726,7 +713,7 @@ mod tests {
         assert_eq!(snap.expired[0].state, "expired");
         assert_eq!(snap.expired[0].worker_id, "w4");
         assert!(snap.expired[0].age_seconds > 0);
-        // 空表
+
         let d2 = dispatcher(FakeClock::new(0));
         let empty = d2.task_state_snapshot();
         assert_eq!(empty.counts.assigned, 0);
@@ -740,10 +727,10 @@ mod tests {
         let d = dispatcher(clock.clone());
         for i in 0..40 {
             d.register(&format!("t{i}"), task("w", TaskKind::TaskEval, 1));
-            clock.advance(1); // 逐条错开下发时间，保证倒序断言确定
+            clock.advance(1);
         }
         clock.advance(consts::EVAL_TASK_STALE_AFTER.as_secs() as i64);
-        d.prune(); // 40 条全部 → Expired（未达保留期不回收）
+        d.prune();
         let snap = d.task_state_snapshot();
         assert_eq!(snap.counts.expired, 40);
         assert_eq!(snap.expired.len(), 32, "诊断列表最多 32 条");

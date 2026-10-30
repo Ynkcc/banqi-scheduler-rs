@@ -1,7 +1,3 @@
-//! handlers_eval.rs — 绝对强度评估端点：/api/eval 趋势视图、在线覆盖
-//! （/api/eval-config GET/PUT）、手动触发（/api/eval/trigger）。
-//! （Go: internal/api/handlers_eval.go）
-
 use axum::extract::State;
 use axum::Json;
 use serde::Deserialize;
@@ -13,13 +9,9 @@ use crate::views::{
 };
 use crate::{decode_body, ApiError, ApiResult, AppState, MAX_CONTROL_BODY};
 
-// EvalCoordinator 查询经 `srv.evalc.*` 就地调用（薄接入，签名见 bqs-core/src/evalcoord.rs）。
-
-// 绝对强度评估：明细与趋势各取多少条（趋势用于画版本曲线，无需全量）
 const EVAL_LATEST_LIMIT: i64 = 200;
 const EVAL_TREND_LIMIT: i64 = 50;
 
-/// store 行 → 展示视图（Go: toEvalResultView）。
 fn to_eval_result_view(e: &bqs_core::types::EvalResult) -> EvalResultView {
     EvalResultView {
         network_sha: e.network_sha.clone(),
@@ -38,8 +30,6 @@ fn to_eval_result_view(e: &bqs_core::types::EvalResult) -> EvalResultView {
     }
 }
 
-/// GET /api/eval — 趋势视图：按对手分组的版本序列（升序）+ 最新明细 +
-/// 「连续无提升」计数 + 评估配置 + 进行中作业。
 pub async fn eval(State(st): State<AppState>) -> ApiResult<Json<EvalView>> {
     let server = st.server.clone();
     let view = tokio::task::spawn_blocking(move || -> Result<EvalView, ApiError> {
@@ -54,7 +44,6 @@ pub async fn eval(State(st): State<AppState>) -> ApiResult<Json<EvalView>> {
         let opponents = server.ports.eval.list_eval_opponents()?;
         let mut trends = Vec::with_capacity(opponents.len());
         for opp in opponents {
-            // 趋势点：按对手的版本序列（升序）
             let points = server
                 .ports
                 .eval
@@ -69,7 +58,7 @@ pub async fn eval(State(st): State<AppState>) -> ApiResult<Json<EvalView>> {
                 latest_win_rate: 0.0,
                 points,
             };
-            // Go 侧 window 恒传 0：末尾连续无提升计数按全序列口径
+
             if let Some(prog) = server.evalc.eval_progress_for(&opp, 0) {
                 tv.versions = prog.versions as i64;
                 tv.no_progress = prog.no_progress as i64;
@@ -106,11 +95,10 @@ pub async fn eval(State(st): State<AppState>) -> ApiResult<Json<EvalView>> {
     Ok(Json(view))
 }
 
-/// GET /api/eval-config — 在线覆盖与生效值快照（null 字段 = 回落配置文件）。
 pub async fn eval_config_get(State(st): State<AppState>) -> ApiResult<Json<EvalConfigGetView>> {
     let server = st.server.clone();
     let ov = server.ctl.eval_override();
-    // 生效值：配置文件值被在线覆盖逐字段替换（Go: handleEvalConfigGet）
+
     let cfg = &server.cfg.eval;
     let mut eff = EvalEffectiveView {
         enabled: cfg.enabled,
@@ -128,7 +116,10 @@ pub async fn eval_config_get(State(st): State<AppState>) -> ApiResult<Json<EvalC
             eff.stop_win_rate = v;
         }
     }
-    Ok(Json(EvalConfigGetView { override_: ov, effective: eff }))
+    Ok(Json(EvalConfigGetView {
+        override_: ov,
+        effective: eff,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,8 +131,6 @@ struct EvalConfigRequest {
     stop_win_rate: Option<f64>,
 }
 
-/// PUT /api/eval-config — 更新在线覆盖（启用开关 / 对手阶梯 / 达标停机阈值）。
-/// null 字段 = 回落配置文件值；opponents = [] 清空阶梯；clear = 全清。
 pub async fn eval_config_put(
     State(st): State<AppState>,
     bytes: axum::body::Bytes,
@@ -150,7 +139,6 @@ pub async fn eval_config_put(
     let server = st.server.clone();
     tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
         if req.clear == Some(true) {
-            // 全清覆盖（回落配置文件）：全 None 的覆盖项即「无覆盖」载体
             server
                 .ctl
                 .set_eval_override(EvalOverride::default())
@@ -158,7 +146,7 @@ pub async fn eval_config_put(
             tracing::info!("[webui] eval_config 已清除覆盖（回落配置文件）");
             return Ok(());
         }
-        // 显式 null 与缺省字段语义相同（该项回落配置文件值）
+
         let ov = EvalOverride {
             enabled: req.enabled,
             opponents: req.opponents.clone(),
@@ -186,8 +174,6 @@ pub async fn eval_config_put(
     Ok(Json(OkView { ok: true }))
 }
 
-/// POST /api/eval/trigger — 手动触发评估当前 best（绕过每 N 次晋级节流）；
-/// 前置不满足（评估未启用 / 无 best 网络）→ 409 回显原因（trigger_manual 的 Err(String)）。
 pub async fn trigger(State(st): State<AppState>) -> ApiResult<Json<EvalTriggerView>> {
     let server = st.server.clone();
     let n = tokio::task::spawn_blocking(move || server.evalc.trigger_manual())
@@ -200,5 +186,9 @@ pub async fn trigger(State(st): State<AppState>) -> ApiResult<Json<EvalTriggerVi
         format!("已入队 {n} 条评估")
     };
     tracing::info!("[webui] 手动触发评估：{msg}");
-    Ok(Json(EvalTriggerView { ok: true, triggered: n, message: msg }))
+    Ok(Json(EvalTriggerView {
+        ok: true,
+        triggered: n,
+        message: msg,
+    }))
 }

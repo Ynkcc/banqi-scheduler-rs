@@ -1,7 +1,3 @@
-//! handlers_status.rs — 总览与列表端点：/api/status、/api/networks、
-//! /api/networks/{sha}/promote、/api/matches、/api/workers、/api/workers/{id}/note、
-//! /api/tasks、/api/task-stats。（Go: internal/api/handlers_status.go）
-
 use std::collections::BTreeMap;
 
 use axum::extract::{Path, State};
@@ -12,12 +8,11 @@ use bqs_core::types::Network;
 use bqs_judgment::sprt::{judge, llr, new_bounds};
 
 use crate::views::{
-    EpisodeRateEstimateView, EvalConfigView, KindStatsView, MatchView, NetworkView,
-    OkView, SprtView, StatusView, TaskView, WorkerView,
+    EpisodeRateEstimateView, EvalConfigView, KindStatsView, MatchView, NetworkView, OkView,
+    SprtView, StatusView, TaskView, WorkerView,
 };
 use crate::{decode_body, ApiError, ApiResult, AppState, MAX_CONTROL_BODY};
 
-/// store 行 → 展示视图（status.best / networks 共用；Go: toNetworkView）。
 pub fn to_network_view(n: &Network) -> NetworkView {
     NetworkView {
         sha: n.sha.clone(),
@@ -29,8 +24,6 @@ pub fn to_network_view(n: &Network) -> NetworkView {
     }
 }
 
-/// worker 产出统计三查询（Go: EpisodeStatsByWorker ×2 + EpisodeRateEstimates）。
-/// 查询失败返回 None，调用方降级为空映射（Go 版语义：辅助信息不拖垮整页）。
 fn worker_stats(
     server: &bqs_core::server::Server,
 ) -> (
@@ -39,7 +32,9 @@ fn worker_stats(
     Option<BTreeMap<String, EpisodeRateEstimateView>>,
 ) {
     let to_views = |m: BTreeMap<String, bqs_core::ports::KindStats>| {
-        m.into_iter().map(|(k, v)| (k, v.into())).collect::<BTreeMap<_, _>>()
+        m.into_iter()
+            .map(|(k, v)| (k, v.into()))
+            .collect::<BTreeMap<_, _>>()
     };
     match (
         server.ports.episodes.episode_stats_by_worker(3600),
@@ -62,13 +57,13 @@ fn worker_stats(
             (
                 a.ok().map(to_views),
                 b.ok().map(to_views),
-                c.ok().map(|m| m.into_iter().map(|(k, v)| (k, v.into())).collect()),
+                c.ok()
+                    .map(|m| m.into_iter().map(|(k, v)| (k, v.into())).collect()),
             )
         }
     }
 }
 
-/// 评估配置视图组装（Go: toEvalConfigView：在线覆盖优先生效，mode 取配置文件值）。
 pub fn to_eval_config_view(st: &AppState) -> EvalConfigView {
     let cfg = &st.server.cfg.eval;
     let (mut enabled, mut opponents, mut stop_win_rate) =
@@ -101,8 +96,6 @@ pub fn to_eval_config_view(st: &AppState) -> EvalConfigView {
     }
 }
 
-/// GET /api/status — 聚合总览（variant / 课程阶段 / paused / autoPaused /
-/// autoPauseReason / sprt 参数 / best / 计数 / eval 配置 / shouldStop / stopReason）。
 pub async fn status(State(st): State<AppState>) -> ApiResult<Json<StatusView>> {
     let server = st.server.clone();
     let view = tokio::task::spawn_blocking(move || -> Result<StatusView, ApiError> {
@@ -112,7 +105,7 @@ pub async fn status(State(st): State<AppState>) -> ApiResult<Json<StatusView>> {
         let (should_stop, stop_reason) = ctl.should_stop();
         Ok(StatusView {
             variant: server.cfg.selfplay.variant.clone(),
-            // Go: rt.Paused 只含人工开关；自动暂停单独走 autoPaused。
+
             paused: ctl.manual_paused(),
             initial_revealed: ctl.initial_revealed(),
             data_kind: ctl.data_kind().as_str().to_string(),
@@ -137,7 +130,6 @@ pub async fn status(State(st): State<AppState>) -> ApiResult<Json<StatusView>> {
     Ok(Json(view))
 }
 
-/// GET /api/networks — 全部网络列表（best 优先，bqs-store 查询保证）。
 pub async fn networks(State(st): State<AppState>) -> ApiResult<Json<Vec<NetworkView>>> {
     let server = st.server.clone();
     let items = tokio::task::spawn_blocking(move || server.ports.networks.list_networks())
@@ -146,7 +138,6 @@ pub async fn networks(State(st): State<AppState>) -> ApiResult<Json<Vec<NetworkV
     Ok(Json(items.iter().map(to_network_view).collect()))
 }
 
-/// POST /api/networks/{sha}/promote — 手动晋级 best（409 = 已是 best，404 = 未知 sha）。
 pub async fn promote(
     State(st): State<AppState>,
     Path(sha): Path<String>,
@@ -170,7 +161,6 @@ pub async fn promote(
     Ok(Json(OkView { ok: true }))
 }
 
-/// GET /api/matches — 对打列表，附 LLR / 边界 / 判定 / 得分率（bqs_judgment 计算）。
 pub async fn matches(State(st): State<AppState>) -> ApiResult<Json<Vec<MatchView>>> {
     let server = st.server.clone();
     let items = tokio::task::spawn_blocking(move || -> Result<Vec<MatchView>, ApiError> {
@@ -216,14 +206,12 @@ pub async fn matches(State(st): State<AppState>) -> ApiResult<Json<Vec<MatchView
     Ok(Json(items))
 }
 
-/// GET /api/workers — worker 列表：在线判定（lastSeen < now-window）、健康状态、
-/// 窗口产出与稳态速率估算（估算查询失败降级为 0，不拖垮整页）。
 pub async fn workers(State(st): State<AppState>) -> ApiResult<Json<Vec<WorkerView>>> {
     let server = st.server.clone();
     let online_window = st.online_window_secs;
     let items = tokio::task::spawn_blocking(move || -> Result<Vec<WorkerView>, ApiError> {
         let items = server.ports.workers.list_workers()?;
-        // 产出效率：聚合失败降级为 0（Go 版语义：辅助信息不拖垮整页）
+
         let (stats_1h, stats_24h, est_rates) = worker_stats(&server);
         let stats_1h = stats_1h.unwrap_or_default();
         let stats_24h = stats_24h.unwrap_or_default();
@@ -236,7 +224,6 @@ pub async fn workers(State(st): State<AppState>) -> ApiResult<Json<Vec<WorkerVie
             let est = est_rates.get(&wk.id).copied().unwrap_or_default();
             let (mut est_per_hour, mut est_per_thread) = (0.0_f64, 0.0_f64);
             if est.span_seconds > 0 {
-                // 跨度过短（<60s）时截断，避免快速连发批把估算推到失真量级
                 let span = est.span_seconds.max(60) as f64;
                 est_per_hour = est.games as f64 / (span / 3600.0);
                 if wk.threads > 0 {
@@ -270,7 +257,6 @@ pub async fn workers(State(st): State<AppState>) -> ApiResult<Json<Vec<WorkerVie
     Ok(Json(items))
 }
 
-/// 备注长度上限（字符数，rune 口径；Go: maxWorkerNote）。
 const MAX_WORKER_NOTE: usize = 64;
 
 #[derive(serde::Deserialize)]
@@ -279,8 +265,6 @@ struct WorkerNoteRequest {
     note: String,
 }
 
-/// PUT /api/workers/{id}/note — 设置 worker 备注（TrimSpace；空串 = 清除；
-/// 未知 worker → 404；超长 → 400）。
 pub async fn worker_note(
     State(st): State<AppState>,
     Path(id): Path<String>,
@@ -288,14 +272,20 @@ pub async fn worker_note(
 ) -> ApiResult<Json<OkView>> {
     let req: WorkerNoteRequest = decode_body(&bytes, MAX_CONTROL_BODY)?;
     let note = req.note.trim().to_string();
-    // 长度按字符数（rune）计，与 Go len([]rune(note)) 一致
+
     if note.chars().count() > MAX_WORKER_NOTE {
-        return Err(ApiError::bad_request(format!("备注最长 {MAX_WORKER_NOTE} 字符")));
+        return Err(ApiError::bad_request(format!(
+            "备注最长 {MAX_WORKER_NOTE} 字符"
+        )));
     }
     let server = st.server.clone();
     tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
-        // worker 须已存在（至少上报过一次心跳），否则 404（Go: sql.ErrNoRows → 404）
-        let exists = server.ports.workers.list_workers()?.iter().any(|w| w.id == id);
+        let exists = server
+            .ports
+            .workers
+            .list_workers()?
+            .iter()
+            .any(|w| w.id == id);
         if !exists {
             return Err(ApiError::not_found(format!("worker not found: {id}")));
         }
@@ -308,7 +298,6 @@ pub async fn worker_note(
     Ok(Json(OkView { ok: true }))
 }
 
-/// RunningTask → taskView 投影（Go: toTaskView；kind 用 proto 名，与 pb String() 同口径）。
 fn to_task_view(t: bqs_core::dispatch::RunningTask) -> TaskView {
     TaskView {
         task_id: t.task_id,
@@ -323,7 +312,6 @@ fn to_task_view(t: bqs_core::dispatch::RunningTask) -> TaskView {
     }
 }
 
-/// GET /api/tasks — 内存任务快照（未结束任务，assigned_at 倒序）。
 pub async fn tasks(State(st): State<AppState>) -> ApiResult<Json<Vec<TaskView>>> {
     let server = st.server.clone();
     let items = tokio::task::spawn_blocking(move || server.disp.running_tasks_webui())
@@ -332,8 +320,6 @@ pub async fn tasks(State(st): State<AppState>) -> ApiResult<Json<Vec<TaskView>>>
     Ok(Json(items.into_iter().map(to_task_view).collect()))
 }
 
-/// GET /api/task-stats — 任务状态机快照（assigned/completed/expired 计数、
-/// 最近过期任务与最老在途任务年龄；serde 形态由 core 类型锁定）。
 pub async fn task_stats(State(st): State<AppState>) -> ApiResult<Json<TaskStateStats>> {
     let server = st.server.clone();
     let view = tokio::task::spawn_blocking(move || server.disp.task_state_snapshot())

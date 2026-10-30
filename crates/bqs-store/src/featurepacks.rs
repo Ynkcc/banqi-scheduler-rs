@@ -1,6 +1,3 @@
-//! 【所有权：infra 成员】feature_packs 表端口：特征包登记。
-//! SQL 逐条对照 Go 版 internal/store/featurepacks.go。
-
 use bqs_core::ports::{FeaturePackDraft, FeaturePackStore};
 use bqs_core::types::FeaturePack;
 use bqs_core::CoreResult;
@@ -10,8 +7,6 @@ use crate::{Store, StoreError};
 use rusqlite::OptionalExtension;
 
 impl FeaturePackStore for Store {
-    /// 登记特征包（同 (episode_key, version) 幂等：冲突时保留首行——R2 对象内容
-    /// 由 sha256 校验，重复上传无害。对照 Go 版 InsertFeaturePack 的 ON CONFLICT DO NOTHING）。
     fn insert_feature_pack(&self, fp: FeaturePackDraft) -> CoreResult<()> {
         self.with_conn(|conn| {
             conn.execute(
@@ -20,7 +15,10 @@ impl FeaturePackStore for Store {
 				 VALUES (?,?,?,?)
 				 ON CONFLICT(episode_object_key, pack_version) DO NOTHING",
                 rusqlite::params![
-                    fp.episode_object_key, fp.pack_version, fp.object_key, fp.created_at
+                    fp.episode_object_key,
+                    fp.pack_version,
+                    fp.object_key,
+                    fp.created_at
                 ],
             )
             .map_err(StoreError::from)?;
@@ -28,7 +26,6 @@ impl FeaturePackStore for Store {
         })
     }
 
-    /// 查询某记录批次的特征包；未登记返回 None。
     fn get_feature_pack(
         &self,
         episode_object_key: &str,
@@ -57,8 +54,8 @@ impl FeaturePackStore for Store {
 
 #[cfg(test)]
 mod tests {
-    use bqs_core::ports::FeaturePackStore as FPS;
     use bqs_core::ports::FeaturePackDraft;
+    use bqs_core::ports::FeaturePackStore as FPS;
 
     #[test]
     fn insert_idempotent_and_get() {
@@ -75,7 +72,6 @@ mod tests {
         )
         .unwrap();
 
-        // 幂等：同 (episode_key, version) 冲突保留首行
         FPS::insert_feature_pack(
             &*s,
             FeaturePackDraft {
@@ -87,11 +83,12 @@ mod tests {
         )
         .unwrap();
 
-        let fp = FPS::get_feature_pack(&*s, "episodes/n1/a.epb.gz", 2).unwrap().unwrap();
+        let fp = FPS::get_feature_pack(&*s, "episodes/n1/a.epb.gz", 2)
+            .unwrap()
+            .unwrap();
         assert_eq!(fp.object_key, "episodes/n1/a.pack.v2.fpb.gz");
         assert_eq!(fp.created_at, 123);
 
-        // 不同版本互不影响
         FPS::insert_feature_pack(
             &*s,
             FeaturePackDraft {
@@ -103,7 +100,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            FPS::get_feature_pack(&*s, "episodes/n1/a.epb.gz", 1).unwrap().unwrap().object_key,
+            FPS::get_feature_pack(&*s, "episodes/n1/a.epb.gz", 1)
+                .unwrap()
+                .unwrap()
+                .object_key,
             "episodes/n1/a.pack.v1.fpb.gz"
         );
         assert!(FPS::get_feature_pack(&*s, "nope", 2).unwrap().is_none());

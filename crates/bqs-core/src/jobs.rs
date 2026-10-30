@@ -1,33 +1,11 @@
-//! 【所有权：scheduler-dev 成员】
-//!
-//! JobManager：统一 Job 机制（collect / selfplay / eval 三类 job 的登记、控制、
-//! 派发记账、完成口径聚合、优先级抢占与在途取消）。
-//!
-//! 契约：`proto/scheduler.proto` 文件头「统一 Job 机制」注释段（禁止在本文件
-//! 复述口径，语义以 proto 为准）。要点回顾：
-//! - completed_games 只按已收到的真实上报聚合（collect/selfplay 走 ReportEpisode、
-//!   eval 走 ReportMatchResult），不含在飞；task→job 映射落库（job_tasks），
-//!   先落库后更新计数，撑住重启后的迟到上报聚合；
-//! - 派发不受在飞封顶：只要 completed < total（或 total=0）就继续按 worker
-//!   线程缩放派发；
-//! - completed ≥ total（total>0）即置 completed，并立即把该 job 全部在飞任务
-//!   加入取消集合（经 HeartbeatReply.cancel_task_ids 下发，按 worker 清除）；
-//! - 优先级抢占：更高优先级 job 变为可派发（提交/恢复）时立即取消全部更低
-//!   优先级 job 的在飞任务；GetTask 路径按 JOB_PREEMPT_INTERVAL 节流惰性兜底；
-//! - 暂停/恢复/取消状态机：running ⇄ paused；cancel → 终态 cancelled；终态
-//!   （completed/cancelled）不可再控制（accepted=false）。
-//!
-//! 锁约定：本子系统不嵌套获取其他子系统锁——需要 disp 快照时先取快照再进本
-//! 子系统的 inner 锁（disp 是叶子锁；evalc.mu → 本子系统 mu 单向，见
-//! evalcoord::set_job_hook 的回调路径）。
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use bqs_config::Config;
 use bqs_proto::{
     CollectPlayerSpec, CollectSearchParams, CollectionJobSpec, EvalJobSpec, JobKind,
-    OpeningScenario, RatingJobSpec, SeedStrategy, SeedStrategyKind, SelfPlayJobSpec, SubmitJobRequest,
+    OpeningScenario, RatingJobSpec, SeedStrategy, SeedStrategyKind, SelfPlayJobSpec,
+    SubmitJobRequest,
 };
 
 use crate::{
@@ -38,11 +16,6 @@ use crate::{
     CoreResult,
 };
 
-// ---------------------------------------------------------------------------
-// 规格回显（spec_json 的载体；serde JSON 落库，字段名即 API 契约）
-// ---------------------------------------------------------------------------
-
-/// 搜索参数回显（0 值 = 回落 worker 本地默认，序列化不省略以便对照）。
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SearchSpecJson {
@@ -127,7 +100,6 @@ impl SearchSpecJson {
     }
 }
 
-/// 单方棋手规格回显。
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct PlayerSpecJson {
@@ -157,7 +129,6 @@ impl PlayerSpecJson {
     }
 }
 
-/// 种子策略回显。
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SeedStrategyJson {
@@ -193,7 +164,6 @@ impl SeedStrategyJson {
     }
 }
 
-/// JOB_COLLECT 规格回显。
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct CollectSpecJson {
@@ -232,7 +202,6 @@ impl CollectSpecJson {
     }
 }
 
-/// JOB_SELFPLAY 规格回显。
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SelfPlaySpecJson {
@@ -271,7 +240,6 @@ impl SelfPlaySpecJson {
     }
 }
 
-/// JOB_EVAL 规格回显。
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct EvalSpecJson {
@@ -307,12 +275,6 @@ impl EvalSpecJson {
     }
 }
 
-/// JOB_RATING 规格回显（match_id 为调度器运行时回写字段：提交时解析对手并
-/// 建对打后记录，取消/聚合据此定位对打行；不在 proto 契约内）。
-///
-/// side_a / side_b 为提交时归一化后的双方棋手（kind 规范化 + 模型类 sha 冻结：
-/// 空 = 提交时解析为当前 best 的具体 sha）。旧版 spec_json（sides 未落库）经
-/// `resolved_sides()` 按旧字段语义还原，运行时统一只看 sides。
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct RatingSpecJson {
@@ -346,10 +308,6 @@ impl RatingSpecJson {
         }
     }
 
-    /// 运行时统一入口：归一化后的双方棋手。旧版 spec_json（sides 未落库）按
-    /// 旧字段语义还原——candidate_sha/opponent_sha → expectimax_nnue（网络对象
-    /// sha 以对发行 m.candidate/m.opponent 的冻结值为准；此处的 sha 仅供 kind
-    /// 判定与回显，空不影响派发）。
     pub fn resolved_sides(&self) -> (PlayerSpecJson, PlayerSpecJson) {
         if self.side_a.kind.is_empty() && self.side_b.kind.is_empty() {
             self.legacy_fallback_sides()
@@ -358,7 +316,6 @@ impl RatingSpecJson {
         }
     }
 
-    /// 旧版 spec_json（sides 未落库）的双方棋手还原（旧字段路径两侧恒为网络类）。
     pub fn legacy_fallback_sides(&self) -> (PlayerSpecJson, PlayerSpecJson) {
         (
             PlayerSpecJson {
@@ -374,7 +331,6 @@ impl RatingSpecJson {
         )
     }
 
-    /// 双方是否为网络类棋手（旧版还原路径恒 (true, true)）。
     pub fn sides_are_model(&self) -> (bool, bool) {
         let (a, b) = self.resolved_sides();
         (
@@ -400,7 +356,6 @@ impl RatingSpecJson {
     }
 }
 
-/// spec_json 的统一载体（kind 决定哪个字段有效）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobSpecJson {
@@ -420,15 +375,6 @@ impl JobSpecJson {
     }
 }
 
-// ---------------------------------------------------------------------------
-// 种子策略解析（纯函数，逐任务确定性）
-// ---------------------------------------------------------------------------
-
-/// 由 job 级单调任务序号 seq 解析本任务的开局种子。
-/// - FIXED：恒 fixed_seed；
-/// - RANDOM：base_seed 为偏移基值，按 seq 哈希派生（splitmix64 终散射）；
-/// - INCREMENTAL：base_seed + seq；
-/// - RANGE：min + 哈希 % (max - min + 1)（含端点；min>max 时回落 min）。
 pub fn resolve_seed(strategy: &SeedStrategyJson, seq: i64) -> u64 {
     let seq = seq.max(0) as u64;
     match SeedStrategyKind::try_from(strategy.kind) {
@@ -447,7 +393,6 @@ pub fn resolve_seed(strategy: &SeedStrategyJson, seq: i64) -> u64 {
     }
 }
 
-/// splitmix64 终散射（无外部依赖的确定性哈希；种子派生专用）。
 fn splitmix64(mut x: u64) -> u64 {
     x = x.wrapping_add(0x9E3779B97F4A7C15);
     let mut z = x;
@@ -456,12 +401,6 @@ fn splitmix64(mut x: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-// ---------------------------------------------------------------------------
-// 提交校验（纯函数）
-// ---------------------------------------------------------------------------
-
-/// 校验棋手规格：kind 词表（bq-policy player_kind 单一真源，接受历史别名）+
-/// 模型类必须登记网络 / 非模型类不得带 sha。
 fn validate_player(p: &PlayerSpecJson, nets: &dyn NetworkStore) -> Result<(), String> {
     let Some(kind) = bq_policy::player_kind::canonical(&p.kind) else {
         return Err(format!(
@@ -490,24 +429,21 @@ fn validate_player(p: &PlayerSpecJson, nets: &dyn NetworkStore) -> Result<(), St
     Ok(())
 }
 
-/// 校验变体（JOB_VARIANTS 词表）。
 fn validate_variant(v: &str) -> Result<(), String> {
     if consts::JOB_VARIANTS.contains(&v) {
         Ok(())
     } else {
-        Err(format!("invalid_variant=\"{v}\"（可选 {}）", consts::JOB_VARIANTS.join("/")))
+        Err(format!(
+            "invalid_variant=\"{v}\"（可选 {}）",
+            consts::JOB_VARIANTS.join("/")
+        ))
     }
 }
 
-// ---------------------------------------------------------------------------
-// JobManager
-// ---------------------------------------------------------------------------
-
 #[derive(Default)]
 struct Inner {
-    /// 在途取消集合：task_id → worker_id（经心跳下发后移除；任务消失即移除）。
     cancelled: HashMap<String, String>,
-    /// 上次抢占评估时间（节流相位；None = 尚未扫过）。
+
     last_preempt: Option<i64>,
 }
 
@@ -532,7 +468,16 @@ impl JobManager {
         cfg: Arc<Config>,
         clock: Arc<dyn Clock>,
     ) -> Self {
-        Self { store, disp, nets, matches, ctl, cfg, clock, inner: Mutex::new(Inner::default()) }
+        Self {
+            store,
+            disp,
+            nets,
+            matches,
+            ctl,
+            cfg,
+            clock,
+            inner: Mutex::new(Inner::default()),
+        }
     }
 
     fn now(&self) -> i64 {
@@ -548,73 +493,91 @@ impl JobManager {
         }
     }
 
-    // ---- 提交 --------------------------------------------------------------
-
-    /// 提交 job：校验 → 登记（state=running）→ 即时抢占评估。业务拒绝返回
-    /// (false, 原因)；真故障（读库失败）上抛。
     pub fn submit(&self, req: &SubmitJobRequest) -> CoreResult<(bool, String, String)> {
         let Ok(kind) = JobKind::try_from(req.kind) else {
-            return Ok((false, format!("invalid_job_kind={}", req.kind), String::new()));
+            return Ok((
+                false,
+                format!("invalid_job_kind={}", req.kind),
+                String::new(),
+            ));
         };
-        let priority = if req.priority == 0 { self.default_priority(kind) } else { req.priority as i64 };
-        let spec: JobSpecJson = match kind {
-            JobKind::JobCollect => {
-                let Some(c) = &req.collect else {
-                    return Ok((false, "collect spec required for JOB_COLLECT".into(), String::new()));
-                };
-                match self.validate_collect(c) {
-                    Ok(()) => JobSpecJson::Collect(CollectSpecJson::from_proto(c.clone())),
-                    Err(m) => return Ok((false, m, String::new())),
+        let priority = if req.priority == 0 {
+            self.default_priority(kind)
+        } else {
+            req.priority as i64
+        };
+        let spec: JobSpecJson =
+            match kind {
+                JobKind::JobCollect => {
+                    let Some(c) = &req.collect else {
+                        return Ok((
+                            false,
+                            "collect spec required for JOB_COLLECT".into(),
+                            String::new(),
+                        ));
+                    };
+                    match self.validate_collect(c) {
+                        Ok(()) => JobSpecJson::Collect(CollectSpecJson::from_proto(c.clone())),
+                        Err(m) => return Ok((false, m, String::new())),
+                    }
                 }
-            }
-            JobKind::JobSelfplay => {
-                let Some(s) = &req.selfplay else {
-                    return Ok((false, "selfplay spec required for JOB_SELFPLAY".into(), String::new()));
-                };
-                match self.validate_selfplay(s) {
-                    Ok(()) => JobSpecJson::SelfPlay(SelfPlaySpecJson::from_proto(s.clone())),
-                    Err(m) => return Ok((false, m, String::new())),
+                JobKind::JobSelfplay => {
+                    let Some(s) = &req.selfplay else {
+                        return Ok((
+                            false,
+                            "selfplay spec required for JOB_SELFPLAY".into(),
+                            String::new(),
+                        ));
+                    };
+                    match self.validate_selfplay(s) {
+                        Ok(()) => JobSpecJson::SelfPlay(SelfPlaySpecJson::from_proto(s.clone())),
+                        Err(m) => return Ok((false, m, String::new())),
+                    }
                 }
-            }
-            JobKind::JobEval => {
-                let Some(e) = &req.eval else {
-                    return Ok((false, "eval spec required for JOB_EVAL".into(), String::new()));
-                };
-                match self.validate_eval(e) {
-                    Ok(()) => JobSpecJson::Eval(EvalSpecJson::from_proto(e.clone())),
-                    Err(m) => return Ok((false, m, String::new())),
+                JobKind::JobEval => {
+                    let Some(e) = &req.eval else {
+                        return Ok((
+                            false,
+                            "eval spec required for JOB_EVAL".into(),
+                            String::new(),
+                        ));
+                    };
+                    match self.validate_eval(e) {
+                        Ok(()) => JobSpecJson::Eval(EvalSpecJson::from_proto(e.clone())),
+                        Err(m) => return Ok((false, m, String::new())),
+                    }
                 }
-            }
-            JobKind::JobRating => {
-                let Some(r) = &req.rating else {
-                    return Ok((false, "rating spec required for JOB_RATING".into(), String::new()));
-                };
-                // 共享校验 → sides 解析/归一化（模型类空 sha = 当前 best，冻结；
-                // 旧 candidate/opponent 路径归一化为 expectimax_nnue 两侧）→
-                // 建对打行（六桶聚合载体；网络对象 sha 以冻结值入行）。
-                let (side_a, side_b) = match self.validate_and_resolve_rating(r) {
-                    Ok(v) => v,
-                    Err(m) => return Ok((false, m, String::new())),
-                };
-                let mut spec = RatingSpecJson::from_proto(r.clone());
-                spec.side_a = side_a.clone();
-                spec.side_b = side_b.clone();
-                // 对打目标（换色成对数）= 局数上限的一半；0 = 仅由 SPRT 判停。
-                // 非网络类 side 的 sha 为空串入行（仅观测路径，无网络对象）。
-                let match_id = self.matches.create_match(
-                    &side_a.network_sha,
-                    &side_b.network_sha,
-                    (spec.total_games / 2) as i64,
-                )?;
-                spec.match_id = match_id;
-                tracing::info!(
+                JobKind::JobRating => {
+                    let Some(r) = &req.rating else {
+                        return Ok((
+                            false,
+                            "rating spec required for JOB_RATING".into(),
+                            String::new(),
+                        ));
+                    };
+
+                    let (side_a, side_b) = match self.validate_and_resolve_rating(r) {
+                        Ok(v) => v,
+                        Err(m) => return Ok((false, m, String::new())),
+                    };
+                    let mut spec = RatingSpecJson::from_proto(r.clone());
+                    spec.side_a = side_a.clone();
+                    spec.side_b = side_b.clone();
+
+                    let match_id = self.matches.create_match(
+                        &side_a.network_sha,
+                        &side_b.network_sha,
+                        (spec.total_games / 2) as i64,
+                    )?;
+                    spec.match_id = match_id;
+                    tracing::info!(
                     "[job] rating match created match={} side_a={}:{} side_b={}:{} target_pairs={}",
                     match_id, side_a.kind, side_a.network_sha, side_b.kind, side_b.network_sha,
                     spec.total_games / 2
                 );
-                JobSpecJson::Rating(spec)
-            }
-        };
+                    JobSpecJson::Rating(spec)
+                }
+            };
         let job_id = crate::sources::new_id();
         let now = self.now();
         self.store.insert_job(JobRow {
@@ -632,9 +595,13 @@ impl JobManager {
         })?;
         tracing::info!(
             "[job] submitted requester={} id={} kind={} priority={} total={}",
-            req.requester, job_id, kind.as_str_name(), priority, spec_total(&spec)
+            req.requester,
+            job_id,
+            kind.as_str_name(),
+            priority,
+            spec_total(&spec)
         );
-        // 即时抢占评估：本 job 变为可派发，立即取消更低优先级 job 的在飞任务。
+
         self.preemption_sweep(true);
         Ok((true, String::new(), job_id))
     }
@@ -642,7 +609,10 @@ impl JobManager {
     fn validate_collect(&self, c: &CollectionJobSpec) -> Result<(), String> {
         validate_variant(&c.variant)?;
         if c.total_games < 2 || c.total_games % 2 != 0 {
-            return Err(format!("collect.total_games 必须 ≥2 且为偶数，当前 {}", c.total_games));
+            return Err(format!(
+                "collect.total_games 必须 ≥2 且为偶数，当前 {}",
+                c.total_games
+            ));
         }
         let nets = self.nets.as_ref();
         let pa = c
@@ -672,8 +642,11 @@ impl JobManager {
         {
             return Err("selfplay.data_kind 必须为 DATA_RESNET / DATA_NNUE".into());
         }
-        // network_sha / opponent_sha 为空 = 当前 best / 无混入；非空必须已登记。
-        for (label, sha) in [("network_sha", &s.network_sha), ("opponent_sha", &s.opponent_sha)] {
+
+        for (label, sha) in [
+            ("network_sha", &s.network_sha),
+            ("opponent_sha", &s.opponent_sha),
+        ] {
             if !sha.is_empty() {
                 let registered = self
                     .nets
@@ -690,7 +663,10 @@ impl JobManager {
     fn validate_eval(&self, e: &EvalJobSpec) -> Result<(), String> {
         validate_variant(&e.variant)?;
         if e.total_games < 2 || e.total_games % 2 != 0 {
-            return Err(format!("eval.total_games 必须 ≥2 且为偶数，当前 {}", e.total_games));
+            return Err(format!(
+                "eval.total_games 必须 ≥2 且为偶数，当前 {}",
+                e.total_games
+            ));
         }
         let Some(kind) = bq_policy::player_kind::canonical(&e.opponent_kind) else {
             return Err(format!(
@@ -717,7 +693,7 @@ impl JobManager {
         } else if !e.opponent_network_sha.is_empty() {
             return Err("eval.opponent_network_sha 必须为空（非模型类对手）".into());
         }
-        // network_sha 为空 = 当前 best；非空必须已登记。
+
         if !e.network_sha.is_empty() {
             let registered = self
                 .nets
@@ -730,33 +706,21 @@ impl JobManager {
         Ok(())
     }
 
-    /// rating 提交校验 + sides 解析/归一化（纯校验不落库）：
-    /// - 共享校验：variant（空 = 回落 selfplay.variant）、total_games（0 或 ≥2
-    ///   偶数）、sprt_*（0 回落 [sprt] 配置，非 0 校验取值范围）；
-    /// - sides 形态（side_a/side_b 任一填写时优先生效，必须成对）：kind 规范化
-    ///   （词表校验）、模型类空 sha = 当前 best（提交时解析冻结，后续 best 变化
-    ///   不影响进行中对打）、模型类非空 sha 须已登记、非模型类 sha 必须为空；
-    /// - 旧字段路径（side_a/side_b 均未填）：candidate_sha 必填须登记 →
-    ///   side_a=expectimax_nnue(sha)；opponent_sha 空 = 当前 best（解析冻结）/
-    ///   非空须登记 → side_b=expectimax_nnue(sha)。
-    ///
-    /// 返回归一化后的双方棋手（网络类 sha 已冻结为具体值；非网络类 sha 为空）。
     fn validate_and_resolve_rating(
         &self,
         r: &RatingJobSpec,
     ) -> Result<(PlayerSpecJson, PlayerSpecJson), String> {
-        // 变体空 = 回落调度器 selfplay.variant；非空必须合法。
         if !r.variant.is_empty() {
             validate_variant(&r.variant)?;
         }
-        // 局数上限：0 = 仅由 SPRT 判停；否则 ≥2 偶数。
+
         if r.total_games != 0 && (r.total_games < 2 || r.total_games % 2 != 0) {
             return Err(format!(
                 "rating.total_games 必须为 0（仅 SPRT 判停）或 ≥2 且为偶数，当前 {}",
                 r.total_games
             ));
         }
-        // SPRT 覆盖参数：0 = 回落 [sprt] 配置；非 0 时校验取值范围。
+
         for (name, v) in [("alpha", r.sprt_alpha), ("beta", r.sprt_beta)] {
             if v != 0.0 && !(0.0 < v && v < 1.0) {
                 return Err(format!("rating.sprt_{name} 必须在 (0,1)，当前 {v}"));
@@ -779,7 +743,7 @@ impl JobManager {
             let b = self.normalize_rating_side("side_b", sb)?;
             return Ok((a, b));
         }
-        // ---- 旧字段路径（向后兼容，行为不变）----
+
         if r.candidate_sha.is_empty() {
             return Err("rating.candidate_sha required（被测网络必填）".into());
         }
@@ -793,9 +757,13 @@ impl JobManager {
                 r.candidate_sha
             ));
         }
-        // 对手空 = 当前 best（提交时解析冻结）；非空必须已登记。
+
         let opponent_sha = if r.opponent_sha.is_empty() {
-            match self.nets.get_best().map_err(|e| format!("查询 best 网络失败: {e}"))? {
+            match self
+                .nets
+                .get_best()
+                .map_err(|e| format!("查询 best 网络失败: {e}"))?
+            {
                 Some(b) => b.sha,
                 None => {
                     return Err(
@@ -824,8 +792,6 @@ impl JobManager {
         Ok((mk(&r.candidate_sha), mk(&opponent_sha)))
     }
 
-    /// 单方棋手规格归一化（rating sides 形态）：kind 规范化 + 模型类 sha 解析
-    /// （空 = 当前 best 并冻结；非空须已登记）/ 非模型类 sha 必须为空。
     fn normalize_rating_side(
         &self,
         label: &str,
@@ -842,7 +808,6 @@ impl JobManager {
         out.kind = kind.to_string();
         if bq_policy::player_kind::requires_model(kind) {
             if out.network_sha.is_empty() {
-                // 空 = 当前 best：提交时解析为具体 sha 并冻结进对发行/派发。
                 match self.nets.get_best().map_err(|e| format!("查询 best 网络失败: {e}"))? {
                     Some(b) => out.network_sha = b.sha,
                     None => {
@@ -871,8 +836,6 @@ impl JobManager {
         Ok(out)
     }
 
-    // ---- 查询 / 控制 -------------------------------------------------------
-
     pub fn list(&self, state: Option<&str>, kind: Option<i64>) -> CoreResult<Vec<JobRow>> {
         self.store.list_jobs(state, kind)
     }
@@ -881,8 +844,6 @@ impl JobManager {
         self.store.get_job(job_id)
     }
 
-    /// pause / resume / cancel。终态（completed/cancelled）不可再控制。
-    /// 返回 (accepted, message, state)。
     pub fn control(&self, job_id: &str, action: &str) -> CoreResult<(bool, String, String)> {
         let Some(job) = self.store.get_job(job_id)? else {
             return Ok((false, format!("job_not_found:{job_id}"), String::new()));
@@ -891,7 +852,11 @@ impl JobManager {
         match action {
             "pause" => {
                 if job.state != "running" {
-                    return Ok((false, format!("pause_requires_running state={}", job.state), job.state));
+                    return Ok((
+                        false,
+                        format!("pause_requires_running state={}", job.state),
+                        job.state,
+                    ));
                 }
                 self.store.update_job_state(job_id, "paused", now)?;
                 tracing::info!("[job] paused id={job_id}");
@@ -899,37 +864,44 @@ impl JobManager {
             }
             "resume" => {
                 if job.state != "paused" {
-                    return Ok((false, format!("resume_requires_paused state={}", job.state), job.state));
+                    return Ok((
+                        false,
+                        format!("resume_requires_paused state={}", job.state),
+                        job.state,
+                    ));
                 }
                 self.store.update_job_state(job_id, "running", now)?;
                 tracing::info!("[job] resumed id={job_id}");
-                // 恢复即变为可派发：即时抢占评估。
+
                 self.preemption_sweep(true);
                 Ok((true, String::new(), "running".into()))
             }
             "cancel" => {
                 if job.state == "completed" || job.state == "cancelled" {
-                    return Ok((false, format!("job_is_terminal state={}", job.state), job.state));
+                    return Ok((
+                        false,
+                        format!("job_is_terminal state={}", job.state),
+                        job.state,
+                    ));
                 }
                 self.store.update_job_state(job_id, "cancelled", now)?;
-                // 取消全部在飞（已上报部分不回滚；迟到上报照常聚合）。
+
                 self.cancel_in_flight_for_job(job_id);
-                // rating job 额外把对打置 cancelled（不晋级、不标 rejected；
-                // 迟到上报经 add_match_games 的 running 闸门被拒绝）。
+
                 if job.kind == JobKind::JobRating as i64 {
                     self.cancel_rating_match(&job.spec_json);
                 }
                 tracing::info!("[job] cancelled id={job_id}（在飞任务已加入取消集合）");
                 Ok((true, String::new(), "cancelled".into()))
             }
-            other => Ok((false, format!("invalid_control=\"{other}\"（可选 pause/resume/cancel）"), job.state)),
+            other => Ok((
+                false,
+                format!("invalid_control=\"{other}\"（可选 pause/resume/cancel）"),
+                job.state,
+            )),
         }
     }
 
-    // ---- 派发记账 ----------------------------------------------------------
-
-    /// 派发记账：disp 登记（含 job_id）+ job_tasks 映射落库 + dispatched/seq 推进。
-    /// 返回本任务序号（种子派生用）。
     pub fn note_dispatch(
         &self,
         task_id: &str,
@@ -955,7 +927,6 @@ impl JobManager {
         t.job_id = job_id.to_string();
         self.disp.register(task_id, t);
         if let Some(extra) = deadline_secs_override {
-            // 采集任务的超期期限可由 [jobs].collect_deadline_seconds 覆盖内置默认。
             if extra > 0 {
                 self.disp.override_deadline(task_id, self.now() + extra);
             }
@@ -963,8 +934,6 @@ impl JobManager {
         Ok(row.next_seq - 1)
     }
 
-    /// eval 认领路径（evalc.claim_eval_task 已登记在飞任务）的映射补登记：
-    /// 任务 id → eval job，games 从任务快照回查。
     pub fn note_eval_claim(&self, task_id: &str, job_id: &str) -> CoreResult<()> {
         let games = self.disp.lookup(task_id).map(|t| t.games).unwrap_or(0);
         let row = self.store.incr_job_dispatched(job_id, games, self.now())?;
@@ -972,14 +941,6 @@ impl JobManager {
         self.store.insert_job_task(task_id, job_id, games)
     }
 
-    // ---- 完成口径聚合 -------------------------------------------------------
-
-    /// 上报聚合（collect/selfplay 的 ReportEpisode 与 eval 的 ReportMatchResult 共用）：
-    /// task→job 映射（先落库的依据）→ completed += games（单事务）→ 达标即置
-    /// completed 并取消该 job 全部在飞。映射行聚合后删除（CAS 防双计）。
-    ///
-    /// 无映射（rating / reanalysis / derive / 非 job 任务）静默忽略；
-    /// job 已不在（被外部清理）也静默忽略（计数行已消失，重复聚合无意义）。
     pub fn record_report(&self, task_id: &str, games: i64) -> CoreResult<()> {
         let Some(link) = self.store.get_job_task(task_id)? else {
             return Ok(());
@@ -987,33 +948,42 @@ impl JobManager {
         if games <= 0 {
             return Ok(());
         }
-        let row = self.store.incr_job_completed(&link.job_id, games, self.now())?;
+        let row = self
+            .store
+            .incr_job_completed(&link.job_id, games, self.now())?;
         self.store.delete_job_task(task_id)?;
         let total = row.total_games;
         if total > 0 && row.completed_games >= total && row.state == "running" {
-            self.store.update_job_state(&link.job_id, "completed", self.now())?;
+            self.store
+                .update_job_state(&link.job_id, "completed", self.now())?;
             self.cancel_in_flight_for_job(&link.job_id);
             tracing::info!(
                 "[job] ✅ completed id={} completed={}/{}（在飞任务已加入取消集合）",
-                link.job_id, row.completed_games, total
+                link.job_id,
+                row.completed_games,
+                total
             );
         } else if total > 0 {
             tracing::info!(
                 "[job] += id={} task={} games={} completed={}/{}",
-                link.job_id, task_id, games, row.completed_games, total
+                link.job_id,
+                task_id,
+                games,
+                row.completed_games,
+                total
             );
         } else {
             tracing::info!(
                 "[job] += id={} task={} games={} completed={}（持续型）",
-                link.job_id, task_id, games, row.completed_games
+                link.job_id,
+                task_id,
+                games,
+                row.completed_games
             );
         }
         Ok(())
     }
 
-    // ---- 在飞取消 / 抢占 ----------------------------------------------------
-
-    /// 把某 job 的全部在飞任务加入取消集合（幂等）。
     pub fn cancel_in_flight_for_job(&self, job_id: &str) {
         let in_flight: Vec<(String, String)> = self
             .disp
@@ -1028,9 +998,6 @@ impl JobManager {
         }
     }
 
-    /// 抢占评估：当前最高可派发优先级 P 之外的更低优先级可派发 job，其在飞任务
-    /// 全部取消。GetTask 路径按 JOB_PREEMPT_INTERVAL 节流调用（force=true 跳过
-    /// 节流，用于提交/恢复后的即时评估）。
     pub fn preemption_sweep(&self, force: bool) {
         let now = self.now();
         {
@@ -1053,10 +1020,14 @@ impl JobManager {
         };
         let max_dispatchable = jobs
             .iter()
-            .filter(|j| j.state == "running" && (j.total_games == 0 || j.completed_games < j.total_games))
+            .filter(|j| {
+                j.state == "running" && (j.total_games == 0 || j.completed_games < j.total_games)
+            })
             .map(|j| j.priority)
             .max();
-        let Some(max_p) = max_dispatchable else { return };
+        let Some(max_p) = max_dispatchable else {
+            return;
+        };
         for j in jobs.iter().filter(|j| {
             j.state == "running"
                 && j.priority < max_p
@@ -1066,8 +1037,6 @@ impl JobManager {
         }
     }
 
-    /// 心跳回包的在途取消下发：返回该 worker 名下的取消任务 id（下发即移除；
-    /// 任务已消失（prune / 重启）的条目一并清除；非本 worker 的条目保留）。
     pub fn cancel_task_ids_for_worker(&self, worker_id: &str) -> Vec<String> {
         let mut inner = self.inner.lock().unwrap();
         let mut out = Vec::new();
@@ -1087,28 +1056,25 @@ impl JobManager {
         out
     }
 
-    // ---- rating job 专用 ------------------------------------------------------
-
-    /// rating job 的对打置 cancelled（幂等：非 running 的 match 为 no-op）。
     fn cancel_rating_match(&self, spec_json: &str) {
         if let Some(JobSpecJson::Rating(spec)) = JobSpecJson::parse(spec_json) {
             if spec.match_id != 0 {
                 match self.matches.cancel_match(spec.match_id) {
-                    Ok(true) => tracing::info!(
-                        "[job] rating match {} cancelled（不晋级）",
-                        spec.match_id
-                    ),
+                    Ok(true) => {
+                        tracing::info!("[job] rating match {} cancelled（不晋级）", spec.match_id)
+                    }
                     Ok(false) => {}
                     Err(e) => {
-                        tracing::warn!("[job] ⚠️ rating match 取消失败 match={}: {e}", spec.match_id)
+                        tracing::warn!(
+                            "[job] ⚠️ rating match 取消失败 match={}: {e}",
+                            spec.match_id
+                        )
                     }
                 }
             }
         }
     }
 
-    /// rating 对打判停/达到局数上限后的 job 收敛：置 completed + 取消全部在飞
-    /// （终态幂等：已 completed/cancelled 的 job 不再改写）。
     pub fn complete_rating_job(&self, job_id: &str) -> CoreResult<()> {
         let Some(job) = self.store.get_job(job_id)? else {
             return Ok(());
@@ -1116,14 +1082,15 @@ impl JobManager {
         if job.state != "running" && job.state != "paused" {
             return Ok(());
         }
-        self.store.update_job_state(job_id, "completed", self.now())?;
+        self.store
+            .update_job_state(job_id, "completed", self.now())?;
         self.cancel_in_flight_for_job(job_id);
-        tracing::info!("[job] ✅ rating job completed id={job_id}（对打已判停/达上限，在飞已取消）");
+        tracing::info!(
+            "[job] ✅ rating job completed id={job_id}（对打已判停/达上限，在飞已取消）"
+        );
         Ok(())
     }
 
-    /// 上报路径回查 rating job 规格（无映射 / 非 rating job → None；旧版显式
-    /// TASK_RATING 任务走 gatekeeper 既有判据链）。
     pub fn rating_spec(&self, job_id: &str) -> CoreResult<Option<RatingSpecJson>> {
         if job_id.is_empty() {
             return Ok(None);
@@ -1137,8 +1104,6 @@ impl JobManager {
             }))
     }
 
-    /// 该对打是否属于某个 rating job（selfplay 混入查询排除用：pending_match
-    /// 会取到任意 running 对打，rating job 的对打不得劫持 selfplay 混入）。
     pub fn is_rating_match(&self, match_id: i64) -> bool {
         self.store
             .list_jobs(None, Some(JobKind::JobRating as i64))
@@ -1153,14 +1118,14 @@ impl JobManager {
             .unwrap_or(false)
     }
 
-    // ---- 引导 ---------------------------------------------------------------
-
-    /// 启动引导：确保存在持续型 selfplay job（total=0、默认优先级）。
-    /// 重启恢复语义：running job 的行已在库（重新载入即可）；仅当库中不存在
-    /// running/paused 的 selfplay job 时按 [selfplay] 配置补建。
     pub fn ensure_selfplay_job(&self) -> CoreResult<()> {
-        let existing = self.store.list_jobs(None, Some(JobKind::JobSelfplay as i64))?;
-        if existing.iter().any(|j| j.state == "running" || j.state == "paused") {
+        let existing = self
+            .store
+            .list_jobs(None, Some(JobKind::JobSelfplay as i64))?;
+        if existing
+            .iter()
+            .any(|j| j.state == "running" || j.state == "paused")
+        {
             return Ok(());
         }
         let spec = SelfPlaySpecJson {
@@ -1194,10 +1159,6 @@ impl JobManager {
         Ok(())
     }
 
-    /// evalcoord 钩子：为 (network, opponent) 自动创建 eval job（total 取 eval
-    /// 配置）。已在（running/paused）的 (network, opponent) 幂等跳过。
-    /// network_sha 为空 = 当前 best（此处解析为具体 sha 便于派发）。
-    /// opponent_sha：模型类对手的网络 sha，规则类对手传空串。
     pub fn create_eval_job(
         &self,
         network_sha: &str,
@@ -1217,13 +1178,15 @@ impl JobManager {
         let dup = existing.iter().any(|j| {
             (j.state == "running" || j.state == "paused")
                 && JobSpecJson::parse(&j.spec_json)
-                    .map(|s| matches!(
-                        &s,
-                        JobSpecJson::Eval(e)
-                            if e.network_sha == sha
-                                && e.opponent_kind == opponent_kind
-                                && e.opponent_network_sha == opponent_sha
-                    ))
+                    .map(|s| {
+                        matches!(
+                            &s,
+                            JobSpecJson::Eval(e)
+                                if e.network_sha == sha
+                                    && e.opponent_kind == opponent_kind
+                                    && e.opponent_network_sha == opponent_sha
+                        )
+                    })
                     .unwrap_or(false)
         });
         if dup {
@@ -1256,18 +1219,18 @@ impl JobManager {
             "[job] auto eval job id={} network={sha} opponent={opponent_kind} total={total}",
             job_id
         );
-        // eval job 默认优先级最高：即时抢占评估。
+
         self.preemption_sweep(true);
         Ok(())
     }
 
-    /// 派发候选快照：running 且（completed < total 或 total=0），按 priority DESC、
-    /// created_at ASC（list_jobs 的排序即派发顺序），可按 kind 过滤。
     pub fn dispatchable(&self, kind: JobKind) -> CoreResult<Vec<JobRow>> {
         let all = self.store.list_jobs(None, Some(kind as i64))?;
         Ok(all
             .into_iter()
-            .filter(|j| j.state == "running" && (j.total_games == 0 || j.completed_games < j.total_games))
+            .filter(|j| {
+                j.state == "running" && (j.total_games == 0 || j.completed_games < j.total_games)
+            })
             .collect())
     }
 }
@@ -1281,11 +1244,6 @@ fn spec_total(spec: &JobSpecJson) -> u64 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// 场景 / 开局场景词表（提交校验共用）
-// ---------------------------------------------------------------------------
-
-/// OpeningScenario 是否合法（proto 枚举外值拒绝）。
 pub fn valid_scenario(scenario: i32) -> bool {
     OpeningScenario::try_from(scenario).is_ok()
 }

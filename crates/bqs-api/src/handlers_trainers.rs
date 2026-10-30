@@ -1,6 +1,3 @@
-//! handlers_trainers.rs — trainer 消费健康端点（/api/trainers）与可远程调整训练
-//! 超参端点（/api/train-config）。（Go: internal/api/handlers_trainers.go）
-
 use axum::extract::State;
 use axum::Json;
 use serde::Deserialize;
@@ -10,13 +7,11 @@ use crate::views::{
 };
 use crate::{decode_body, ApiError, ApiResult, AppState, MAX_TRAIN_CONFIG_BODY};
 
-/// GET /api/trainers — trainer 消费健康总览（平衡策略配置 + 自动暂停状态 +
-/// 各 trainer 快照，含服务端权威积压）。
 pub async fn trainers(State(st): State<AppState>) -> ApiResult<Json<TrainersView>> {
     let server = st.server.clone();
     let view = tokio::task::spawn_blocking(move || -> Result<TrainersView, ApiError> {
         let cfg = &server.cfg.balance;
-        // 在线判定窗口：balance.trainer_online_seconds 优先，<=0 回落 worker 窗口
+
         let online_window = if cfg.trainer_online_seconds > 0 {
             cfg.trainer_online_seconds
         } else {
@@ -26,9 +21,11 @@ pub async fn trainers(State(st): State<AppState>) -> ApiResult<Json<TrainersView
         let now = server.clock.now();
         let mut out = Vec::with_capacity(items.len());
         for t in items {
-            // 服务端权威积压（查询失败降级为 0：展示是辅助信息，不拖垮整页）
-            let (registered_max_id, unconsumed_batches) =
-                server.ports.trainers.kind_watermark(t.kind, t.consumed_id).unwrap_or((0, 0));
+            let (registered_max_id, unconsumed_batches) = server
+                .ports
+                .trainers
+                .kind_watermark(t.kind, t.consumed_id)
+                .unwrap_or((0, 0));
             out.push(TrainerView {
                 id: t.id.clone(),
                 last_seen: t.last_seen,
@@ -66,7 +63,6 @@ pub async fn trainers(State(st): State<AppState>) -> ApiResult<Json<TrainersView
     Ok(Json(view))
 }
 
-/// GET /api/train-config — 当前覆盖项 + 可调字段清单（前端动态渲染表单）。
 pub async fn train_config_get(State(st): State<AppState>) -> ApiResult<Json<TrainConfigView>> {
     let overrides = st.server.ctl.train_config_overrides();
     let fields = bqs_core::trainconfig::TrainConfig::fields()
@@ -90,8 +86,6 @@ struct TrainConfigRequest {
     overrides: std::collections::BTreeMap<String, String>,
 }
 
-/// PUT /api/train-config — **全量替换**训练配置覆盖项；字段名与取值由白名单校验
-/// （Control 侧权威裁定），非法输入直接 400 回显原因（不落库半套配置）。
 pub async fn train_config_put(
     State(st): State<AppState>,
     bytes: axum::body::Bytes,

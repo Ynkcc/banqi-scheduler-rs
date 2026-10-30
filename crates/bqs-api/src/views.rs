@@ -1,27 +1,14 @@
-//! JSON 视图类型：字段名与 Go 版 `internal/api/` 各视图 struct 的 json tag 逐一
-//! 对应（契约真源：`banqi-scheduler/internal/api/` + `contract_test.go` 字段集）。
-//! 前端按名字取值——多字段是加法兼容，少字段/改名是破坏性变更。
-//!
-//! 所有视图只在本 crate 内构造（serde Serialize，不参与反序列化）。
-
 use serde::Serialize;
 
 use bqs_core::ports::{EpisodeRateEstimate, GenerationStats, KindStats, StoreCounts};
 use bqs_judgment::Hexanomial;
 
-// ---------------------------------------------------------------------------
-// 通用
-// ---------------------------------------------------------------------------
-
-/// `{"ok": true}`（Go: okView）。
 #[derive(Debug, Serialize)]
 pub struct OkView {
     #[serde(rename = "ok")]
     pub ok: bool,
 }
 
-/// store 行数据类别的稳定标识（Go: store.kindDisplayName；0=resnet 1=nnue 2=none，
-/// 其余按 resnet 兜底）。
 pub fn data_kind_name(kind: i64) -> &'static str {
     match kind {
         1 => "nnue",
@@ -30,7 +17,6 @@ pub fn data_kind_name(kind: i64) -> &'static str {
     }
 }
 
-/// 评估搜索模式名（Go: scheduler.EvalSearchModeName；0 = 纯策略 argmax）。
 pub fn eval_search_mode_name(mcts_sims: i32) -> String {
     if mcts_sims <= 0 {
         "纯策略 argmax".into()
@@ -39,17 +25,12 @@ pub fn eval_search_mode_name(mcts_sims: i32) -> String {
     }
 }
 
-/// 平衡模式对外标识（Go: BalanceConfig.Mode 为小写字符串 warn / pause）。
 pub fn balance_mode_name(mode: bqs_config::BalanceMode) -> &'static str {
     match mode {
         bqs_config::BalanceMode::Warn => "warn",
         bqs_config::BalanceMode::Pause => "pause",
     }
 }
-
-// ---------------------------------------------------------------------------
-// /api/status（Go: handlers_status.go statusView / networkView / store.Counts）
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
 pub struct NetworkView {
@@ -67,7 +48,6 @@ pub struct NetworkView {
     pub notes: String,
 }
 
-/// GSPRT 参数视图（Go: sprtView = config.SprtConfig）。
 #[derive(Debug, Serialize)]
 pub struct SprtView {
     #[serde(rename = "elo0")]
@@ -98,7 +78,6 @@ pub struct CountsView {
     pub eval_results: i64,
 }
 
-/// 端口行 → 视图（字段一一对应）。
 impl From<StoreCounts> for CountsView {
     fn from(c: StoreCounts) -> Self {
         CountsView {
@@ -113,7 +92,6 @@ impl From<StoreCounts> for CountsView {
     }
 }
 
-/// 评估配置快照（Go: evalConfigView = config.EvalConfig + mode/pending）。
 #[derive(Debug, Serialize)]
 pub struct EvalConfigView {
     #[serde(rename = "enabled")]
@@ -174,10 +152,6 @@ pub struct StatusView {
     pub auto_pause_reason: String,
 }
 
-// ---------------------------------------------------------------------------
-// /api/matches（Go: matchView；LLR / verdict 由本 crate 用 bqs_judgment 计算）
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Serialize)]
 pub struct MatchView {
     #[serde(rename = "id")]
@@ -188,7 +162,7 @@ pub struct MatchView {
     pub opponent: String,
     #[serde(rename = "status")]
     pub status: String,
-    /// 六桶成对计数 [LL, LD, DD, WL, DW, WW]（Hexanomial 序列化为 6 元数组）。
+
     #[serde(rename = "pairs")]
     pub pairs: Hexanomial,
     #[serde(rename = "numGames")]
@@ -207,11 +181,6 @@ pub struct MatchView {
     pub verdict: String,
 }
 
-// ---------------------------------------------------------------------------
-// /api/workers（Go: workerView）
-// ---------------------------------------------------------------------------
-
-/// 单 worker 的窗口产出统计（Go: store.KindStats）。
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct KindStatsView {
     #[serde(rename = "episodes")]
@@ -224,11 +193,14 @@ pub struct KindStatsView {
 
 impl From<KindStats> for KindStatsView {
     fn from(k: KindStats) -> Self {
-        KindStatsView { episodes: k.episodes, games: k.games, steps: k.steps }
+        KindStatsView {
+            episodes: k.episodes,
+            games: k.games,
+            steps: k.steps,
+        }
     }
 }
 
-/// 单 worker 的产出速率估算样本（Go: store.EpisodeRateEstimate）。
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct EpisodeRateEstimateView {
     #[serde(rename = "games")]
@@ -287,10 +259,6 @@ pub struct WorkerView {
     pub est_samples: i64,
 }
 
-// ---------------------------------------------------------------------------
-// /api/tasks（Go: taskView，内存任务快照）
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Serialize)]
 pub struct TaskView {
     #[serde(rename = "taskId")]
@@ -312,13 +280,6 @@ pub struct TaskView {
     #[serde(rename = "createdAt")]
     pub created_at: i64,
 }
-
-// /api/task-stats 直接序列化 bqs_core::dispatch::TaskStateStats（serde camelCase
-// 已与 Go WebUI 契约逐字段一致：taskId/workerId/oldestAssignedAgeSeconds 等）。
-
-// ---------------------------------------------------------------------------
-// /api/eval（Go: handlers_eval.go evalResultView / evalTrendView / evalRunningView / evalView）
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EvalResultView {
@@ -350,7 +311,6 @@ pub struct EvalResultView {
     pub created_at: i64,
 }
 
-/// 单对手的版本序列（升序），含「连续无提升」计数。
 #[derive(Debug, Serialize)]
 pub struct EvalTrendView {
     #[serde(rename = "opponent")]
@@ -379,7 +339,6 @@ pub struct EvalRunningView {
     pub in_flight: i64,
 }
 
-/// 单对手趋势摘要（Go: scheduler.EvalProgress 的 API 投影；供 trends 组装）。
 #[derive(Debug, Clone, Copy)]
 pub struct EvalTrendProgressView {
     pub versions: i64,
@@ -403,7 +362,6 @@ pub struct EvalView {
     pub running: Vec<EvalRunningView>,
 }
 
-/// POST /api/eval/trigger 响应（Go: {"ok":true,"triggered":n,"message":msg}）。
 #[derive(Debug, Serialize)]
 pub struct EvalTriggerView {
     #[serde(rename = "ok")]
@@ -414,10 +372,8 @@ pub struct EvalTriggerView {
     pub message: String,
 }
 
-/// GET /api/eval-config 响应：在线覆盖 + 生效值（Go: {"override": ov, "effective": {...}}）。
 #[derive(Debug, Serialize)]
 pub struct EvalConfigGetView {
-    /// Go 键名 "override"（Rust 关键字，显式 rename）。
     #[serde(rename = "override")]
     pub override_: Option<bqs_core::evalcoord::EvalOverride>,
     #[serde(rename = "effective")]
@@ -434,11 +390,6 @@ pub struct EvalEffectiveView {
     pub stop_win_rate: f64,
 }
 
-// ---------------------------------------------------------------------------
-// /api/trainers（Go: handlers_trainers.go balanceConfigView / trainerView / trainersView）
-// ---------------------------------------------------------------------------
-
-/// [balance] 配置快照（Go: balanceConfigView = config.BalanceConfig）。
 #[derive(Debug, Serialize)]
 pub struct BalanceConfigView {
     #[serde(rename = "enabled")]
@@ -501,11 +452,6 @@ pub struct TrainersView {
     pub trainers: Vec<TrainerView>,
 }
 
-// ---------------------------------------------------------------------------
-// /api/train-config（Go: trainConfigView + scheduler.TrainConfigField）
-// ---------------------------------------------------------------------------
-
-/// 白名单字段的只读描述（Go: scheduler.TrainConfigField，含 `enum,omitempty`）。
 #[derive(Debug, Serialize)]
 pub struct TrainConfigFieldView {
     #[serde(rename = "name")]
@@ -531,10 +477,6 @@ pub struct TrainConfigView {
     #[serde(rename = "fields")]
     pub fields: Vec<TrainConfigFieldView>,
 }
-
-// ---------------------------------------------------------------------------
-// /api/episodes 与 /api/data-stats（Go: handlers_episodes.go）
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
 pub struct EpisodeView {
@@ -584,7 +526,6 @@ pub struct EpisodePageView {
     pub has_more: bool,
 }
 
-/// 数据流入总览（Go: handleDataStats 的 map[string]any 响应）。
 #[derive(Debug, Serialize)]
 pub struct DataStatsView {
     #[serde(rename = "total")]
@@ -599,7 +540,6 @@ pub struct DataStatsView {
     pub generation: GenerationStatsView,
 }
 
-/// 本代数据量（Go: store.GenerationStats）。
 #[derive(Debug, Serialize)]
 pub struct GenerationStatsView {
     #[serde(rename = "since")]
@@ -626,10 +566,6 @@ impl From<GenerationStats> for GenerationStatsView {
     }
 }
 
-// ---------------------------------------------------------------------------
-// /api/storage（Go: storage.go storageProfileView / storageView）
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Serialize)]
 pub struct StorageProfileView {
     #[serde(rename = "name")]
@@ -638,7 +574,7 @@ pub struct StorageProfileView {
     pub endpoint: String,
     #[serde(rename = "region")]
     pub region: String,
-    /// 掩码（前 4 + **** + 后 4）；secret 永不出域。
+
     #[serde(rename = "accessKey")]
     pub access_key: String,
     #[serde(rename = "hasSecret")]
@@ -657,13 +593,6 @@ pub struct StorageView {
     pub profiles: Vec<StorageProfileView>,
 }
 
-// ---------------------------------------------------------------------------
-// episode 回放（Go: internal/replay Game/Step/GameSummary + replay.go 信封；
-// 契约真源 = banqi-frontend/src/scheduler/types.ts 的 ReplayList/ReplayGame/
-// ReplayStep/HiddenBag，camelCase 逐字段一致，前端零改动）
-// ---------------------------------------------------------------------------
-
-/// 步前双方剩余暗子按类型计数（兵炮马车相士帅 = 下标 0..6；Go: replay.HiddenBag）。
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct HiddenBagView {
     #[serde(rename = "red")]
@@ -672,7 +601,6 @@ pub struct HiddenBagView {
     pub black: [i64; 7],
 }
 
-/// 单局轻量摘要（Go: replay.GameSummary）。
 #[derive(Debug, Serialize)]
 pub struct ReplayGameSummaryView {
     #[serde(rename = "index")]
@@ -689,7 +617,6 @@ pub struct ReplayGameSummaryView {
     pub has_seed: bool,
 }
 
-/// GET /api/episodes/{id}/replay 信封（Go: handleEpisodeReplayList 的匿名 struct）。
 #[derive(Debug, Serialize)]
 pub struct ReplayListView {
     #[serde(rename = "id")]
@@ -704,7 +631,6 @@ pub struct ReplayListView {
     pub games: Vec<ReplayGameSummaryView>,
 }
 
-/// 单步视图（上帝视角；Go: replay.Step）。
 #[derive(Debug, Clone, Serialize)]
 pub struct ReplayStepView {
     #[serde(rename = "ply")]
@@ -719,7 +645,7 @@ pub struct ReplayStepView {
     pub to: i64,
     #[serde(rename = "kind")]
     pub kind: String,
-    /// Go omitempty：false 时省略（前端 undefined 按 falsy 处理）。
+
     #[serde(rename = "isChance", skip_serializing_if = "std::ops::Not::not")]
     pub is_chance: bool,
     #[serde(rename = "revealed", skip_serializing_if = "String::is_empty")]
@@ -764,7 +690,6 @@ pub struct ReplayStepView {
     pub policy_values: Option<Vec<f32>>,
 }
 
-/// 一局完整回放（Go: replay.Game）。
 #[derive(Debug, Serialize)]
 pub struct ReplayGameView {
     #[serde(rename = "index")]
@@ -810,5 +735,3 @@ pub struct ReplayGameView {
     #[serde(rename = "explCount")]
     pub expl_count: usize,
 }
-
-

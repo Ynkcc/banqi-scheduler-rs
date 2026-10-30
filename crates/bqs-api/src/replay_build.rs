@@ -1,13 +1,4 @@
-//! replay_build.rs — GameRecord v2 → bq-replay::ReplayInput → ReplayGame →
-//! axum JSON 视图（ReplayGameView/ReplayStepView）的转换层。
-//!
-//! 行为真源 = Go 版 `internal/replay/darkchess.go` ReplayNnue + `internal/api/
-//! replay.go` replayGame / describeSide；局面 god 视角重建复用共享回放库
-//! bq-replay（快照 true_board 为权威、initial_layout 作回退——已定决策，
-//! 与 Go 的差异：layout 缺失不再整局报错，交由 bq-replay 回退 "Hidden"）。
-//!
-//! 本层只做"字节缓冲 → 中性输入/输出"的字段搬运，不做任何序列化决策
-//! （JSON 字段名在 views.rs）。
+
 
 use bq_env::config::Variant;
 use bq_env::types::{Piece, PieceType, Player, Slot};
@@ -19,14 +10,12 @@ use bqs_proto::{EpisodeBatch, GameRecord};
 
 use crate::views::{HiddenBagView, ReplayGameView, ReplayStepView};
 
-/// 动作索引 → (from, to) 表（构建顺序对齐 banqi-core env::actions
-/// build_action_lookup_tables：翻棋单格 → 四邻移动 → 同行长距 → 同列长距）。
-/// Go: darkchess.go actionToCoords。
+
 fn action_to_coords(rows: usize, cols: usize) -> Vec<(usize, usize)> {
     let n = rows * cols;
     let mut out = Vec::with_capacity(n * 6);
     for sq in 0..n {
-        out.push((sq, sq)); // 翻棋：from == to
+        out.push((sq, sq));
     }
     for r1 in 0..rows {
         for c1 in 0..cols {
@@ -57,7 +46,6 @@ fn action_to_coords(rows: usize, cols: usize) -> Vec<(usize, usize)> {
     out
 }
 
-// —— 步级缓冲兜底读取（Go: f32At/u32At/u8At：越界 = 0，兼容旧数据缺省）——
 
 fn f32_at(b: &[u8], i: usize) -> f32 {
     let s = i * 4;
@@ -76,7 +64,7 @@ fn u32_at(b: &[u8], i: usize) -> u32 {
 fn u8_at(b: &[u8], i: usize) -> u8 {
     b.get(i).copied().unwrap_or(0)
 }
-/// u16 LE（actions 缓冲第 i 项）。
+
 fn u16_at(b: &[u8], i: usize) -> Option<u32> {
     let s = i * 2;
     if b.len() < s + 2 {
@@ -84,7 +72,7 @@ fn u16_at(b: &[u8], i: usize) -> Option<u32> {
     }
     Some(u16::from_le_bytes(b[s..s + 2].try_into().unwrap()) as u32)
 }
-/// 布局紧凑字节 → 棋子（byte = player_idx<<3 | piece_type_idx；Go: layout 同构）。
+
 fn piece_from_layout_byte(b: u8) -> Option<Piece> {
     let ty = [
         PieceType::Soldier,
@@ -99,7 +87,7 @@ fn piece_from_layout_byte(b: u8) -> Option<Piece> {
     Some(Piece::new(ty, pl))
 }
 
-/// 暗子身份：快照 true_board 优先，initial_layout 回退（已定决策）。
+
 fn hidden_identity(snap: &PositionSnapshot, sq: usize, layout: Option<&[Piece]>) -> Option<Piece> {
     snap.true_board
         .as_ref()
@@ -108,8 +96,7 @@ fn hidden_identity(snap: &PositionSnapshot, sq: usize, layout: Option<&[Piece]>)
         .or_else(|| layout.and_then(|l| l.get(sq)).copied())
 }
 
-/// GameRecord 步前快照批量解码（Go: SnapshotBoards 权威性校验：全部条目必须
-/// 解码成功且数量与 steps 一致，否则整局不可回放——不做动作反推回退）。
+
 fn decode_snapshots(rec: &GameRecord, steps: usize) -> Result<Vec<PositionSnapshot>, String> {
     if rec.snapshots.len() != steps {
         return Err(format!(
@@ -124,8 +111,7 @@ fn decode_snapshots(rec: &GameRecord, steps: usize) -> Result<Vec<PositionSnapsh
         .collect()
 }
 
-/// 单局重建：批次 + 局序号 + episode 元数据 → 完整 JSON 视图。
-/// 失败（变体未知 / 缓冲长度不符 / 快照缺失）→ Err（api 层映射 400）。
+
 pub fn build_game(
     batch: &EpisodeBatch,
     ep: &Episode,
@@ -148,7 +134,7 @@ pub fn build_game(
     let steps = rec.steps as usize;
     let table = action_to_coords(cfg.rows, cfg.cols);
 
-    // initial_layout：仅当长度与变体一致时作为 god 视角回退（无种子/旧数据不报错）
+
     let layout: Option<Vec<Piece>> = if rec.initial_layout.len() == positions {
         Some(
             rec.initial_layout
@@ -161,10 +147,10 @@ pub fn build_game(
         None
     };
 
-    // 步前快照 = 局面唯一权威来源：缺失/解码失败 → 整局不可回放
+
     let snaps = decode_snapshots(rec, steps)?;
 
-    // actions（steps × u16 LE）/ players（steps × i8）长度校验（Go: buildActions/buildPlayers）
+
     let mut actions = Vec::with_capacity(steps);
     for i in 0..steps {
         actions.push(u16_at(&rec.actions, i).ok_or_else(|| {
@@ -180,8 +166,7 @@ pub fn build_game(
     }
     let players_i8 = |i: usize| rec.players[i] as i8;
 
-    // 终局快照（步后）：由末步快照经环境真实步进得出（Go 版以末手动作推导，
-    // 这里用 env.step_with_reveal 等价实现，避免在两侧复刻盘面更新逻辑）。
+
     let final_snapshot: Option<Vec<u8>> = if steps > 0 {
         let last_pre = &snaps[steps - 1];
         let stepped = bq_env::for_variant_env!(variant, E => {
@@ -190,14 +175,14 @@ pub fn build_game(
         });
         match stepped {
             Ok(s) => Some(s.encode()),
-            // 记录异常（末步动作非法）时回退无终局快照：bq-replay 以末步前局面兜底
+
             Err(_) => None,
         }
     } else {
         None
     };
 
-    // 组装 bq-replay 中性输入（翻/吃/明攻判定用步前快照精确终判，与 Go 一致）
+
     let mut moves = Vec::with_capacity(steps);
     for (ply, &action) in actions.iter().enumerate() {
         let Some((from, to)) = table.get(action as usize).copied() else {
@@ -208,7 +193,7 @@ pub fn build_game(
         };
         let pre = &snaps[ply];
         let (is_flip, is_chance, revealed, captured) = if (action as usize) < positions {
-            // 翻棋：步前目标格必须是暗子（身份不变，仅明暗变化）
+
             if !matches!(pre.slots[to], Slot::Hidden) {
                 return Err(format!("replay: step {ply} 翻棋目标 {to} 与快照明暗不符"));
             }
@@ -220,15 +205,15 @@ pub fn build_game(
                 return Err(format!("replay: step {ply} 起点格 {from} 与快照不符（无棋子）"));
             }
             match pre.slots[to] {
-                Slot::Empty => (false, false, None, None), // move
+                Slot::Empty => (false, false, None, None),
                 Slot::Hidden => {
                     let id = hidden_identity(pre, to, layout.as_deref())
                         .ok_or(format!("replay: step {ply} 目标格 {to} 身份未知"))?;
-                    // 攻击暗子 = 翻开后无条件被吃（env 语义）
+
                     (false, true, Some(id.short_name()), Some(id.short_name()))
                 }
                 Slot::Revealed(victim) => {
-                    (false, false, None, Some(victim.short_name())) // capture
+                    (false, false, None, Some(victim.short_name()))
                 }
             }
         };
@@ -247,16 +232,16 @@ pub fn build_game(
 
     let input = ReplayInput {
         variant,
-        initial_fen: None, // 快照路径；空局兜底由 bq-replay 用变体默认开局
+        initial_fen: None,
         initial_layout: layout.clone(),
         snapshots: rec.snapshots.clone(),
         final_snapshot,
-        final_fen: None, // 终局局面已由末手步进得出（final_snapshot）
+        final_fen: None,
         moves,
     };
     let game = bq_replay::build_replay(&input)?;
 
-    // —— 逐步诊断与产方归属（Go: ReplayNnue 后半段；缓冲越界按 0 兜底）——
+
     let policy_offsets: Vec<u32> = (0..=steps + 1)
         .take_while(|&i| i * 4 + 4 <= rec.labeler_policy_offsets.len())
         .map(|i| u32_at(&rec.labeler_policy_offsets, i))
@@ -270,13 +255,13 @@ pub fn build_game(
         let action = actions[ply];
         let st = &m;
         let ReplayStep { board, revealed_at, hidden_bag, scores, kind, .. } = st;
-        // move_counter：步前快照值（快照权威；bq-replay 已做步后语义换算，回转步前口径）
+
         let move_counter = if *kind == bq_replay::StepKind::Move {
             st.move_counter.saturating_sub(1)
         } else {
             snaps[ply].move_counter
         };
-        // 产方归属：0xFF = 无搜索步（规则/随机对手）→ -1
+
         let p = u8_at(&rec.producers, ply);
         let producer: i64 = if p == 0xFF { -1 } else { p as i64 };
 
@@ -295,7 +280,7 @@ pub fn build_game(
         if u8_at(&rec.expl_random, ply) == 1 {
             expl_count += 1;
         }
-        // 教师根策略（行棋方视角）：offsets 前缀和切片
+
         let (policy_actions, policy_values) = {
             let (lo, hi) = (
                 policy_offsets.get(ply).copied().unwrap_or(0),
@@ -319,7 +304,7 @@ pub fn build_game(
         };
 
         step_views.push(ReplayStepView {
-            ply, // Go 契约：0 起始
+            ply,
             player: m.player.clone(),
             action: action,
             from: m.from as i64,
@@ -355,8 +340,7 @@ pub fn build_game(
         labeler_agree /= labeler_total as f64;
     }
 
-    // 对局双方身份（A = 产数据方 = episode.network_sha；B = 对手）；
-    // 红黑归属 RedIsA = 第 0 步行棋方（暗棋红先），前端换算显示。
+
     let red_is_a = steps > 0 && players_i8(0) > 0;
     Ok(ReplayGameView {
         index,
@@ -369,7 +353,7 @@ pub fn build_game(
         side_a: crate::handlers_replay::describe_side(&ep.network_sha, ""),
         side_b: crate::handlers_replay::describe_side(&ep.opponent_sha, &ep.opponent_spec),
         red_is_a,
-        a_side_only: false, // v2 恒 false（前端兼容保留）
+        a_side_only: false,
         initial_board: game.initial_board,
         initial_shown: game.initial_shown,
         initial_bag: HiddenBagView {
@@ -389,9 +373,6 @@ pub fn build_game(
     })
 }
 
-// ---------------------------------------------------------------------------
-// 单测：合成 EpisodeBatch（快照 + 动作 + 布局 + 诊断）走完整转换链
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -400,11 +381,11 @@ mod tests {
     use bq_env::GameEnv;
     use prost::Message;
 
-    /// 用 4x8 真实环境对弈 steps 步生成 GameRecord 各缓冲（含诊断字段）。
+
     fn synth_record(steps: usize, with_diags: bool) -> (GameRecord, Vec<Vec<u8>>) {
         let mut env = DarkChessEnv::default();
-        // 合成 4x8 标准布局字节（每方 5 兵 2 炮 2 马 2 车 2 相 2 士 1 帅）；
-        // env 默认快照不携带 true_board，故这里手工构造 initial_layout
+
+
         let mut initial_layout: Vec<u8> = Vec::with_capacity(32);
         for player in [0u8, 1u8] {
             initial_layout.extend(std::iter::repeat_n(player << 3, 5));
@@ -527,14 +508,14 @@ mod tests {
         assert_eq!(g.winner, Some(1));
         assert_eq!(g.side_a, "NNUE abcdef123456");
         assert_eq!(g.side_b, "规则评估器（capture_first）");
-        // 红/黑步交替，第 0 步红先
+
         assert!(g.red_is_a);
-        // 棋盘与明暗长度 = 32 格
+
         assert_eq!(g.initial_board.len(), 32);
         assert_eq!(g.initial_shown.len(), 32);
         assert_eq!(g.final_board.len(), 32);
         assert_eq!(g.board_source_of_first(), "snapshot");
-        // 诊断字段逐位映射
+
         let s = &g.moves[0];
         assert_eq!(s.ply, 0);
         assert_eq!(s.search_value, 0.25);
@@ -545,17 +526,17 @@ mod tests {
         assert_eq!(s.labeler_action, Some(s.action));
         assert_eq!(s.policy_actions.as_deref(), Some(&[s.action][..]));
         assert_eq!(s.policy_values.as_deref(), Some(&[1.0][..]));
-        // labeler 与实际动作一致 → 同意率 1
+
         assert_eq!(g.labeler_total, 8);
         assert!((g.labeler_agree - 1.0).abs() < 1e-9);
-        // 终局盘面应由末手步进得出（至少与末步前盘面不同或等价成立）
+
         assert_eq!(g.final_shown.len(), 32);
     }
 
     #[test]
     fn missing_diagnostics_default_to_zero() {
         let (mut rec, _) = synth_record(3, false);
-        rec.labeler_actions = vec![0xFF; 12]; // u32::MAX = 无教师动作
+        rec.labeler_actions = vec![0xFF; 12];
         let g = build_game(&batch(rec), &episode(), 0).unwrap();
         for m in &g.moves {
             assert_eq!(m.search_value, 0.0);
@@ -594,7 +575,7 @@ mod tests {
 
     #[test]
     fn proto_roundtrip_preserves_fields() {
-        // prost encode→decode 往返不丢关键字段（回放链路以解码后对象为准）
+
         let (rec, _) = synth_record(5, true);
         let b = batch(rec);
         let bytes = b.encode_to_vec();

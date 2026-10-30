@@ -1,10 +1,6 @@
-//! handlers_episodes.rs — episode 数据端点：/api/episodes 分页列表与数据流统计
-//! （/api/data-stats）。（Go: internal/api/handlers_episodes.go）
-
 use axum::extract::State;
 use axum::http::Uri;
 use axum::Json;
-
 
 use bqs_core::types::Episode;
 
@@ -14,7 +10,6 @@ use crate::{int_query, ApiError, ApiResult, AppState};
 const DEFAULT_EPISODE_LIMIT: i64 = 100;
 const MAX_EPISODE_LIMIT: i64 = 500;
 
-/// episode 行 → 展示视图（episodes 与 data-stats 共用；Go: toEpisodeView）。
 fn to_episode_view(e: &Episode) -> EpisodeView {
     EpisodeView {
         id: e.id,
@@ -37,8 +32,6 @@ fn to_episode_view(e: &Episode) -> EpisodeView {
     }
 }
 
-/// GET /api/episodes?before=&limit= — 元数据按 id 倒序分页
-/// （limit 越界或缺省回落 100，上限 500；hasMore = 取满 limit）。
 pub async fn episodes(State(st): State<AppState>, uri: Uri) -> ApiResult<Json<EpisodePageView>> {
     let before = int_query(uri.query(), "before");
     let mut limit = int_query(uri.query(), "limit");
@@ -60,19 +53,16 @@ pub async fn episodes(State(st): State<AppState>, uri: Uri) -> ApiResult<Json<Ep
     Ok(Json(page))
 }
 
-/// GET /api/data-stats — 数据流入实时总览：累计 / 近 1h / 近 24h 按数据类别细分 +
-/// 最近登记的 episode + 本代数据量（fresh-only 训练窗口）。
 pub async fn data_stats(State(st): State<AppState>) -> ApiResult<Json<DataStatsView>> {
     let server = st.server.clone();
     let view = tokio::task::spawn_blocking(move || -> Result<DataStatsView, ApiError> {
-        // 三窗口聚合（键 = kind 原值，api 层做 kind → 名称映射）
         let stats = server.ports.episodes.episode_data_stats()?;
         let to_views = |m: std::collections::BTreeMap<i64, bqs_core::ports::KindStats>| {
             m.into_iter()
                 .map(|(k, v)| (data_kind_name(k).to_string(), v.into()))
                 .collect()
         };
-        // 最近登记的 episode（Go: ListEpisodes(ctx, 0, 12)）
+
         let recent = server
             .ports
             .episodes
