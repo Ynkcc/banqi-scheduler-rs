@@ -59,6 +59,11 @@ static MIGRATIONS: &[Migration] = &[
         name: "eval model opponent sha",
         up: migrate_eval_opponent_sha,
     },
+    Migration {
+        version: 11,
+        name: "match sides nullable sha",
+        up: migrate_match_sides_nullable,
+    },
 ];
 
 fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, StoreError> {
@@ -105,8 +110,8 @@ fn migrate_base_tables(conn: &Connection) -> Result<(), StoreError> {
 		)",
         "CREATE TABLE IF NOT EXISTS matches (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			candidate TEXT NOT NULL REFERENCES networks(sha),
-			opponent TEXT NOT NULL REFERENCES networks(sha),
+			candidate TEXT REFERENCES networks(sha),
+			opponent TEXT REFERENCES networks(sha),
 			status TEXT NOT NULL DEFAULT 'running',
 			pair_ll INTEGER NOT NULL DEFAULT 0,
 			pair_ld INTEGER NOT NULL DEFAULT 0,
@@ -398,6 +403,52 @@ fn migrate_eval_opponent_sha(conn: &Connection) -> Result<(), StoreError> {
             name: "eval model opponent sha",
             message: format!("add column: {e}"),
         })
+}
+
+fn migrate_match_sides_nullable(conn: &Connection) -> Result<(), StoreError> {
+    let notnull: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('matches')
+			 WHERE name IN ('candidate','opponent') AND \"notnull\" = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| StoreError::Migration {
+            version: 11,
+            name: "match sides nullable sha",
+            message: format!("inspect matches columns: {e}"),
+        })?;
+    if notnull == 0 {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        "CREATE TABLE matches_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			candidate TEXT REFERENCES networks(sha),
+			opponent TEXT REFERENCES networks(sha),
+			status TEXT NOT NULL DEFAULT 'running',
+			pair_ll INTEGER NOT NULL DEFAULT 0,
+			pair_ld INTEGER NOT NULL DEFAULT 0,
+			pair_dd INTEGER NOT NULL DEFAULT 0,
+			pair_wl INTEGER NOT NULL DEFAULT 0,
+			pair_dw INTEGER NOT NULL DEFAULT 0,
+			pair_ww INTEGER NOT NULL DEFAULT 0,
+			num_games INTEGER NOT NULL DEFAULT 0,
+			target_games INTEGER NOT NULL
+		);
+		INSERT INTO matches_new
+			(id, candidate, opponent, status, pair_ll, pair_ld, pair_dd, pair_wl, pair_dw, pair_ww, num_games, target_games)
+		SELECT id, candidate, opponent, status, pair_ll, pair_ld, pair_dd, pair_wl, pair_dw, pair_ww, num_games, target_games
+		FROM matches;
+		DROP TABLE matches;
+		ALTER TABLE matches_new RENAME TO matches;",
+    )
+    .map_err(|e| StoreError::Migration {
+        version: 11,
+        name: "match sides nullable sha",
+        message: format!("rebuild matches: {e}"),
+    })
 }
 
 fn migrate_jobs(conn: &Connection) -> Result<(), StoreError> {

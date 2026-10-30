@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use axum::Json;
 use axum::extract::{Path, State};
+use axum::Json;
 
 use bqs_core::dispatch::TaskStateStats;
 use bqs_core::evalcoord::EvalOverride;
@@ -12,7 +12,7 @@ use crate::views::{
     EpisodeRateEstimateView, EvalConfigView, KindStatsView, MatchView, NetworkView, OkView,
     SprtView, StatusView, TaskView, WorkerView,
 };
-use crate::{ApiError, ApiResult, AppState, MAX_CONTROL_BODY, read_endpoint, write_endpoint};
+use crate::{read_endpoint, write_endpoint, ApiError, ApiResult, AppState, MAX_CONTROL_BODY};
 
 pub fn to_network_view(n: &Network) -> NetworkView {
     NetworkView {
@@ -174,12 +174,36 @@ pub async fn matches(State(st): State<AppState>) -> ApiResult<Json<Vec<MatchView
         let sprt = &server.cfg.sprt;
         let bounds = new_bounds(sprt.alpha, sprt.beta);
         let items = server.ports.matches.list_matches()?;
+
+        let mut side_kinds: BTreeMap<i64, (String, String)> = BTreeMap::new();
+        for j in server
+            .jobs
+            .list(None, Some(bqs_proto::JobKind::JobRating as i64))
+            .unwrap_or_default()
+        {
+            if let Some(bqs_core::jobs::JobSpecJson::Rating(spec)) =
+                bqs_core::jobs::JobSpecJson::parse(&j.spec_json)
+            {
+                if spec.match_id != 0 {
+                    let (a, b) = spec.resolved_sides();
+                    side_kinds.insert(spec.match_id, (a.kind.clone(), b.kind.clone()));
+                }
+            }
+        }
         let mut out = Vec::with_capacity(items.len());
         for m in items {
+            let kinds = side_kinds.get(&m.id);
+            let display = |sha: &str, kind: Option<&String>| -> String {
+                if sha.is_empty() {
+                    kind.cloned().unwrap_or_default()
+                } else {
+                    sha.to_string()
+                }
+            };
             let mut mv = MatchView {
                 id: m.id,
-                candidate: m.candidate.clone(),
-                opponent: m.opponent.clone(),
+                candidate: display(&m.candidate, kinds.map(|k| &k.0)),
+                opponent: display(&m.opponent, kinds.map(|k| &k.1)),
                 status: m.status.clone(),
                 pairs: m.pairs,
                 num_games: m.num_games,

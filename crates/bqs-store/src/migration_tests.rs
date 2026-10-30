@@ -84,7 +84,7 @@ mod tests {
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap()
         };
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
 
         for (table, col) in [
             ("workers", "note"),
@@ -153,6 +153,25 @@ mod tests {
             )
             .unwrap();
         assert_eq!(wl, 0, "旧 WL 不可恢复，置 0");
+
+        let (num_games, pair_dd): (i64, i64) = conn
+            .query_row(
+                "SELECT num_games, pair_dd FROM matches WHERE candidate='old-best'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((num_games, pair_dd), (6, 3), "v11 重建后对发行数据无损");
+
+        let notnull: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('matches')
+				 WHERE name IN ('candidate','opponent') AND \"notnull\" = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(notnull, 0, "v11 后 matches sha 列应为可空");
     }
 
     #[test]
