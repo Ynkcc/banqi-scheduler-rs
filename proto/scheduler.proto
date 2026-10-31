@@ -1,17 +1,3 @@
-// ============================================================================
-// scheduler.proto — 全仓唯一真源（M3 schema 窗口收敛；本文件即单一来源，
-// 此前三仓各持副本，collector 副本已实际落后缺 VariantMeta）。
-//
-// 真源位置：banqi-scheduler-rs/proto/scheduler.proto（旧 Go 版 banqi-scheduler
-// 已退役归档至 archive/banqi-scheduler，契约不再挂其名下）。
-//
-// 各端引用方式（禁止再复制本文件）：
-// - banqi-scheduler-rs: crates/bqs-proto/build.rs（../../proto/scheduler.proto）
-// - banqi-collector:    crates/bqc-proto/build.rs（../../../banqi-scheduler-rs/proto/scheduler.proto）
-// - banqi-training:     `python gen_proto.py`（grpc_tools + import 改写）
-//
-// 字段号只增不改；破坏性变更必须提升 schema_version，训练端遇到不认识的版本直接拒绝。
-// ============================================================================
 
 syntax = "proto3";
 
@@ -19,27 +5,21 @@ package scheduler;
 
 option go_package = "banqi/server/pb";
 
-// worker 拉取任务请求（含机器规格，服务端按规格匹配任务量）
 message TaskRequest {
   string worker_id = 1;
   string client_version = 2;
-  int32 threads = 3;          // 可用线程数
-  int64 memory_mb = 4;        // 可用内存
-  string current_network = 5; // 本地已有网络 sha（空表示需要下载）
+  int32 threads = 3;
+  int64 memory_mb = 4;
+  string current_network = 5;
 }
 
-// 统一「生成行为」规格：收集器唯一认知的任务形态。
-// oneof 分支表达"行为差异"，不表达"任务意图"。
-// 任务意图（rating/collect/selfplay）与对发行关联（match_id）均为服务端内部
-// 概念，经 note_dispatch 登记表管理，不下发收集器。
 message GenerationSpec {
   string variant = 1;
-  OpeningScenario scenario = 2;       // 开局场景（reanalysis/derive 忽略）
-  optional uint64 seed = 3;           // 开局种子（服务端解析 SeedStrategy 后下发；缺省 = 不固定）
-  DataKind data_kind = 4;             // 产出数据类别
-  uint64 games = 5;                   // 本批对局数 / 重搜位置条数
-  uint64 deadline_unix = 6;           // 收尾截止（0 = 无超期，需显式判断）
-  // 对弈任务一律产出棋谱（EpisodeBatch）+ 对局统计（MatchReport）。
+  OpeningScenario scenario = 2;
+  optional uint64 seed = 3;
+  DataKind data_kind = 4;
+  uint64 games = 5;
+  uint64 deadline_unix = 6;
   oneof behavior {
     Plays plays = 10;
     Reanalysis reanalysis = 11;
@@ -47,106 +27,69 @@ message GenerationSpec {
   }
 }
 
-// 对弈行为：双方棋手规格（成对换色执行，保证六桶口径公平）。
 message Plays {
   CollectPlayerSpec player_a = 1;
   CollectPlayerSpec player_b = 2;
 }
 
-// 局面重搜行为：用指定网络对历史局面重跑搜索。
 message Reanalysis {
-  bytes payload = 1;                  // 版本化紧凑编码（encode_payload）
+  bytes payload = 1;
 }
 
-// 特征包派生行为：下载指定记录批次，派生 FeaturePack 上传。
 message DeriveFeatures {
   string episode_object_key = 1;
   string episode_url = 2;
 }
 
-// 任务响应
 message TaskResponse {
   string task_id = 1;
   string variant = 2;
-  string network_sha = 3;       // 主网络（训练网络）
-  string opponent_sha = 4;      // 对手网络（有网络类 player_b 时）；否则为空
-  string network_url = 5;       // R2 预签名下载 URL（主网络）；空 = 本地已有缓存
-  string opponent_url = 6;      // 对手网络下载 URL
-  string network_sha_remote = 7;  // 服务端当前 best sha（用于本地缓存比对）
-  // 搜索/配置透传：reanalysis 的 mcts_sims 覆盖、对弈行为的 extra_config。
+  string network_sha = 3;
+  string opponent_sha = 4;
+  string network_url = 5;
+  string opponent_url = 6;
+  string network_sha_remote = 7;
   SelfPlayParams params = 9;
-  string message = 10;          // 无任务时的说明（task_waiting 等）
-  // 网络对象键（networks/<sha>.<ext>）：恒下发，worker 的本地缓存路径即
-  // cache_dir/<network_key>，扩展名即权重格式（onnx / pt / nnue）。
+  string message = 10;
   string network_key = 11;
-  string opponent_key = 12;     // 对手网络对象键（有网络类 player_b 时）
-  // 统一「生成行为」规格：任务唯一载体。generation 缺省 = 无任务（按 message 退避）。
+  string opponent_key = 12;
   GenerationSpec generation = 22;
-  // 删除：kind、games、reanalysis_payload、opponent_spec、episode_object_key/episode_url、
-  // collect_spec/collect_games/collect_seed、rating_side_a/b 等全部 kind 专属字段。
   reserved 8, 13, 14, 15, 16, 17, 18, 19, 20, 21;
 }
 
-// 任务种类枚举：仅服务端内部使用（JobKind→TaskKind 映射、SPRT 路由、统计、
-// 日志），不再出现在任何下发给收集器的消息中（线上协议由 GenerationSpec 取代）。
 enum TaskKind {
-  TASK_NONE = 0;      // 无任务，按 message 退避轮询
-  // 训练闭环自对弈（由 JOB_SELFPLAY job 驱动派发；完成口径/抢占见文件头说明）
+  TASK_NONE = 0;
   TASK_SELFPLAY = 1;
-  TASK_RATING = 2;    // gatekeeper / rating 对打
-  // 局面重搜（reanalysis）：用当前 best 网络对下发的历史局面重跑搜索
-  // （按 best.Format 分派 MCTS / Expectimax 栈），产出新的策略/价值目标
-  // （一局面一条 1 样本 episode），走 ReportEpisode 常规通道上报。
+  TASK_RATING = 2;
   TASK_REANALYSIS = 3;
-  // TASK_EVAL（=4，绝对强度评估）已移除：评估统一走 TASK_RATING（JOB_RATING
-  // 支持 side_b 为规则/随机对手，且 rating 任务恒记录并上传对局）。
   reserved 4;
-  // 特征包补派（derive features）：下载指定记录批次（GameRecord v2），用
-  // banqi-core 特征编码器派生 FeaturePack 并经 ReportFeaturePack 上传。
-  // 目标批次由 TaskResponse.episode_object_key / episode_url 指定。
   TASK_DERIVE_FEATURES = 5;
-  // 参数化采集任务（collection）：按 CollectionJobSpec 执行双方自由组合的对打
-  // /自对弈，产出 data_kind 指定类别的训练记录与特征包（走 ReportEpisode 常规
-  // 通道）。规格经 TaskResponse.collect_spec 下发；承担局数与开局种子见
-  // collect_games / collect_seed。
   TASK_COLLECT = 6;
 }
 
-// 产线栈标识：决定 worker 用哪套搜索栈产数据、trainer 消费哪类特征包。
-// v2 起不再区分记录类型（记录统一为 GameRecord），仅作路由/过滤标签，
-// 由服务端下发（selfplay.data_kind 配置 / WebUI 在线切换）。
 enum DataKind {
-  DATA_RESNET = 0;    // Gumbel MCTS 栈（ResNet 特征包，配 .onnx 权重）
-  DATA_NNUE = 1;      // Expectimax 栈（NNUE 稀疏特征包，配 .nnue 权重）
-  // 不产训练数据的对局记录（rating 观测对局等）：记录仅含对局真源（快照/动作/
-  // 胜负），无搜索标签，不派生特征包、不进入训练消费管道；仅供 WebUI 回放观测。
+  DATA_RESNET = 0;
+  DATA_NNUE = 1;
   DATA_NONE = 2;
 }
 
 message SelfPlayParams {
-  // 非对弈行为（reanalysis）的搜索覆盖：0 = 用 worker 自对弈配置的默认值。
   int32 mcts_sims = 1;
-  // JSON 透传（服务端动态配置：initial_revealed_pieces 等）。
   string extra_config = 5;
-  reserved 2, 3, 4, 6;  // temperature / playout_cap_random / variant / data_kind
-  // 已并入 GenerationSpec（variant/data_kind）或 per-player CollectSearchParams。
+  reserved 2, 3, 4, 6;
 }
 
-// episode 元数据上报：服务端只收元数据 + 签发 R2 预签名 PUT，数据直传 R2
 message EpisodeMeta {
   string worker_id = 1;
   string task_id = 2;
   int32 game_count = 3;
   int32 total_steps = 4;
-  int32 winner = 5;             // 1 红 / -1 黑 / 0 平；rating 任务另有字段
+  int32 winner = 5;
   string network_sha = 6;
   int64 timestamp = 7;
-  int64 content_length = 8;     // 待上传对象大小
-  string content_sha256 = 9;    // 对象 sha256（R2 强校验）
-  DataKind kind = 10;           // 本批对象的数据类别（落库，供 ListEpisodes 按类别过滤；
-                                // DATA_NONE = 不产训练数据的对局记录，仅供回放）
-  // 批内逐局结果四分（红/黑为绝对色彩视角；平局按成因拆分）：
-  // 旧版 collector 不填（落库 0），WebUI 据此显示四分而不仅是批级聚合 winner。
+  int64 content_length = 8;
+  string content_sha256 = 9;
+  DataKind kind = 10;
   int32 red_wins = 11;
   int32 black_wins = 12;
   int32 draw_no_capture = 13;
@@ -156,131 +99,107 @@ message EpisodeMeta {
 message EpisodeAck {
   bool accepted = 1;
   string message = 2;
-  string upload_url = 3;        // 预签名 PUT URL；accepted=false 时为空
-  string object_key = 4;        // R2 对象键 episodes/<sha>/<uuid>.epb.gz
+  string upload_url = 3;
+  string object_key = 4;
 }
 
-// 网络请求：sha 为空 = 拉取当前 best
 message NetworkRequest {
   string sha = 1;
 }
 
 message NetworkInfo {
   string sha = 1;
-  string download_url = 2;      // 预签名 GET URL
+  string download_url = 2;
   int64 created_at = 3;
   bool is_best = 4;
-  string game_data = 5;         // 训练侧附加信息（parent sha 等），JSON
-  string key = 6;               // 对象键 networks/<sha>.<ext>（供 worker 预取缓存命名）
+  string game_data = 5;
+  string key = 6;
 }
 
-// trainer（GPU 机）注册新网络 → 触发 gatekeeper 对打
 message RegisterNetworkRequest {
   string sha = 1;
   string parent_sha = 2;
-  string upload_url = 3;        // trainer 已直传 R2，这里登记元数据
+  string upload_url = 3;
   string notes = 4;
-  // 权重格式（onnx / pt / nnue）：与 SignNetworkUploadRequest.format 一致，
-  // 决定对象键扩展名；两处必须由 upload 方用同一来源填写。
   string format = 5;
 }
 
 message RegisterNetworkAck {
   bool accepted = 1;
   string message = 2;
-  string match_task_hint = 3;   // 若已生成 gatekeeper 任务，附说明
+  string match_task_hint = 3;
 }
 
-// 对局结果上报（plays 行为的统一回报）
 message MatchResult {
   string worker_id = 1;
   string task_id = 2;
-  reserved 3;                   // 原 kind（任务类型已无感，归属由服务端登记表裁决）
+  reserved 3;
   string network_sha = 4;
   string opponent_sha = 5;
-  int32 games = 6;              // 本批局数
-  int32 wins = 7;               // 主网络视角（统计用）
+  int32 games = 6;
+  int32 wins = 7;
   int32 losses = 8;
   int32 draws = 9;
-  // 成对六桶计数（换色配对两局一组，互斥对型 [LL, LD, DD, WL, DW, WW]，
-  // WL = 一胜一负混合对）：rating 类必填，纯自对弈为 0。
   int32 pair_ll = 10;
   int32 pair_ld = 11;
   int32 pair_dd = 12;
-  int32 pair_wl = 21;           // 一胜一负混合对（旧五桶混在 pair_dd 中）
+  int32 pair_wl = 21;
   int32 pair_dw = 13;
   int32 pair_ww = 14;
-  reserved 15;                  // 原 opponent_spec 回显（对账由服务端登记表完成）
-  // 平均对局步数（评估统计用；未填时为 0）。
+  reserved 15;
   float avg_moves = 16;
-  // ---- 评估明细四分（旧版 collector 不填 = 0，调度器按聚合值兼容展示） ----
-  // 红方获胜局数（绝对色彩视角；与主网络视角 wins/losses 无换算关系，用于对称性诊断）
   int32 red_wins = 17;
-  // 黑方获胜局数
   int32 black_wins = 18;
-  // 未吃子平局（连续无吃子/翻棋判和）
   int32 draw_no_capture = 19;
-  // 步数截断平局（到达环境步数上限）
   int32 draw_truncation = 20;
 }
 
 message MatchResultAck {
   bool accepted = 1;
   string message = 2;
-  bool match_concluded = 3;     // 该 gatekeeper 对打已出结论
-  bool promoted = 4;            // 新网络晋级 best
-  string best_sha = 5;          // 晋级后的 best（未变则当前 best）
+  bool match_concluded = 3;
+  bool promoted = 4;
+  string best_sha = 5;
 }
 
-// 心跳 + 控制参数（worker 周期上报资源与版本声明）
 message HeartbeatRequest {
   string worker_id = 1;
   int32 current_threads = 2;
   int32 completed_games = 3;
   string running_task_id = 4;
-  string client_version = 5;    // collector 版本声明（仅记录/展示，不做强校验）
-  int64 memory_mb = 6;          // 可用内存
-  // 进程内健康状态（banqi_training.health）：ok | degraded | fatal。
-  // 空串 = 旧客户端（按 ok 语义处理）。WebUI worker 卡片据此显示红黄绿。
+  string client_version = 5;
+  int64 memory_mb = 6;
   string health_status = 7;
-  // 最近一次降级/致命摘要（空 = 无）。形如 "[publish] x3: SignNetworkUpload 被拒绝: ..."
   string last_error = 8;
 }
 
 message HeartbeatReply {
   bool pause_self_play = 1;
-  reserved 2;                   // 原 mcts_sims 心跳覆盖（搜索参数改经 CollectPlayerSpec.search per-player 下发）
+  reserved 2;
   float temperature = 3;
   bool playout_cap_random = 4;
-  string best_network = 5;      // 当前 best sha（供 worker 判断是否换网）
-  // 需要立即中止的在飞任务 id（如所属采集 job 已被取消）。worker 收到后应尽快
-  // 终止对应任务；已完成的部分照常走 ReportEpisode 上报（取消≠作废）。
+  string best_network = 5;
   repeated string cancel_task_ids = 6;
 }
 
-// trainer 请求签发网络上传预签名 PUT（R2 凭据只在调度器持有，trainer 零配置）
 message SignNetworkUploadRequest {
   string trainer_id = 1;
-  string sha = 2;               // 网络内容 sha256（决定对象键与去重）
+  string sha = 2;
   int64 content_length = 3;
   string content_sha256 = 4;
-  // 权重格式（onnx / pt / nnue）：决定对象键扩展名，供 worker 按格式分派加载器。
   string format = 5;
 }
 
 message SignNetworkUploadAck {
   bool accepted = 1;
   string message = 2;
-  string upload_url = 3;        // 预签名 PUT；accepted=false 时为空
-  string object_key = 4;        // networks/<sha>.<format>
+  string upload_url = 3;
+  string object_key = 4;
 }
 
-// trainer 拉取已登记 episode 的预签名 GET 列表（游标分页）
 message ListEpisodesRequest {
-  int32 limit = 1;              // 单次最多返回条数（0 = 服务端默认）
-  string after_key = 2;         // 游标：上次返回的最后一个对象键（服务端按登记顺序推进）
-  // 数据类别过滤：缺省 = 不过滤。consumer 应显式指定自己消费的类别，
-  // 避免下载并解析无法消费的对象。
+  int32 limit = 1;
+  string after_key = 2;
   optional DataKind kind = 3;
 }
 
@@ -295,207 +214,116 @@ message ListEpisodesReply {
   bool has_more = 2;
 }
 
-// trainer 提交「局面重搜」任务：把从历史 episode 里攒下的局面快照交给调度器，
-// 由任意 worker 用当前 best 网络重跑搜索刷新训练目标（跨进程 reanalysis）。
 message SubmitReanalysisRequest {
-  string requester = 1;   // 提交方标识（日志用）
-  string variant = 2;     // 必须与服务端 VARIANT 一致，否则拒绝（防串变体）
-  int32 mcts_sims = 3;    // 重搜模拟次数；0 = 用 worker 自对弈配置的默认值
-  uint32 positions = 4;   // 位置条数（仅统计/展示；权威值在 payload 内）
-  bytes payload = 5;      // 位置载荷（见 reanalysis.rs 的 encode_payload）
+  string requester = 1;
+  string variant = 2;
+  int32 mcts_sims = 3;
+  uint32 positions = 4;
+  bytes payload = 5;
 }
 
 message SubmitReanalysisReply {
   bool accepted = 1;
   string message = 2;
-  uint64 queued_positions = 3;   // 入队后待重搜的位置总数（含本次）
+  uint64 queued_positions = 3;
 }
 
-// 调度器全局信息（trainer 启动时获取变体，无需命令行传入）
 message GetInfoRequest {}
 
-// 变体对局元信息（单一真源：banqi-core::Variant，调度器经 bq-env path 依赖编译期直取）。
-// 只下发训练真正需要的对局元数据；网络结构等训练专属字段由训练端本地维护。
 message VariantMeta {
-  string id = 1;                            // 稳定标识（Variant::as_str()）
-  string label = 2;                         // 显示名
+  string id = 1;
+  string label = 2;
   uint32 rows = 3;
   uint32 cols = 4;
-  repeated uint32 piece_counts = 5;         // 7 元，按 PieceType 索引（未激活型为 0）
-  repeated int32 piece_values = 6;          // 7 元，按 PieceType 索引
+  repeated uint32 piece_counts = 5;
+  repeated int32 piece_values = 6;
   int32 initial_health = 7;
   uint32 max_consecutive_moves_for_draw = 8;
-  repeated string symmetries = 9;           // 合法空间对称集（含 identity，由棋盘形状推导）
+  repeated string symmetries = 9;
 }
 
 message GetInfoReply {
   string variant = 1;
-  // 当前变体的对局元信息（与 variant 同源）。旧版训练端会忽略；
-  // 新版训练端以本字段构建变体描述符（缺省视为调度器过旧）。
   VariantMeta variant_meta = 4;
-  // trainer 轮询：true 时按既有优雅停止路径收尾（先让 worker 完成当前轮并落
-  // checkpoint，再退出）。由调度器按绝对强度判据置位（如「连续 N 次评测无提升」），
-  // 见 banqi-scheduler/internal/scheduler/eval.go。
   bool should_stop = 2;
   string stop_reason = 3;
 }
 
-// trainer 消费心跳：周期上报消费水位与积压，调度器据此判定消费停滞并按 [balance]
-// 策略自动暂停/恢复任务派发（生成-消费平衡，见 internal/scheduler/balance.go）。
-//
-// 消费水位的口径是「真实消费进度」：训练线程已从就绪缓冲取走的记录所对应的
-// episode 对象键——而非 ListEpisodes 的翻页游标。后者在 prefetch 缓冲满（健康但
-// 慢速消费）时停止推进，用它判定停滞会把「消费慢」误判为「消费停摆」。
 message TrainerHeartbeatRequest {
-  string trainer_id = 1;    // trainer 实例标识（trainers 表主键）
-  string variant = 2;       // 必须与服务端 VARIANT 一致，否则拒绝登记（防串变体）
-  DataKind kind = 3;        // 消费的数据类别（与 ListEpisodes 的 kind 过滤同源）
-  // 已消费水位：最后一条被训练线程取走的记录所属的 episode 对象键。
-  // 空串 = 尚无消费进度（fresh-start）；服务端映射 episodes.id 计算积压。
+  string trainer_id = 1;
+  string variant = 2;
+  DataKind kind = 3;
   string consumed_key = 4;
-  int64 samples_consumed = 5;  // 训练线程累计取走的记录数（单调递增 = 消费在推进）
-  int32 backlog = 6;           // 消费管道积压估计（已列出未消费 + 就绪缓冲，qsize 口径）
-  int32 buffered = 7;          // 就绪缓冲中等待训练线程取走的记录数（prefetch 高水位观测）
-  // 进程内健康状态（banqi_training.health）：ok | degraded | fatal。空 = 旧客户端。
+  int64 samples_consumed = 5;
+  int32 backlog = 6;
+  int32 buffered = 7;
   string health_status = 8;
-  // 最近一次降级/致命摘要（空 = 无）
   string last_error = 9;
-  // 训练节奏快照（JSON，trainer 侧 NnueTrainer.progress()）：round / new_samples /
-  // target / last_round_ts / export_every / next_export_round / baseline_holdout_mse /
-  // last_gate 等。空 = 旧客户端。调度器只透传落库，不做结构解析（WebUI 展示用）。
   string progress_json = 10;
 }
 
 message TrainerHeartbeatReply {
-  bool pause_self_play = 1;     // 生效暂停（人工 || 自动）：采集端不应再拿到 selfplay 任务
-  bool auto_paused = 2;         // 处于自动暂停（balance 策略触发；诊断/展示用）
-  string auto_pause_reason = 3; // 自动暂停原因（未自动暂停时为空）
-  string message = 4;           // 拒绝登记等原因说明（正常心跳为空）
+  bool pause_self_play = 1;
+  bool auto_paused = 2;
+  string auto_pause_reason = 3;
+  string message = 4;
 }
 
-// trainer 拉取运行时可调训练配置：启动时拉一次做 bootstrap（覆盖本地 YAML 中的
-// 对应字段），运行中按 SHOULD_STOP_POLL_SECONDS 周期拉取以热更新训练动力学参数。
-//
-// overrides 是「字段名 → 值」映射，字段名与 banqi_training.config.Config 的字段
-// 一一对应；未出现的字段保持 trainer 本地配置值（未下发 ≠ 设为零值）。可调字段
-// 白名单与取值校验由调度器权威裁定（banqi-scheduler/internal/scheduler/
-// trainconfig.go），故本消息不做字段级 proto 定义：新增可调项不必改契约。
 message GetTrainConfigRequest {
-  string variant = 1;      // 必须与服务端 VARIANT 一致，否则拒绝（防串变体）
-  string trainer_id = 2;   // 提交方标识（日志用）
+  string variant = 1;
+  string trainer_id = 2;
 }
 
 message GetTrainConfigReply {
-  // false = 拒绝下发（变体不符等），overrides 为空；trainer 记日志后继续用本地配置。
   bool accepted = 1;
   string message = 2;
   map<string, string> overrides = 3;
 }
 
-// ============================================================================
-// 训练数据记录（episode 对象载荷）— v2
-//
-// worker 把一批对局编码为 EpisodeBatch → gzip → 直传 R2，对象键
-// `episodes/<network_sha>/<data_id>.epb.gz`。本组消息是训练数据的唯一字段
-// 契约；调度器只登记元数据、不解析对象内容。
-//
-// v2 架构（破坏性变更，schema_version=2，不兼容 v1 记录）：
-// - GameRecord 是对局真源：局面快照（PositionSnapshot）+ 动作序列 + 终局 +
-//   搜索标签，**不含任何模型输入特征**。每步带产方归属（producers），同一条
-//   记录可承载对局双方（A/B）的行动步（规则/随机对手步 producers=0xFF）。
-// - 模型输入特征由 FeaturePack 派生工件承载，对象键与记录同目录：
-//   `episodes/<network_sha>/<data_id>.pack.v<n>.fpb.gz`。特征由 collector 侧
-//   banqi-core 特征编码器生成（唯一实现）；特征格式升级只派生新版本工件，
-//   记录本体不变。特征包与记录通过 record_sha256 硬绑定。
-//
-// 约定：
-// - 字段号只增不改；任何破坏性变更必须提升 schema_version，消费端遇到不认识
-//   的版本直接拒绝（不静默降级）。
-// - 所有 bytes 字段是「稠密小端缓冲区」，训练端用 np.frombuffer 零拷贝还原，
-//   不做逐元素文本解析。
-// - 步级数组（players/actions/producers/value_labels/...）长度必须等于 steps，
-//   snapshots 数必须等于 steps，解码端严格校验（错位宁可拒批）。
-// - 位打包（boards_bits / action_masks_bits，仅 FeaturePack.ResNetFeatures）：
-//   字节内高位对应较小下标（numpy.unpackbits(bitorder='big') 一致），尾部补 0；
-//   棋盘布局为 [步][通道][位置字节]（每通道独立字节对齐），掩码布局为 [步][动作字节]。
-// ============================================================================
-
 message EpisodeBatch {
-  uint32 schema_version = 1;             // = 2（v2）
-  string variant = 2;                    // 4x8 / 4x4 / 4x2（消费端据此校验变体一致）
-  DataKind kind = 5;                     // 产线栈标识（v2 起记录类型统一，仅路由用）
-  repeated GameRecord records = 3;       // 对局真源记录（双方行动步，逐步产方归属）
-  reserved 4;                            // 曾用于 nnue_episodes（v1 两类记录互斥），v2 删除
+  uint32 schema_version = 1;
+  string variant = 2;
+  DataKind kind = 5;
+  repeated GameRecord records = 3;
+  reserved 4;
 }
 
-// 对局真源记录：双方行动步 + 搜索标签 + 诊断，无模型输入特征。
-// 字段分三段：对局真源（环境事实）/ 产方归属（谁在何时搜索）/ 标签与诊断
-//（搜索产物）。ResNet 与 NNUE 栈各自填写自己的标签槽位，未用的段留空。
 message GameRecord {
-  uint32 steps = 1;              // 记录步数（下述步级数组的第 0 维）
+  uint32 steps = 1;
 
-  // —— 对局真源 ——
-  // 本局开局种子（缺省 = 未设种子）。种子 → 确定性洗牌 → 初始布局，
-  // 实际翻子按真实布局进行；搜索仍按袋模型概率枚举。
   optional uint64 game_seed = 2;
-  // 初始真实布局紧凑字节：total_positions × u8，每字节 = player_idx<<3 | piece_type_idx
-  // （与 banqi-core env::layout::decode_layout_bytes 对应）。
   bytes initial_layout = 3;
-  bytes players = 4;             // steps × i8（1 红 / -1 黑）
-  bytes actions = 5;             // steps × u16（动作索引）
-  // steps 个步前局面快照（banqi_core::core::env::PositionSnapshot::encode，
-  // 约 110-135 字节/步；v2 必填）。对局真源：训练/回放/重搜/特征派生一律以此为准。
+  bytes players = 4;
+  bytes actions = 5;
   repeated bytes snapshots = 6;
-  optional int32 winner = 7;     // 1 红 / -1 黑 / 0 平；缺省 = 本局作废
-  uint32 termination_reason = 8; // 0=未指定 1=Decisive 2=QuietDraw 3=MaxSteps 4=Aborted
-  // 终局分差（红方视角，归一化 [-1,1]）。消费端按行棋方取号替代 ±1 胜负项。
+  optional int32 winner = 7;
+  uint32 termination_reason = 8;
   optional float terminal_margin = 9;
-  // 终局血量差（红方视角）。缺省 = 未启用血量。
   optional float health_diff_red = 10;
 
-  // —— 产方归属 ——
-  // 产方搜索配置 hash 表（FNV-1a，同 v1 search_config_hash 语义）。纯自对弈
-  // 单产方 = 1 项；混入对打（candidate + best）= 2 项。规则/随机对手步不引用。
   repeated uint64 producer_hashes = 11;
-  // steps × u8，索引指向 producer_hashes；0xFF = 无搜索步（规则/随机对手落子）。
   bytes producers = 12;
-  uint32 search_config_version = 13;  // 搜索参数语义版本（字段集/默认值变更时递增）
+  uint32 search_config_version = 13;
 
-  // —— 价值标签（行棋方视角）——
-  // 主价值标签：ResNet = MCTS 根值；NNUE = 教师值（启用标注器时）或产方根值。
-  // 无搜索步 = 教师值（该步跑了标注器）或 0（消费端按 producers 判定语义）。
-  bytes value_labels = 14;   // steps × f32
-  // 产方自身搜索值（诊断）：ResNet = completed_q；NNUE = player_values。
-  bytes own_values = 15;     // steps × f32
-  bytes root_visits = 16;    // steps × u32（ResNet 根访问数；NNUE 空）
-  bytes is_full_search = 17; // steps × u8 0/1（ResNet 算力随机化标记；NNUE 空 = 恒全搜索）
+  bytes value_labels = 14;
+  bytes own_values = 15;
+  bytes root_visits = 16;
+  bytes is_full_search = 17;
 
-  // —— 策略标签 ——
-  // ResNet 改进策略（pi_target，稠密）；NNUE 恒空（蒸馏走教师根策略）。
-  bytes policies = 18;               // steps × action_space × f32
-  // 教师标注器 argmax 动作（决策一致性观测）。0xFFFFFFFF = 该步无教师动作。
-  bytes labeler_actions = 19;        // steps × u32
-  // 教师根策略（policy 蒸馏）：每步标注器根 (action, value) 对——合法动作集 +
-  // 软分布（softmax(values/τ)）。offsets 为 steps+1 前缀和。NNUE 栈专用。
-  bytes labeler_policy_actions = 20; // u32 flat
-  bytes labeler_policy_values = 21;  // f32 flat（行棋方视角）
-  bytes labeler_policy_offsets = 22; // steps+1 × u32 前缀和
-  bytes labeler_fallbacks = 23;      // steps × u8（1 = 教师搜索失败，标签回退产方自身值）
+  bytes policies = 18;
+  bytes labeler_actions = 19;
+  bytes labeler_policy_actions = 20;
+  bytes labeler_policy_values = 21;
+  bytes labeler_policy_offsets = 22;
+  bytes labeler_fallbacks = 23;
 
-  // —— 诊断（产方搜索过程可观测性）——
-  bytes search_depths = 24;     // steps × u8（产方引擎每步完成层）
-  bytes search_nodes = 25;      // steps × u32（每步消耗节点）
-  bytes hidden_counts = 26;     // steps × u32（步前暗子数）
-  bytes chosen_value_gaps = 27; // steps × f32（探索采样步：root max − chosen；argmax 步 = 0）
-  // steps × u8 0/1（1 = 该步动作因探索采样（温度 softmax over 根值）而偏离产方
-  // 搜索 argmax，即 chosen ≠ argmax；与 chosen_value_gaps > 0 同口径）。仅
-  // Expectimax 探索采样路径产生；MCTS / 重搜 / 探索未启用 / 规则对手步恒 0。
-  // 旧版 collector 不填（空 = 恒 0）。
+  bytes search_depths = 24;
+  bytes search_nodes = 25;
+  bytes hidden_counts = 26;
+  bytes chosen_value_gaps = 27;
   bytes expl_random = 28;
 }
 
-// NNUE 特征布局元信息（由 env.config 推导，消费端免硬编码还原维度）。
-// v3：新增威胁特征段（NNUE_THREAT_BUCKETS 桶 × 双视角 × 每格）。
 message NnueMeta {
   uint32 feature_dim = 1;
   uint32 states_per_square = 2;
@@ -505,293 +333,194 @@ message NnueMeta {
   uint32 threat_buckets = 6;
 }
 
-// 每步双视角稀疏特征索引：按步顺序把 mover 段与 opponent 段拼进 indices，
-// offsets 为前缀和（长度 2*steps+1），第 i 步：
-//   mover    = indices[offsets[2i]   : offsets[2i+1]]
-//   opponent = indices[offsets[2i+1] : offsets[2i+2]]
 message NnueFeatures {
   NnueMeta meta = 1;
-  bytes indices = 2;   // 全部索引（u32）顺序拼接
-  bytes offsets = 3;   // (2*steps+1) × u32 前缀和
+  bytes indices = 2;
+  bytes offsets = 3;
 }
 
-// ResNet 输入特征（稠密位平面 + 标量；动作掩码随包存储，与快照派生值一致）。
 message ResNetFeatures {
-  uint32 board_channels = 1;   // = 变体 board_channels
+  uint32 board_channels = 1;
   uint32 board_rows = 2;
   uint32 board_cols = 3;
   uint32 scalar_count = 4;
   uint32 action_space = 5;
-  // steps × board_channels × ceil(rows*cols/8) 的 0/1 位平面。
   bytes boards_bits = 6;
-  bytes scalars = 7;             // steps × scalar_count f32
-  // steps × ceil(action_space/8) 的 0/1 位图（合法动作掩码）。
+  bytes scalars = 7;
   bytes action_masks_bits = 8;
 }
 
-// 模型输入特征派生工件：由记录批次（EpisodeBatch）按 GameRecord 逐步快照
-// 派生，与记录通过 record_sha256 硬绑定。特征由 collector 侧 banqi-core
-// 特征编码器生成（全仓唯一实现，禁止在训练端复刻编码逻辑）。
 message FeaturePack {
-  uint32 pack_version = 1;    // 特征格式版本（NNUE/ResNet 布局演进时递增）
+  uint32 pack_version = 1;
   string variant = 2;
-  DataKind kind = 3;          // 特征类别（与来源批次的产线栈一致）
-  uint32 steps = 4;           // 批内全部记录的总步数（各记录 steps 之和）
-  bytes record_sha256 = 5;    // 来源记录批次对象（.epb.gz 原始字节）的 sha256 摘要（32 字节）
-  NnueFeatures nnue = 6;      // kind=DATA_NNUE 时必填
-  ResNetFeatures resnet = 7;  // kind=DATA_RESNET 时必填
+  DataKind kind = 3;
+  uint32 steps = 4;
+  bytes record_sha256 = 5;
+  NnueFeatures nnue = 6;
+  ResNetFeatures resnet = 7;
 }
 
-// worker 上报特征包元数据 → 服务端登记 + 签发预签名 PUT。
-// 在线自对弈路径与 TASK_DERIVE_FEATURES 补派路径共用本 RPC。
 message FeaturePackMeta {
   string worker_id = 1;
   string task_id = 2;
-  string episode_object_key = 3;  // 来源记录批次对象键
+  string episode_object_key = 3;
   uint32 pack_version = 4;
-  int64 content_length = 5;       // 待上传对象大小
-  string content_sha256 = 6;      // 对象 sha256（R2 强校验）
+  int64 content_length = 5;
+  string content_sha256 = 6;
 }
 
 message FeaturePackAck {
   bool accepted = 1;
   string message = 2;
-  string upload_url = 3;        // 预签名 PUT URL；accepted=false 时为空
-  string object_key = 4;        // 特征包对象键
+  string upload_url = 3;
+  string object_key = 4;
 }
 
-// trainer 请求为某记录批次补派特征包（记录在、包缺失时调用；异步入队，
-// 由任意 worker 以 TASK_DERIVE_FEATURES 领取执行）。
 message FeaturePackRequest {
-  string requester = 1;             // 提交方标识（日志用）
-  string episode_object_key = 2;    // 目标记录批次对象键
-  uint32 pack_version = 3;          // 目标特征格式版本
+  string requester = 1;
+  string episode_object_key = 2;
+  uint32 pack_version = 3;
 }
 
 message FeaturePackReply {
   bool accepted = 1;
   string message = 2;
-  // ready=true 时下发：特征包已存在，可直接下载（等价于「get or enqueue」语义）
   bool ready = 3;
   string object_key = 4;
-  string download_url = 5;      // 预签名 GET URL（ready=true 时有效）
+  string download_url = 5;
 }
 
-// ============================================================================
-// 统一 Job 机制（训练数据生产 / 评估统一建模）
-//
-// 使用方（WebUI / 运维 CLI）经 SubmitJob 提交一份 job（种类 + 规格 + 优先级 +
-// 目标局数），调度器登记后复用既有任务拆分/分发逻辑（按 worker 线程缩放局数、
-// 偶数成对、deadline 超期回收重派）逐批下发对应 TaskKind 的任务：
-//   JOB_COLLECT  → TASK_COLLECT   参数化采集（双方自由组合对打/自对弈）
-//   JOB_SELFPLAY → TASK_SELFPLAY  训练闭环自对弈数据生产（total_games=0 = 持续产数）
-//
-// 完成口径（关键约定）：
-// - completed_games 只按「已收到的真实上报」聚合（collect/selfplay 走
-//   ReportEpisode 局数；rating 走 ReportMatchResult 局数），不含在飞；
-// - 派发不受在飞封顶：只要 completed < total（或 total=0 持续型）就继续按
-//   worker 线程缩放派发，允许在飞远超剩余需求局数；
-// - completed ≥ total 即置 completed，并立即取消该 job 全部在飞任务
-//   （HeartbeatReply.cancel_task_ids），因此实际收集数量只多不少。
-//
-// 优先级抢占：priority 数值越大越优先。同一时刻至多允许「当前最高可派发优先
-// 级」的 job 占用在飞任务；更高优先级 job 变为可派发（提交/恢复）时，立即取消
-// 全部更低优先级 job 的在飞任务（在途取消，已完成上报照常计入）。同优先级按
-// created_at 先到先派。默认优先级：selfplay=0（训练闭环兜底）、collect=50、
-// rating=80（手动 SPRT 对打；提交时 priority=0 表示用该 kind 的默认值）。
-//
-// 暂停（pause）：不再派发新任务，在飞任务做完收尾；恢复（resume）后继续派发。
-// 取消（cancel）：立即停止派发 + 取消全部在飞；已上报部分计入 completed，终态
-// 为 cancelled。终态（completed/cancelled）job 不可再控制。
-// ============================================================================
-
-// job 种类（对应 TaskKind：COLLECT→TASK_COLLECT / SELFPLAY→TASK_SELFPLAY /
-// RATING→TASK_RATING；reanalysis / derive 仍走既有通道）
 enum JobKind {
-  JOB_COLLECT = 0;    // 参数化采集（双方自由组合对打/自对弈，产训练数据）
-  JOB_SELFPLAY = 1;   // 训练闭环自对异数据生产（默认持续型）
-  // JOB_EVAL（=2，绝对强度评估）已移除：评估统一走 JOB_RATING（side_b 可为
-  // 规则/随机对手，rating 任务恒记录并上传对局）。
+  JOB_COLLECT = 0;
+  JOB_SELFPLAY = 1;
   reserved 2;
-  // 手动 SPRT 对打：candidate vs opponent 的 gatekeeper rating 对打，独立
-  // TASK_RATING 任务派发（不混入 selfplay）。对手 = 当前 best 时走既有晋级行，
-  // 否则仅观测统计。取消（ControlJob cancel）= 停派发 + 取消在飞 + match 置
-  // cancelled（不晋级）。
   JOB_RATING = 3;
 }
 
-// job 运行状态
-// running | paused | completed | cancelled（pending 不落库，提交即 running）
-
-// 开局场景
 enum OpeningScenario {
-  SCENARIO_STANDARD = 0;      // 标准开局（正常洗牌与翻子）
-  SCENARIO_ALL_REVEALED = 1;  // 全明子开局（开局即全部翻开）
+  SCENARIO_STANDARD = 0;
+  SCENARIO_ALL_REVEALED = 1;
 }
 
-// 开局种子策略（服务端按 job 逐任务解析为具体种子，经 collect_seed 下发）
 enum SeedStrategyKind {
-  SEED_FIXED = 0;       // 固定：全部任务同一种子
-  SEED_RANDOM = 1;      // 随机：base_seed 为偏移基值，逐任务随机派生
-  SEED_INCREMENTAL = 2; // 递增：从 base_seed 起逐任务递增
-  SEED_RANGE = 3;       // 区间：逐任务在 [min_seed, max_seed] 内取值
+  SEED_FIXED = 0;
+  SEED_RANDOM = 1;
+  SEED_INCREMENTAL = 2;
+  SEED_RANGE = 3;
 }
 
 message SeedStrategy {
   SeedStrategyKind kind = 1;
-  uint64 fixed_seed = 2;  // FIXED
-  uint64 base_seed = 3;   // RANDOM / INCREMENTAL 起点
-  uint64 min_seed = 4;    // RANGE 下界
-  uint64 max_seed = 5;    // RANGE 上界（含）
+  uint64 fixed_seed = 2;
+  uint64 base_seed = 3;
+  uint64 min_seed = 4;
+  uint64 max_seed = 5;
 }
 
-// 单方棋手规格。kind 词表单一真源 = banqi-core bq-policy::player_kind
-//（调度器与 collector 均引用，本注释仅文档化；接受别名 rule:material_expectimax）：
-//   "random"               均匀随机合法动作（无参数）
-//   "rule:capture_first"   优先吃子规则策略（无参数）
-//   "rule:reveal_first"    优先翻棋规则策略（无参数）
-//   "expectimax_rule"      Expectimax + 规则材料评估器
-//   "expectimax_nnue"      Expectimax + NNUE 网络（须给 network_sha）
-//   "mcts_resnet"          Gumbel MCTS + ResNet 网络（须给 network_sha）
-//   "policy_resnet"        ResNet 策略头 argmax，不搜索（须给 network_sha）
-// 模型类棋手的 network_sha 必须已在调度器存储登记，提交时校验，否则拒绝。
 message CollectPlayerSpec {
   string kind = 1;
-  string network_sha = 2;          // 模型类必填；random / rule:* 必须为空
-  CollectSearchParams search = 3;  // 搜索类可选；未填字段（0 值）回落 worker 本地默认
+  string network_sha = 2;
+  CollectSearchParams search = 3;
 }
 
-// 搜索参数（仅搜索类棋手生效；字段与 collector [selfplay] 配置同名同义，
-// 0 值 = 用 worker 本地默认，便于不下发细参）
 message CollectSearchParams {
-  uint32 mcts_sims = 1;                    // mcts_resnet：Gumbel MCTS 模拟数
+  uint32 mcts_sims = 1;
   uint32 mcts_max_considered_actions = 2;
   double mcts_c_scale = 3;
   double mcts_gumbel_scale = 4;
   float temperature = 5;
   bool playout_cap_random = 6;
-  uint64 expectimax_node_budget = 7;       // expectimax_*：节点预算
-  uint32 expectimax_max_depth = 8;         // expectimax_*：最大深度
-  // ---- 标注器（value_labels 标注者；仅 expectimax_* 棋手生效）----
-  // "none" = 强制关闭；"rule" = 规则材料评估器；"best" = 产方自身评估器
-  //（expectimax_nnue 产方 = 其 NNUE 评估器；expectimax_rule 产方等价 rule）。
-  // 空 = 不覆盖，回落 worker 本地 expectimax_labeler_mode。
+  uint64 expectimax_node_budget = 7;
+  uint32 expectimax_max_depth = 8;
   string labeler_mode = 9;
-  // 标注器节点预算倍率（0 = 本地默认；标注器预算 = expectimax_node_budget × 倍率）
   uint32 labeler_budget_mult = 10;
-  // ---- Expectimax 探索采样（根值温度 Top-K 软采样；仅 expectimax_* 棋手生效）----
-  // true = 强制开启（expl_enabled 本地默认 false，开启是 NNUE 数据多样性前提）
   bool expl_enabled = 11;
-  uint32 expl_topk = 12;                   // 0 = 本地默认
-  double expl_temp_start = 13;             // 0 = 本地默认
-  double expl_temp_end = 14;               // 0 = 本地默认
-  uint32 expl_temp_decay_steps = 15;       // 0 = 本地默认
+  uint32 expl_topk = 12;
+  double expl_temp_start = 13;
+  double expl_temp_end = 14;
+  uint32 expl_temp_decay_steps = 15;
 }
 
-// 采集需求规格（JOB_COLLECT 载荷；派发时随 TaskResponse.collect_spec 原样透传）
 message CollectionJobSpec {
-  // 合法值单一真源 = banqi-core bq-env VARIANT_IDS（全部暗棋变体）：
-  // 4x8 / 4x4 / 4x2 / 4x8-fast / 4x8-rook-fast（提交时校验）
   string variant = 1;
   OpeningScenario scenario = 2;
   SeedStrategy seed_strategy = 3;
-  CollectPlayerSpec player_a = 4;  // 配对第一方（成对两局互换执子，保证公平）
+  CollectPlayerSpec player_a = 4;
   CollectPlayerSpec player_b = 5;
-  DataKind data_kind = 6;          // 产出特征类型：DATA_RESNET | DATA_NNUE
-  uint64 total_games = 7;          // 目标完整对局数（≥2，偶数）
+  DataKind data_kind = 6;
+  uint64 total_games = 7;
 }
 
-// 训练闭环自对弈规格（JOB_SELFPLAY 载荷）
 message SelfPlayJobSpec {
-  string variant = 1;              // "4x8" | "4x8-fast" | "4x4"
-  DataKind data_kind = 2;          // DATA_RESNET | DATA_NNUE
-  string network_sha = 3;          // 产数网络；空 = 当前 best（"rule" 哨兵冷启动语义沿用）
-  string opponent_sha = 4;         // 混入对打对手网络；空 = 无混入
-  double mix_ratio = 5;            // 混入比例；0 = 用 worker/调度器配置默认
-  CollectSearchParams search = 6;  // 产数搜索参数覆盖；未填（0 值）回落 worker 本地默认
-  uint64 total_games = 7;          // 目标局数；0 = 持续产数（训练闭环默认），仅完成口径计聚合
+  string variant = 1;
+  DataKind data_kind = 2;
+  string network_sha = 3;
+  string opponent_sha = 4;
+  double mix_ratio = 5;
+  CollectSearchParams search = 6;
+  uint64 total_games = 7;
 }
 
-// 绝对强度评估规格（JOB_EVAL 载荷）已随 eval 机制移除（reserved 见 SubmitJobRequest）。
-
-// 手动 SPRT 对打规格（JOB_RATING 载荷；结果走 ReportMatchResult 六桶聚合，
-// SPRT 判停/晋级沿用 gatekeeper 判据链；side_b 可为规则/随机对手用于绝对强度评估）
 message RatingJobSpec {
-  string variant = 1;              // 对局变体；空 = 调度器 selfplay.variant
-  string candidate_sha = 2;        // 被测网络（必填，须已登记）
-  string opponent_sha = 3;         // 对手网络；空 = 当前 best（结论可晋级）
-  uint64 total_games = 4;          // 局数上限（≥2 偶数；0 = 仅由 SPRT 判停）
-  double sprt_elo0 = 5;            // 0 = 用调度器 [sprt] 配置
+  string variant = 1;
+  string candidate_sha = 2;
+  string opponent_sha = 3;
+  uint64 total_games = 4;
+  double sprt_elo0 = 5;
   double sprt_elo1 = 6;
   double sprt_alpha = 7;
   double sprt_beta = 8;
-  // ---- 双方棋手自由组合（sides 形态；任一填写时优先生效，运行时只看 sides）----
-  // side_a = 主视角方（SPRT 结算以本方计）；side_b = 对手方。结构与 collect 的
-  // player_a/player_b 一致（kind 词表同 CollectPlayerSpec 注释）。旧
-  // candidate_sha/opponent_sha 路径保留：提交时归一化为
-  // side_a=expectimax_nnue(candidate_sha)、side_b=expectimax_nnue(opponent_sha，
-  // 空 = 当前 best)。
-  // 模型类 side（expectimax_nnue / mcts_resnet / policy_resnet）network_sha 为空
-  // = 当前 best（提交时解析为具体 sha 并冻结进对发行/派发，后续 best 变化不
-  // 影响进行中对打）。side_b 为非网络类（random / rule:* / expectimax_rule）时
-  // 对打仅观测统计。手动 SPRT 对打（JOB_RATING）永不触发晋级判定——晋级只属
-  // 于训练闭环自身的 gatekeeper 流程。
   CollectPlayerSpec side_a = 9;
   CollectPlayerSpec side_b = 10;
 }
 
-// 提交 job（priority=0 = 用 JobKind 对应默认值，见文件头「优先级抢占」）
 message SubmitJobRequest {
-  string requester = 1;            // 提交方标识（日志/展示用）
+  string requester = 1;
   JobKind kind = 2;
   uint32 priority = 3;
-  CollectionJobSpec collect = 4;   // kind=JOB_COLLECT 必填
-  SelfPlayJobSpec selfplay = 5;    // kind=JOB_SELFPLAY 必填
-  reserved 6;                      // 原 EvalJobSpec eval（eval 机制已移除）
-  RatingJobSpec rating = 7;        // kind=JOB_RATING 必填
+  CollectionJobSpec collect = 4;
+  SelfPlayJobSpec selfplay = 5;
+  reserved 6;
+  RatingJobSpec rating = 7;
 }
 message SubmitJobReply {
   bool accepted = 1;
-  string message = 2;              // 校验失败原因（规格非法 / 模型未登记等）
-  string job_id = 3;               // accepted=true 时返回
+  string message = 2;
+  string job_id = 3;
 }
 
-// job 状态（进度查询：completed_games 为「已收到上报」口径，不含在飞）
 message JobStatus {
   string job_id = 1;
   JobKind kind = 2;
   uint32 priority = 3;
-  string state = 4;                // running | paused | completed | cancelled
-  uint64 total_games = 5;          // 目标局数；0 = 持续型
-  uint64 completed_games = 6;      // 已聚合的真实完成局数（上报口径）
-  uint64 dispatched_games = 7;     // 已派发局数（含在飞；completed ≤ dispatched）
-  int64 created_at = 8;            // unix 秒
-  int64 updated_at = 9;            // unix 秒
-  CollectionJobSpec collect = 10;  // kind=JOB_COLLECT 时返回
-  SelfPlayJobSpec selfplay = 11;   // kind=JOB_SELFPLAY 时返回
-  reserved 12;                     // 原 EvalJobSpec eval（eval 机制已移除）
-  RatingJobSpec rating = 13;       // kind=JOB_RATING 时返回
+  string state = 4;
+  uint64 total_games = 5;
+  uint64 completed_games = 6;
+  uint64 dispatched_games = 7;
+  int64 created_at = 8;
+  int64 updated_at = 9;
+  CollectionJobSpec collect = 10;
+  SelfPlayJobSpec selfplay = 11;
+  reserved 12;
+  RatingJobSpec rating = 13;
 }
 
 message ListJobsRequest {
-  // 状态过滤：空 = 全部；取值同 JobStatus.state
   string state_filter = 1;
-  // 种类过滤（optional：未设置 = 不过滤）
   optional JobKind kind_filter = 2;
 }
 message ListJobsReply {
   repeated JobStatus jobs = 1;
 }
 
-// 暂停 / 恢复 / 取消
 message JobControlRequest {
   string job_id = 1;
-  string control = 2;              // "pause" | "resume" | "cancel"
+  string control = 2;
 }
 message JobControlReply {
   bool accepted = 1;
-  string message = 2;              // 非法控制（job 不存在 / 终态再控制等）原因
-  string state = 3;                // 控制后的状态
+  string message = 2;
+  string state = 3;
 }
 
 service SchedulerService {
@@ -804,17 +533,11 @@ service SchedulerService {
   rpc Heartbeat (HeartbeatRequest) returns (HeartbeatReply);
   rpc SignNetworkUpload (SignNetworkUploadRequest) returns (SignNetworkUploadAck);
   rpc ListEpisodes (ListEpisodesRequest) returns (ListEpisodesReply);
-  // trainer 提交局面重搜任务（异步：入队后由 GetTask 分发给任意 worker）
   rpc SubmitReanalysis (SubmitReanalysisRequest) returns (SubmitReanalysisReply);
-  // trainer 拉取运行时可调训练配置（启动 bootstrap + 运行中热更）
   rpc GetTrainConfig (GetTrainConfigRequest) returns (GetTrainConfigReply);
-  // trainer 消费心跳（生成-消费平衡：调度器据消费水位判定停滞并自动调整派发）
   rpc TrainerHeartbeat (TrainerHeartbeatRequest) returns (TrainerHeartbeatReply);
-  // worker 上报特征包元数据并领取预签名 PUT（在线自对弈与 TASK_DERIVE_FEATURES 共用）
   rpc ReportFeaturePack (FeaturePackMeta) returns (FeaturePackAck);
-  // trainer 请求补派特征包（记录在、包缺失；调度器入队 TASK_DERIVE_FEATURES）
   rpc RequestFeaturePack (FeaturePackRequest) returns (FeaturePackReply);
-  // ---- 统一 Job 管理（collect / selfplay / eval）----
   rpc SubmitJob (SubmitJobRequest) returns (SubmitJobReply);
   rpc ListJobs (ListJobsRequest) returns (ListJobsReply);
   rpc ControlJob (JobControlRequest) returns (JobControlReply);
