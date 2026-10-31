@@ -552,3 +552,21 @@ fn replay_views() {
         ],
     );
 }
+
+#[test]
+fn collect_body_pair_override_fields() {
+    let body: crate::handlers_jobs::CollectBody = serde_json::from_str(
+        r#"{"variant":"4x8","totalGames":4,"pairsParallel":false,"pairSeedRefresh":false}"#,
+    )
+    .unwrap();
+    assert_eq!(body.pairs_parallel, Some(false));
+    assert_eq!(body.pair_seed_refresh, Some(false));
+
+    let empty: crate::handlers_jobs::CollectBody = serde_json::from_str(r#"{}"#).unwrap();
+    assert_eq!(empty.pairs_parallel, None);
+    assert_eq!(empty.pair_seed_refresh, None);
+
+    let out = serde_json::to_value(&body).unwrap();
+    assert_eq!(out["pairsParallel"], serde_json::json!(false));
+    assert_eq!(out["pairSeedRefresh"], serde_json::json!(false));
+}

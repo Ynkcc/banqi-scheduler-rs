@@ -461,3 +461,31 @@ fn extra_config_json_semantics() {
     let asm2 = TaskAssembler::new(f.networks.clone(), Arc::new(FakeSigner), cfg2, ctl2);
     assert_eq!(asm2.extra_config(), "", "无有效字段时为空串");
 }
+
+#[test]
+fn collect_task_passthrough_pair_overrides() {
+    let f = Fakes::new();
+    let asm = assembler(&f);
+
+    let spec = |pairs_parallel: Option<bool>, pair_seed_refresh: Option<bool>| {
+        bqs_proto::CollectionJobSpec {
+            variant: "4x8".into(),
+            scenario: 0,
+            data_kind: bqs_proto::DataKind::DataResnet as i32,
+            total_games: 4,
+            pairs_parallel,
+            pair_seed_refresh,
+            ..Default::default()
+        }
+    };
+
+    let resp = asm.collect_task("t1", &spec(Some(false), Some(false)), 2, 42, 1000);
+    let g = gen_spec(&resp);
+    assert_eq!(g.pairs_parallel, Some(false), "pairs_parallel 应透传");
+    assert_eq!(g.pair_seed_refresh, Some(false), "pair_seed_refresh 应透传");
+
+    let resp = asm.collect_task("t2", &spec(None, None), 2, 42, 1000);
+    let g = gen_spec(&resp);
+    assert_eq!(g.pairs_parallel, None, "None 不应覆写");
+    assert_eq!(g.pair_seed_refresh, None, "None 不应覆写");
+}

@@ -228,6 +228,10 @@ pub struct CollectSpecJson {
     pub data_kind: i32,
     #[serde(alias = "total_games")]
     pub total_games: u64,
+
+    pub pairs_parallel: Option<bool>,
+
+    pub pair_seed_refresh: Option<bool>,
 }
 
 impl CollectSpecJson {
@@ -240,6 +244,8 @@ impl CollectSpecJson {
             player_b: PlayerSpecJson::from_proto(s.player_b),
             data_kind: s.data_kind,
             total_games: s.total_games,
+            pairs_parallel: s.pairs_parallel,
+            pair_seed_refresh: s.pair_seed_refresh,
         }
     }
 
@@ -252,6 +258,8 @@ impl CollectSpecJson {
             player_b: Some(self.player_b.to_proto()),
             data_kind: self.data_kind,
             total_games: self.total_games,
+            pairs_parallel: self.pairs_parallel,
+            pair_seed_refresh: self.pair_seed_refresh,
         }
     }
 }

@@ -1,5 +1,5 @@
-use axum::Json;
 use axum::extract::{Path, Query, State};
+use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -76,6 +76,10 @@ pub struct CollectBody {
 
     pub data_kind: String,
     pub total_games: u64,
+
+    pub pairs_parallel: Option<bool>,
+
+    pub pair_seed_refresh: Option<bool>,
 }
 
 impl CollectBody {
@@ -98,6 +102,8 @@ impl CollectBody {
             player_b: Some(self.player_b.to_proto()),
             data_kind,
             total_games: self.total_games,
+            pairs_parallel: self.pairs_parallel,
+            pair_seed_refresh: self.pair_seed_refresh,
         })
     }
 
@@ -113,6 +119,8 @@ impl CollectBody {
             player_b: c.player_b.clone(),
             data_kind: data_kind::display_name(c.data_kind as i64).into(),
             total_games: c.total_games,
+            pairs_parallel: c.pairs_parallel,
+            pair_seed_refresh: c.pair_seed_refresh,
         }
     }
 }

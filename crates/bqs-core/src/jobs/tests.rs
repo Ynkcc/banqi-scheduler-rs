@@ -63,6 +63,8 @@ fn collect_req(
             }),
             data_kind: DataKind::DataResnet as i32,
             total_games: total,
+            pairs_parallel: None,
+            pair_seed_refresh: None,
         }),
         ..Default::default()
     }
@@ -988,4 +990,28 @@ fn is_rating_match_filters_pending_match() {
     assert!(e.jobs.is_rating_match(rating_id));
     assert!(!e.jobs.is_rating_match(gate_id));
     assert!(!e.jobs.is_rating_match(999));
+}
+
+#[test]
+fn collect_spec_json_roundtrip_pair_overrides() {
+    let spec: CollectSpecJson = serde_json::from_str(
+        r#"{"variant":"4x8","totalGames":4,"pairsParallel":false,"pairSeedRefresh":false}"#,
+    )
+    .unwrap();
+    assert_eq!(spec.pairs_parallel, Some(false));
+    assert_eq!(spec.pair_seed_refresh, Some(false));
+
+    let out = serde_json::to_value(&spec).unwrap();
+    assert_eq!(out["pairsParallel"], serde_json::json!(false));
+    assert_eq!(out["pairSeedRefresh"], serde_json::json!(false));
+    let back = CollectSpecJson::from_proto(spec.to_proto());
+    assert_eq!(back.pairs_parallel, Some(false));
+    assert_eq!(back.pair_seed_refresh, Some(false));
+
+    let empty: CollectSpecJson = serde_json::from_str(r#"{"variant":"4x8"}"#).unwrap();
+    assert_eq!(empty.pairs_parallel, None);
+    assert_eq!(empty.pair_seed_refresh, None);
+    let back = CollectSpecJson::from_proto(empty.to_proto());
+    assert_eq!(back.pairs_parallel, None);
+    assert_eq!(back.pair_seed_refresh, None);
 }

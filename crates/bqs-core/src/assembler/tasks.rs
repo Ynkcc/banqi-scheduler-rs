@@ -183,6 +183,9 @@ impl TaskAssembler {
                 data_kind: spec.data_kind,
                 games,
                 deadline_unix,
+
+                pairs_parallel: spec.pairs_parallel,
+                pair_seed_refresh: spec.pair_seed_refresh,
                 behavior: Some(bqs_proto::generation_spec::Behavior::Plays(Plays {
                     player_a,
                     player_b,

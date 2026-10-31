@@ -20,6 +20,12 @@ message GenerationSpec {
   DataKind data_kind = 4;
   uint64 games = 5;
   uint64 deadline_unix = 6;
+  // 收集器成对并行：true = 按“对”为单位并行执行（默认），
+  // false = 逐局独立执行（对内两局不再绑定同一种子语义由 pair_seed_refresh 决定）。
+  optional bool pairs_parallel = 7;
+  // 对内第二局是否刷新种子：true = 第二局换用派生新种子（默认，自对弈收集无需同种子），
+  // false = 第二局与第一局同种子、仅交换先后手（rating 类对打用于方差缩减）。
+  optional bool pair_seed_refresh = 8;
   oneof behavior {
     Plays plays = 10;
   }
@@ -398,6 +404,10 @@ message CollectionJobSpec {
   CollectPlayerSpec player_b = 5;
   DataKind data_kind = 6;
   uint64 total_games = 7;
+  // 任务级覆写：成对并行开关（缺省 = 调度器默认 true）
+  optional bool pairs_parallel = 8;
+  // 任务级覆写：对内第二局是否刷新种子（缺省 = 调度器默认 true；rating 类保持同种子传 false）
+  optional bool pair_seed_refresh = 9;
 }
 
 message SelfPlayJobSpec {
