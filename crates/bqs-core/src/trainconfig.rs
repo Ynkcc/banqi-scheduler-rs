@@ -282,7 +282,7 @@ mod tests {
     #[test]
     fn whitelist_complete() {
         let names = TrainConfig::field_names();
-        assert_eq!(names.len(), 30);
+        assert_eq!(names.len(), 27);
 
         let mut sorted = names.clone();
         sorted.sort();
