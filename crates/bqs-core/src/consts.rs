@@ -28,8 +28,6 @@ pub const JOB_VARIANTS: [&str; bq_env::env::config::VARIANT_IDS.len()] =
 pub const JOB_PRIORITY_SELFPLAY: i64 = 0;
 pub const JOB_PRIORITY_COLLECT: i64 = 50;
 
-pub const DERIVE_QUEUE_MAX: usize = 512;
-
 pub const PRESIGN_TTL: Duration = Duration::from_secs(3600);
 
 pub const LLR_VARIANCE_FLOOR: f64 = 0.1;

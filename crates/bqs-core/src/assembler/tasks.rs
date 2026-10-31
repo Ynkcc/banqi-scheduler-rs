@@ -3,14 +3,9 @@ use bqs_proto::{
     SelfPlayParams, TaskRequest, TaskResponse,
 };
 
-use crate::{
-    featurepack::PendingDerive, reanalysis::PendingReanalysis, types::Network, CoreError,
-    CoreResult,
-};
+use crate::{types::Network, CoreResult};
 
-use super::{
-    data_kind_for_format, producer::network_key, stack_data_kind_for_weight_format, TaskAssembler,
-};
+use super::{data_kind_for_format, producer::network_key, TaskAssembler};
 
 pub fn player_kind_for_format(format: &str) -> &'static str {
     match format {
@@ -165,52 +160,6 @@ impl TaskAssembler {
         }
     }
 
-    pub fn reanalysis_task(
-        &self,
-        task_id: &str,
-        item: &PendingReanalysis,
-        req: &TaskRequest,
-    ) -> CoreResult<TaskResponse> {
-        let best = self
-            .nets
-            .get_best()?
-            .ok_or_else(|| CoreError::Internal("no best network registered".into()))?;
-        let data_kind = stack_data_kind_for_weight_format(&best.format)
-            .map_err(|e| CoreError::Internal(format!("best 网络 format 无法分派重搜栈: {e}")))?;
-        let key = network_key(&best.sha, &best.format);
-
-        let mut search = self.default_search();
-        if item.mcts_sims > 0 {
-            search.mcts_sims = item.mcts_sims as u32;
-            search.fast_mcts_sims = 0;
-        }
-        let mut resp = TaskResponse {
-            task_id: task_id.to_string(),
-            network_sha: best.sha.clone(),
-            network_sha_remote: best.sha.clone(),
-            network_key: key.clone(),
-            params: Some(SelfPlayParams {
-                mcts_sims: item.mcts_sims,
-                search: Some(search),
-                ..Default::default()
-            }),
-            generation: Some(GenerationSpec {
-                variant: self.cfg.selfplay.variant.clone(),
-                data_kind,
-                games: item.positions as u64,
-                behavior: Some(bqs_proto::generation_spec::Behavior::Reanalysis(
-                    bqs_proto::Reanalysis {
-                        payload: item.payload.clone(),
-                    },
-                )),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        self.with_network_download(req, &mut resp, &best.sha, &key)?;
-        Ok(resp)
-    }
-
     pub fn collect_task(
         &self,
         task_id: &str,
@@ -295,25 +244,5 @@ impl TaskAssembler {
             }
         }
         Ok(resp)
-    }
-
-    pub fn derive_task(&self, task_id: &str, item: &PendingDerive) -> CoreResult<TaskResponse> {
-        let episode_url = self
-            .signer
-            .presign_get(&item.episode_object_key, self.ttl_secs())?;
-        Ok(TaskResponse {
-            task_id: task_id.to_string(),
-            generation: Some(GenerationSpec {
-                variant: self.cfg.selfplay.variant.clone(),
-                behavior: Some(bqs_proto::generation_spec::Behavior::Derive(
-                    bqs_proto::DeriveFeatures {
-                        episode_object_key: item.episode_object_key.clone(),
-                        episode_url,
-                    },
-                )),
-                ..Default::default()
-            }),
-            ..Default::default()
-        })
     }
 }

@@ -128,12 +128,3 @@ impl Trainer {
         self.health_status.is_empty() || self.health_status == "ok"
     }
 }
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct FeaturePack {
-    pub id: i64,
-    pub episode_object_key: String,
-    pub pack_version: i64,
-    pub object_key: String,
-    pub created_at: i64,
-}

@@ -1,7 +1,6 @@
 mod episodes;
 mod jobs;
 mod networks;
-mod queues;
 mod trainer;
 mod worker;
 
@@ -17,11 +16,9 @@ use crate::{
     balance::BalanceMonitor,
     control::Control,
     dispatch::TaskDispatcher,
-    featurepack::DeriveQueue,
     gatekeeper::Gatekeeper,
     jobs::JobManager,
     ports::{Clock, ObjectSigner, Ports},
-    reanalysis::ReanaQueue,
     reports::ReportRouter,
     sources::Sources,
 };
@@ -36,8 +33,6 @@ pub struct Server {
     pub disp: Arc<TaskDispatcher>,
     pub gate: Arc<Gatekeeper>,
     pub balance: Arc<BalanceMonitor>,
-    pub reana: Arc<ReanaQueue>,
-    pub derive: Arc<DeriveQueue>,
     pub jobs: Arc<JobManager>,
     pub ctl: Arc<Control>,
 
@@ -71,8 +66,6 @@ impl Server {
             clock.clone(),
             ctl.clone(),
         ));
-        let reana = Arc::new(ReanaQueue::new(&ports, cfg.clone(), clock.clone()));
-        let derive = Arc::new(DeriveQueue::new(&ports, cfg.clone(), clock.clone()));
         let jobs = Arc::new(JobManager::new(
             ports.jobs.clone(),
             disp.clone(),
@@ -99,8 +92,6 @@ impl Server {
         ));
         let sources = Sources::assemble(
             jobs.clone(),
-            reana.clone(),
-            derive.clone(),
             ports.matches.clone(),
             ports.networks.clone(),
             disp.clone(),
@@ -121,8 +112,6 @@ impl Server {
             disp,
             gate,
             balance,
-            reana,
-            derive,
             jobs,
             ctl,
             asm,

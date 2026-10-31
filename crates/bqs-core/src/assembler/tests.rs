@@ -5,8 +5,6 @@ use bqs_proto::TaskRequest;
 
 use crate::{
     control::Control,
-    featurepack::PendingDerive,
-    reanalysis::PendingReanalysis,
     test_support::{FakeSigner, Fakes},
     types::{Match, Network},
 };
@@ -17,7 +15,6 @@ fn plays(resp: &bqs_proto::TaskResponse) -> bqs_proto::Plays {
     let g = resp.generation.clone().expect("generation 缺省");
     match g.behavior.expect("behavior 缺省") {
         bqs_proto::generation_spec::Behavior::Plays(p) => p,
-        _ => panic!("expected plays behavior"),
     }
 }
 
@@ -261,94 +258,6 @@ fn data_kind_for_format_mapping() {
         data_kind_for_format("whatever"),
         bqs_proto::DataKind::DataResnet as i32
     );
-}
-
-#[test]
-fn reanalysis_task_follows_best_stack() {
-    let f = Fakes::new();
-    let asm = assembler(&f);
-    let item = PendingReanalysis {
-        variant: "4x8".into(),
-        mcts_sims: 64,
-        payload: vec![9, 9],
-        positions: 3,
-        requester: "trainer".into(),
-        created_at: 0,
-    };
-    let req = TaskRequest {
-        current_network: String::new(),
-        ..Default::default()
-    };
-
-    assert!(asm.reanalysis_task("t1", &item, &req).is_err());
-
-    f.networks.seed_network("best", None, "onnx");
-    f.networks.promote_best("best").unwrap();
-    let resp = asm.reanalysis_task("t2", &item, &req).unwrap();
-    let g = gen_spec(&resp);
-    assert!(matches!(
-        g.behavior,
-        Some(bqs_proto::generation_spec::Behavior::Reanalysis(_))
-    ));
-    assert_eq!(resp.network_sha, "best");
-    assert_eq!(g.games, 3, "games = 位置条数");
-    if let Some(bqs_proto::generation_spec::Behavior::Reanalysis(r)) = g.behavior {
-        assert_eq!(r.payload, vec![9, 9]);
-    }
-    assert_eq!(resp.network_key, "networks/best.onnx");
-    assert_eq!(resp.network_url, "get:networks/best.onnx");
-    let p = resp.params.unwrap();
-    assert_eq!(p.mcts_sims, 64, "取提交方指定值");
-    assert_eq!(
-        g.data_kind,
-        bqs_proto::DataKind::DataResnet as i32,
-        "onnx → MCTS 栈"
-    );
-
-    f.networks.seed_network("best2", None, "nnue");
-    f.networks.promote_best("best2").unwrap();
-    let resp2 = asm.reanalysis_task("t3", &item, &req).unwrap();
-    assert_eq!(resp2.network_key, "networks/best2.nnue");
-    assert_eq!(
-        gen_spec(&resp2).data_kind,
-        bqs_proto::DataKind::DataNnue as i32
-    );
-
-    f.networks.seed_network("best3", None, "pt");
-    f.networks.promote_best("best3").unwrap();
-    assert!(asm.reanalysis_task("t4", &item, &req).is_err());
-
-    f.networks.promote_best("best").unwrap();
-    let req_local = TaskRequest {
-        current_network: "best".into(),
-        ..Default::default()
-    };
-    let resp3 = asm.reanalysis_task("t5", &item, &req_local).unwrap();
-    assert_eq!(resp3.network_url, "");
-}
-
-#[test]
-fn derive_task_assembly() {
-    let f = Fakes::new();
-    let asm = assembler(&f);
-    let item = PendingDerive {
-        episode_object_key: "episodes/sha/x.epb.gz".into(),
-        pack_version: 1,
-        requester: "trainer".into(),
-        created_at: 0,
-    };
-    let resp = asm.derive_task("t1", &item).unwrap();
-    let g = gen_spec(&resp);
-    if let Some(bqs_proto::generation_spec::Behavior::Derive(d)) = g.behavior {
-        assert_eq!(d.episode_object_key, "episodes/sha/x.epb.gz");
-        assert_eq!(
-            d.episode_url, "get:episodes/sha/x.epb.gz",
-            "记录批次下载 URL 恒签发"
-        );
-    } else {
-        panic!("expected derive behavior");
-    }
-    assert_eq!(g.variant, "4x8");
 }
 
 #[test]

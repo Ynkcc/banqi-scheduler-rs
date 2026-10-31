@@ -9,8 +9,6 @@ use crate::{consts, ports::Clock, ports::Ports};
 
 const TASK_DEADLINE_DEFAULT: Duration = Duration::from_secs(10 * 60);
 
-const REANALYSIS_TASK_STALE_AFTER: Duration = Duration::from_secs(15 * 60);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskState {
     Assigned,
@@ -91,7 +89,6 @@ impl RunningTask {
 
 fn deadline_secs(kind: TaskKind) -> i64 {
     match kind {
-        TaskKind::TaskReanalysis => REANALYSIS_TASK_STALE_AFTER.as_secs() as i64,
         TaskKind::TaskCollect => consts::COLLECT_TASK_DEADLINE.as_secs() as i64,
         _ => TASK_DEADLINE_DEFAULT.as_secs() as i64,
     }
@@ -414,20 +411,12 @@ mod tests {
         let clock = FakeClock::new(1000);
         let d = dispatcher(clock.clone());
         d.register("e", task("w", TaskKind::TaskCollect, 10));
-        d.register("r", task("w", TaskKind::TaskReanalysis, 10));
         d.register("s", task("w", TaskKind::TaskSelfplay, 10));
-        d.register("x", task("w", TaskKind::TaskDeriveFeatures, 1));
         assert_eq!(
             d.lookup("e").unwrap().deadline,
             1000 + consts::COLLECT_TASK_DEADLINE.as_secs() as i64
         );
-        assert_eq!(
-            d.lookup("r").unwrap().deadline,
-            1000 + 900,
-            "reanalysis 复用 15min 慢任务窗口"
-        );
         assert_eq!(d.lookup("s").unwrap().deadline, 1000 + 600);
-        assert_eq!(d.lookup("x").unwrap().deadline, 1000 + 600);
     }
 
     #[test]
@@ -696,7 +685,7 @@ mod tests {
         clock.set(960);
         d.register("e1", task("w3", TaskKind::TaskSelfplay, 10));
         clock.advance(1);
-        d.register("e2", task("w4", TaskKind::TaskReanalysis, 3));
+        d.register("e2", task("w4", TaskKind::TaskSelfplay, 3));
 
         clock.set(1860);
         d.register("a1", task("w1", TaskKind::TaskSelfplay, 4));
@@ -713,7 +702,7 @@ mod tests {
         assert_eq!(snap.expired.len(), 2);
         assert_eq!(snap.expired[0].task_id, "e2");
         assert_eq!(snap.expired[1].task_id, "e1");
-        assert_eq!(snap.expired[0].kind, "TASK_REANALYSIS");
+        assert_eq!(snap.expired[0].kind, "TASK_SELFPLAY");
         assert_eq!(snap.expired[0].state, "expired");
         assert_eq!(snap.expired[0].worker_id, "w4");
         assert!(snap.expired[0].age_seconds > 0);
