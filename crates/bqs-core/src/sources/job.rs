@@ -68,7 +68,7 @@ impl TaskSource for JobSource {
 }
 
 impl JobSource {
-    fn dispatch_collect(
+    pub(super) fn dispatch_collect(
         &self,
         job: &JobRow,
         req: &TaskRequest,
@@ -86,6 +86,18 @@ impl JobSource {
         };
         let mut games = games_for_threads(self.cfg.selfplay.threads_baseline, base, req.threads);
         games += games & 1;
+
+        if spec.total_games > 0 {
+            let remaining = spec.total_games as i64 - job.dispatched_games;
+            if remaining < 2 {
+                return Ok(None);
+            }
+            games = games.min(remaining);
+            games -= games & 1;
+            if games < 2 {
+                return Ok(None);
+            }
+        }
         let seed = crate::jobs::resolve_seed(&spec.seed_strategy, job.next_seq);
         let deadline_unix =
             (self.jobs.now() + self.cfg.jobs.collect_deadline_seconds).max(0) as u64;

@@ -334,6 +334,46 @@ fn collect_dispatch_generation_snapshot() {
 }
 
 #[test]
+fn collect_dispatch_clamps_to_remaining_games() {
+    let e = env();
+    let job_id = submit_collect(&e, 10);
+
+    let job_row = || e.jobs.dispatchable(JobKind::JobCollect).unwrap().remove(0);
+
+    let resp = e
+        .src
+        .dispatch_collect(&job_row(), &req(4))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        resp.generation.clone().unwrap().games,
+        8,
+        "首批不受余量影响"
+    );
+
+    let resp = e
+        .src
+        .dispatch_collect(&job_row(), &req(4))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        resp.generation.clone().unwrap().games,
+        2,
+        "collect 派发必须按 total_games 余量封顶"
+    );
+
+    assert!(
+        e.src
+            .dispatch_collect(&job_row(), &req(4))
+            .unwrap()
+            .is_none(),
+        "余量 < 2 应停止派发 collect 任务"
+    );
+    let row = e.jobs.get(&job_id).unwrap().unwrap();
+    assert_eq!(row.dispatched_games, 10, "dispatched 不得超出 total_games");
+}
+
+#[test]
 fn selfplay_pure_dispatch_generation_snapshot() {
     let e = env();
     e.f.networks.seed_network("best", None, "onnx");

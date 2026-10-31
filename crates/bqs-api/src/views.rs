@@ -230,6 +230,9 @@ pub struct TaskView {
     pub games: i32,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
+
+    #[serde(rename = "jobId")]
+    pub job_id: String,
 }
 
 #[derive(Debug, Serialize)]

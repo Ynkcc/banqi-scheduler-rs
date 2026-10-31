@@ -286,6 +286,7 @@ fn to_task_view(t: bqs_core::dispatch::RunningTask) -> TaskView {
         opponent_spec: t.opponent_spec,
         games: t.games as i32,
         created_at: t.assigned_at,
+        job_id: t.job_id,
     }
 }
 
