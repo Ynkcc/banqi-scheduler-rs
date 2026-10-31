@@ -75,6 +75,17 @@ impl TaskAssembler {
             ..Default::default()
         };
         self.with_network_download(req, &mut resp, &producer.sha, &key)?;
+        if rule_opponent.is_empty() {
+            resp.opponent_sha = producer.sha.clone();
+            resp.opponent_key = key.clone();
+            match self.signer.presign_get(&key, self.ttl_secs()) {
+                Ok(url) => resp.opponent_url = url,
+                Err(e) => tracing::warn!(
+                    "[task] presign opponent {} 失败（本地有缓存的 worker 不受影响）: {e}",
+                    key
+                ),
+            }
+        }
         Ok(resp)
     }
 

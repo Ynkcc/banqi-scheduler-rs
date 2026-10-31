@@ -161,17 +161,15 @@ pub fn build_game(
     }
     let players_i8 = |i: usize| rec.players[i] as i8;
 
-    let final_snapshot: Option<Vec<u8>> = if steps > 0 {
+    let final_snapshot: Option<Vec<u8>> = if steps > 0 && snaps[steps - 1].true_board.is_some() {
+
+
         let last_pre = &snaps[steps - 1];
         let stepped = bq_env::for_variant_env!(variant, E => {
             <E as SnapshotEnv>::from_snapshot(last_pre)
                 .and_then(|mut env| env.step_with_reveal(actions[steps - 1] as usize, None).map(|_| env.to_snapshot()))
         });
-        match stepped {
-            Ok(s) => Some(s.encode()),
-
-            Err(_) => None,
-        }
+        stepped.ok().map(|s| s.encode())
     } else {
         None
     };
@@ -189,9 +187,10 @@ pub fn build_game(
             if !matches!(pre.slots[to], Slot::Hidden) {
                 return Err(format!("replay: step {ply} 翻棋目标 {to} 与快照明暗不符"));
             }
-            let id = hidden_identity(pre, to, layout.as_deref())
-                .ok_or(format!("replay: step {ply} 翻棋目标 {to} 身份未知"))?;
-            (true, true, Some(id.short_name()), None)
+
+
+            let id = hidden_identity(pre, to, layout.as_deref());
+            (true, true, id.map(|p| p.short_name()), None)
         } else {
             if !matches!(pre.slots[from], Slot::Revealed(_)) {
                 return Err(format!(
@@ -201,10 +200,13 @@ pub fn build_game(
             match pre.slots[to] {
                 Slot::Empty => (false, false, None, None),
                 Slot::Hidden => {
-                    let id = hidden_identity(pre, to, layout.as_deref())
-                        .ok_or(format!("replay: step {ply} 目标格 {to} 身份未知"))?;
-
-                    (false, true, Some(id.short_name()), Some(id.short_name()))
+                    let id = hidden_identity(pre, to, layout.as_deref());
+                    (
+                        false,
+                        true,
+                        id.map(|p| p.short_name()),
+                        id.map(|p| p.short_name()),
+                    )
                 }
                 Slot::Revealed(victim) => (false, false, None, Some(victim.short_name())),
             }
@@ -564,6 +566,51 @@ mod tests {
         let (rec, _) = synth_record(2, false);
         let err = build_game(&batch(rec), &episode(), 3).unwrap_err();
         assert!(err.contains("超出范围"), "{err}");
+    }
+
+
+    #[test]
+    fn unseeded_report_replays_without_identity() {
+        let mut env = DarkChessEnv::default();
+        let mut rec = GameRecord::default();
+        let reveal_actions = env.config.reveal_actions_count;
+        for _ in 0..6 {
+            if env.check_game_over_conditions().0 {
+                break;
+            }
+            let action = *env
+                .legal_actions()
+                .iter()
+                .find(|&&a| (a as usize) < reveal_actions)
+                .expect("开局必有翻子动作");
+            rec.snapshots.push(env.to_snapshot().encode());
+            rec.actions
+                .extend_from_slice(&(action as u16).to_le_bytes());
+            rec.players.push(if env.get_current_player() == Player::Red {
+                1u8
+            } else {
+                0xFF
+            });
+            env.step_with_reveal(action, None).unwrap();
+        }
+        rec.steps = rec.players.len() as u32;
+        assert!(rec.steps >= 2, "合成翻子对局应至少 2 步");
+
+        let g = build_game(&batch(rec), &episode(), 0).expect("无 seed 上报也应可回放");
+        assert_eq!(g.moves.len(), g.steps);
+        let pre_revealed = env.config.initial_revealed_pieces;
+        assert_eq!(
+            g.initial_shown.iter().filter(|&&s| s).count(),
+            pre_revealed,
+            "开局明子数应与 initial_revealed_pieces 一致"
+        );
+
+        let flips: Vec<_> = g
+            .moves
+            .iter()
+            .filter(|m| m.kind == "flip")
+            .collect();
+        assert!(!flips.is_empty(), "合成对局应含翻子步");
     }
 
     #[test]
