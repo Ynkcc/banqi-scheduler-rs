@@ -125,6 +125,8 @@ pub struct SelfplaySection {
     pub initial_revealed: i32,
 
     pub data_kind: DataKind,
+
+    pub search: SearchDefaults,
 }
 
 impl Default for SelfplaySection {
@@ -139,6 +141,63 @@ impl Default for SelfplaySection {
             threads_baseline: 4,
             initial_revealed: 0,
             data_kind: DataKind::Resnet,
+            search: SearchDefaults::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SearchDefaults {
+    pub mcts_sims: u32,
+    pub mcts_max_considered_actions: u32,
+    pub mcts_c_scale: f64,
+    pub mcts_gumbel_scale: f64,
+    pub playout_cap_random: bool,
+    pub fast_mcts_sims: u32,
+    pub full_search_prob: f64,
+    pub mcts_eta: u32,
+    pub mcts_ucb_c: f64,
+    pub mcts_crn_enabled: bool,
+    pub health_enabled: bool,
+    pub health_weight: f64,
+    pub health_confidence_exp: f64,
+    pub expectimax_node_budget: u64,
+    pub expectimax_max_depth: u32,
+    pub labeler_mode: String,
+    pub labeler_budget_mult: u32,
+    pub expl_enabled: bool,
+    pub expl_topk: u32,
+    pub expl_temp_start: f64,
+    pub expl_temp_end: f64,
+    pub expl_temp_decay_steps: u32,
+}
+
+impl Default for SearchDefaults {
+    fn default() -> Self {
+        Self {
+            mcts_sims: 64,
+            mcts_max_considered_actions: 16,
+            mcts_c_scale: 1.0,
+            mcts_gumbel_scale: 1.0,
+            playout_cap_random: false,
+            fast_mcts_sims: 0,
+            full_search_prob: 0.25,
+            mcts_eta: 2,
+            mcts_ucb_c: 0.0,
+            mcts_crn_enabled: false,
+            health_enabled: false,
+            health_weight: 0.0,
+            health_confidence_exp: 0.0,
+            expectimax_node_budget: 500_000,
+            expectimax_max_depth: 8,
+            labeler_mode: String::new(),
+            labeler_budget_mult: 2,
+            expl_enabled: false,
+            expl_topk: 8,
+            expl_temp_start: 1.0,
+            expl_temp_end: 0.15,
+            expl_temp_decay_steps: 48,
         }
     }
 }
@@ -247,6 +306,22 @@ impl Config {
         if s.games_per_task <= 0 {
             return Err(ConfigError::Invalid(
                 "selfplay.games_per_task 必须 > 0".into(),
+            ));
+        }
+        let d = &s.search;
+        if d.mcts_sims == 0 {
+            return Err(ConfigError::Invalid(
+                "selfplay.search.mcts_sims 必须 >= 1（任务下发的探索参数必填校验）".into(),
+            ));
+        }
+        if d.mcts_max_considered_actions == 0 {
+            return Err(ConfigError::Invalid(
+                "selfplay.search.mcts_max_considered_actions 必须 >= 1".into(),
+            ));
+        }
+        if d.mcts_eta < 2 {
+            return Err(ConfigError::Invalid(
+                "selfplay.search.mcts_eta 必须 >= 2".into(),
             ));
         }
         let sp = &self.sprt;

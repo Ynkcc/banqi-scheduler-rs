@@ -1,8 +1,9 @@
-use crate::{CoreError, CoreResult, types::{Match, Network}};
-
-use super::{
-    TaskAssembler, stack_format_for_data_kind,
+use crate::{
+    types::{Match, Network},
+    CoreError, CoreResult,
 };
+
+use super::{stack_format_for_data_kind, TaskAssembler};
 
 pub fn network_key(sha: &str, format: &str) -> String {
     format!("networks/{sha}.{format}")

@@ -35,6 +35,22 @@ pub struct SearchSpecJson {
     pub expl_temp_end: f64,
     #[serde(alias = "expl_temp_decay_steps")]
     pub expl_temp_decay_steps: u32,
+    #[serde(alias = "fast_mcts_sims")]
+    pub fast_mcts_sims: u32,
+    #[serde(alias = "full_search_prob")]
+    pub full_search_prob: f64,
+    #[serde(alias = "mcts_eta")]
+    pub mcts_eta: u32,
+    #[serde(alias = "mcts_ucb_c")]
+    pub mcts_ucb_c: f64,
+    #[serde(alias = "mcts_crn_enabled")]
+    pub mcts_crn_enabled: bool,
+    #[serde(alias = "health_enabled")]
+    pub health_enabled: bool,
+    #[serde(alias = "health_weight")]
+    pub health_weight: f64,
+    #[serde(alias = "health_confidence_exp")]
+    pub health_confidence_exp: f64,
 }
 
 impl SearchSpecJson {
@@ -56,6 +72,14 @@ impl SearchSpecJson {
                 expl_temp_start: s.expl_temp_start,
                 expl_temp_end: s.expl_temp_end,
                 expl_temp_decay_steps: s.expl_temp_decay_steps,
+                fast_mcts_sims: s.fast_mcts_sims,
+                full_search_prob: s.full_search_prob,
+                mcts_eta: s.mcts_eta,
+                mcts_ucb_c: s.mcts_ucb_c,
+                mcts_crn_enabled: s.mcts_crn_enabled,
+                health_enabled: s.health_enabled,
+                health_weight: s.health_weight,
+                health_confidence_exp: s.health_confidence_exp,
             },
             None => Self::default(),
         }
@@ -77,6 +101,14 @@ impl SearchSpecJson {
             && self.expl_temp_start == 0.0
             && self.expl_temp_end == 0.0
             && self.expl_temp_decay_steps == 0
+            && self.fast_mcts_sims == 0
+            && self.full_search_prob == 0.0
+            && self.mcts_eta == 0
+            && self.mcts_ucb_c == 0.0
+            && !self.mcts_crn_enabled
+            && !self.health_enabled
+            && self.health_weight == 0.0
+            && self.health_confidence_exp == 0.0
     }
 
     pub fn to_proto(&self) -> Option<CollectSearchParams> {
@@ -100,6 +132,14 @@ impl SearchSpecJson {
             expl_temp_start: s.expl_temp_start,
             expl_temp_end: s.expl_temp_end,
             expl_temp_decay_steps: s.expl_temp_decay_steps,
+            fast_mcts_sims: s.fast_mcts_sims,
+            full_search_prob: s.full_search_prob,
+            mcts_eta: s.mcts_eta,
+            mcts_ucb_c: s.mcts_ucb_c,
+            mcts_crn_enabled: s.mcts_crn_enabled,
+            health_enabled: s.health_enabled,
+            health_weight: s.health_weight,
+            health_confidence_exp: s.health_confidence_exp,
         })
     }
 }

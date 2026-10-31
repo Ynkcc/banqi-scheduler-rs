@@ -47,6 +47,8 @@ impl TaskAssembler {
     ) -> CoreResult<TaskResponse> {
         let key = network_key(&producer.sha, &producer.format);
         let data_kind = data_kind_for_format(&producer.format);
+
+        let search = Some(search.unwrap_or_else(|| self.default_search()));
         let player_a = model_player(&producer.sha, &producer.format, search.clone());
         let player_b = if rule_opponent.is_empty() {
             player_a.clone()
@@ -110,8 +112,16 @@ impl TaskAssembler {
                 data_kind,
                 games: games as u64,
                 behavior: Some(bqs_proto::generation_spec::Behavior::Plays(Plays {
-                    player_a: Some(model_player(&candidate.sha, &candidate.format, None)),
-                    player_b: Some(model_player(opponent_sha, "nnue", None)),
+                    player_a: Some(model_player(
+                        &candidate.sha,
+                        &candidate.format,
+                        Some(self.default_search()),
+                    )),
+                    player_b: Some(model_player(
+                        opponent_sha,
+                        "nnue",
+                        Some(self.default_search()),
+                    )),
                 })),
                 ..Default::default()
             }),
@@ -168,6 +178,12 @@ impl TaskAssembler {
         let data_kind = stack_data_kind_for_weight_format(&best.format)
             .map_err(|e| CoreError::Internal(format!("best 网络 format 无法分派重搜栈: {e}")))?;
         let key = network_key(&best.sha, &best.format);
+
+        let mut search = self.default_search();
+        if item.mcts_sims > 0 {
+            search.mcts_sims = item.mcts_sims as u32;
+            search.fast_mcts_sims = 0;
+        }
         let mut resp = TaskResponse {
             task_id: task_id.to_string(),
             network_sha: best.sha.clone(),
@@ -175,6 +191,7 @@ impl TaskAssembler {
             network_key: key.clone(),
             params: Some(SelfPlayParams {
                 mcts_sims: item.mcts_sims,
+                search: Some(search),
                 ..Default::default()
             }),
             generation: Some(GenerationSpec {
@@ -202,6 +219,8 @@ impl TaskAssembler {
         seed: u64,
         deadline_unix: u64,
     ) -> TaskResponse {
+        let player_a = spec.player_a.clone().map(|p| self.player_with_search(p));
+        let player_b = spec.player_b.clone().map(|p| self.player_with_search(p));
         TaskResponse {
             task_id: task_id.to_string(),
             params: Some(SelfPlayParams {
@@ -216,8 +235,8 @@ impl TaskAssembler {
                 games,
                 deadline_unix,
                 behavior: Some(bqs_proto::generation_spec::Behavior::Plays(Plays {
-                    player_a: spec.player_a.clone(),
-                    player_b: spec.player_b.clone(),
+                    player_a,
+                    player_b,
                 })),
             }),
             ..Default::default()
@@ -253,8 +272,8 @@ impl TaskAssembler {
                 data_kind,
                 games: games as u64,
                 behavior: Some(bqs_proto::generation_spec::Behavior::Plays(Plays {
-                    player_a: Some(side_a.clone()),
-                    player_b: Some(side_b.clone()),
+                    player_a: Some(self.player_with_search(side_a.clone())),
+                    player_b: Some(self.player_with_search(side_b.clone())),
                 })),
                 ..Default::default()
             }),

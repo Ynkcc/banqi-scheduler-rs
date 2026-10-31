@@ -76,6 +76,9 @@ enum DataKind {
 message SelfPlayParams {
   int32 mcts_sims = 1;
   string extra_config = 5;
+  // 任务级探索参数（与 CollectSearchParams 同构）。调度器创建任务时必填下发，
+  // worker 以此为唯一来源构建搜索配置，本地不再保留任何默认值。
+  CollectSearchParams search = 7;
   reserved 2, 3, 4, 6;
 }
 
@@ -439,6 +442,19 @@ message CollectSearchParams {
   double expl_temp_start = 13;
   double expl_temp_end = 14;
   uint32 expl_temp_decay_steps = 15;
+  // Fast/Full Search 混合（算力分配随机化）；fast = 0 表示由 mcts_sims 派生
+  uint32 fast_mcts_sims = 16;
+  double full_search_prob = 17;
+  // SHA 淘汰率因子 eta（每阶段保留 1/eta 候选）
+  uint32 mcts_eta = 18;
+  // SHA 淘汰判据置信系数（0 = 点估计）
+  double mcts_ucb_c = 19;
+  // 机会节点共同随机数
+  bool mcts_crn_enabled = 20;
+  // 血量差异头复合效用 U = Q_win + λ·Q_hp
+  bool health_enabled = 21;
+  double health_weight = 22;
+  double health_confidence_exp = 23;
 }
 
 message CollectionJobSpec {

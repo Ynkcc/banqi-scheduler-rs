@@ -309,7 +309,10 @@ fn reanalysis_task_follows_best_stack() {
     f.networks.promote_best("best2").unwrap();
     let resp2 = asm.reanalysis_task("t3", &item, &req).unwrap();
     assert_eq!(resp2.network_key, "networks/best2.nnue");
-    assert_eq!(gen_spec(&resp2).data_kind, bqs_proto::DataKind::DataNnue as i32);
+    assert_eq!(
+        gen_spec(&resp2).data_kind,
+        bqs_proto::DataKind::DataNnue as i32
+    );
 
     f.networks.seed_network("best3", None, "pt");
     f.networks.promote_best("best3").unwrap();
