@@ -9,6 +9,7 @@ use crate::{
     dispatch::TaskDispatcher,
     jobs::{JobManager, JobSpecJson},
     ports::{JobRow, MatchStore, NetworkStore},
+    reanalysis::ReanaQueue,
     CoreResult,
 };
 
@@ -19,6 +20,7 @@ pub struct JobSource {
     pub matches: Arc<dyn MatchStore>,
     pub nets: Arc<dyn NetworkStore>,
     pub disp: Arc<TaskDispatcher>,
+    pub reana: Arc<ReanaQueue>,
     pub asm: Arc<TaskAssembler>,
     pub ctl: Arc<Control>,
     pub cfg: Arc<Config>,
@@ -277,6 +279,7 @@ impl JobSource {
             let task_id = new_id();
             let games = self.asm.games_for(req.threads);
             let resp = self.asm.sentinel_task(&task_id, req);
+            self.reana.note_selfplay_assigned();
             self.jobs.note_dispatch(
                 &task_id,
                 &job.job_id,
@@ -313,6 +316,7 @@ impl JobSource {
             .ok_or_else(|| crate::CoreError::Internal("selfplay producer missing".into()))?
             .clone();
         let task_id = new_id();
+        self.reana.note_selfplay_assigned();
 
         let resp = match (&sel.mode, &sel.m) {
             (SelfplayMode::Mix, Some(m)) => {

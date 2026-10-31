@@ -53,6 +53,7 @@ pub struct Config {
     pub selfplay: SelfplaySection,
     pub gatekeeper: GatekeeperSection,
     pub sprt: SprtSection,
+    pub reanalysis: ReanalysisSection,
     pub balance: BalanceSection,
 
     pub jobs: JobsSection,
@@ -217,6 +218,14 @@ pub struct SprtSection {
     pub beta: f64,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct ReanalysisSection {
+    pub interval_tasks: i64,
+
+    pub max_queue: i64,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct BalanceSection {
@@ -228,6 +237,8 @@ pub struct BalanceSection {
     pub stalled_seconds: i64,
 
     pub backlog_pause_batches: i64,
+
+    pub pause_reanalysis: bool,
 }
 
 impl Default for BalanceSection {
@@ -238,6 +249,7 @@ impl Default for BalanceSection {
             trainer_online_seconds: 120,
             stalled_seconds: 600,
             backlog_pause_batches: 0,
+            pause_reanalysis: false,
         }
     }
 }

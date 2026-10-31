@@ -1,7 +1,7 @@
 # banqi-scheduler-rs
 
 分布式自对弈训练的**中心调度器**（Go 版 `banqi-scheduler` 的 Rust 重构版）：任务分发
-（selfplay / rating / eval）、网络登记与晋级、episode 元数据登记 +
+（selfplay / rating / eval / reanalysis / derive）、网络登记与晋级、episode 元数据登记 +
 对象存储预签名直传、六桶 GSPRT 判停、绝对强度评估与停机判据、生成-消费平衡。
 
 调度器**不执行任何棋类计算**，只做「编排 + 元数据 + 签名」：生产端是 Rust 的
@@ -96,7 +96,8 @@ ListJobs / ControlJob`、`JobStatus` 规格回显、`HeartbeatReply.cancel_task_
 
 - **训练闭环全部走 job**：selfplay 由 `[selfplay]` 配置在启动时引导一个持续型
   job（total_games=0）；eval 由 evalcoord 在评估轮开始时为每个对手自动建 job
-  （total 取 `[eval] games`），也可手动 `SubmitJob`。
+  （total 取 `[eval] games`），也可手动 `SubmitJob`。rating / reanalysis /
+  derive 保持既有通道。
 - **完成口径不含在飞**：completed_games 只按已收到的真实上报聚合（collect /
   selfplay 按 `ReportEpisode.game_count`，eval 按 `ReportMatchResult.games`），
   task→job 映射落库（`job_tasks` 表），先落库后更新计数——重启后迟到上报仍聚合。

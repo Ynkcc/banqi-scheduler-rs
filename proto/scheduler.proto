@@ -28,12 +28,23 @@ message GenerationSpec {
   optional bool pair_seed_refresh = 8;
   oneof behavior {
     Plays plays = 10;
+    Reanalysis reanalysis = 11;
+    DeriveFeatures derive = 12;
   }
 }
 
 message Plays {
   CollectPlayerSpec player_a = 1;
   CollectPlayerSpec player_b = 2;
+}
+
+message Reanalysis {
+  bytes payload = 1;
+}
+
+message DeriveFeatures {
+  string episode_object_key = 1;
+  string episode_url = 2;
 }
 
 message TaskResponse {
@@ -56,7 +67,9 @@ enum TaskKind {
   TASK_NONE = 0;
   TASK_SELFPLAY = 1;
   TASK_RATING = 2;
-  reserved 3, 4, 5;
+  TASK_REANALYSIS = 3;
+  reserved 4;
+  TASK_DERIVE_FEATURES = 5;
   TASK_COLLECT = 6;
 }
 
@@ -210,6 +223,20 @@ message ListEpisodesReply {
   bool has_more = 2;
 }
 
+message SubmitReanalysisRequest {
+  string requester = 1;
+  string variant = 2;
+  int32 mcts_sims = 3;
+  uint32 positions = 4;
+  bytes payload = 5;
+}
+
+message SubmitReanalysisReply {
+  bool accepted = 1;
+  string message = 2;
+  uint64 queued_positions = 3;
+}
+
 message GetInfoRequest {}
 
 message VariantMeta {
@@ -330,6 +357,46 @@ message ResNetFeatures {
   bytes boards_bits = 6;
   bytes scalars = 7;
   bytes action_masks_bits = 8;
+}
+
+message FeaturePack {
+  uint32 pack_version = 1;
+  string variant = 2;
+  DataKind kind = 3;
+  uint32 steps = 4;
+  bytes record_sha256 = 5;
+  NnueFeatures nnue = 6;
+  ResNetFeatures resnet = 7;
+}
+
+message FeaturePackMeta {
+  string worker_id = 1;
+  string task_id = 2;
+  string episode_object_key = 3;
+  uint32 pack_version = 4;
+  int64 content_length = 5;
+  string content_sha256 = 6;
+}
+
+message FeaturePackAck {
+  bool accepted = 1;
+  string message = 2;
+  string upload_url = 3;
+  string object_key = 4;
+}
+
+message FeaturePackRequest {
+  string requester = 1;
+  string episode_object_key = 2;
+  uint32 pack_version = 3;
+}
+
+message FeaturePackReply {
+  bool accepted = 1;
+  string message = 2;
+  bool ready = 3;
+  string object_key = 4;
+  string download_url = 5;
 }
 
 enum JobKind {
@@ -492,8 +559,11 @@ service SchedulerService {
   rpc Heartbeat (HeartbeatRequest) returns (HeartbeatReply);
   rpc SignNetworkUpload (SignNetworkUploadRequest) returns (SignNetworkUploadAck);
   rpc ListEpisodes (ListEpisodesRequest) returns (ListEpisodesReply);
+  rpc SubmitReanalysis (SubmitReanalysisRequest) returns (SubmitReanalysisReply);
   rpc GetTrainConfig (GetTrainConfigRequest) returns (GetTrainConfigReply);
   rpc TrainerHeartbeat (TrainerHeartbeatRequest) returns (TrainerHeartbeatReply);
+  rpc ReportFeaturePack (FeaturePackMeta) returns (FeaturePackAck);
+  rpc RequestFeaturePack (FeaturePackRequest) returns (FeaturePackReply);
   rpc SubmitJob (SubmitJobRequest) returns (SubmitJobReply);
   rpc ListJobs (ListJobsRequest) returns (ListJobsReply);
   rpc ControlJob (JobControlRequest) returns (JobControlReply);

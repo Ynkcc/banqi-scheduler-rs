@@ -99,6 +99,14 @@ impl SchedulerService for SchedulerSvc {
         Ok(tonic::Response::new(reply))
     }
 
+    async fn submit_reanalysis(
+        &self,
+        request: tonic::Request<SubmitReanalysisRequest>,
+    ) -> Result<tonic::Response<SubmitReanalysisReply>, tonic::Status> {
+        let reply = forward!(self.0, request.into_inner(), submit_reanalysis)?;
+        Ok(tonic::Response::new(reply))
+    }
+
     async fn get_train_config(
         &self,
         request: tonic::Request<GetTrainConfigRequest>,
@@ -112,6 +120,22 @@ impl SchedulerService for SchedulerSvc {
         request: tonic::Request<TrainerHeartbeatRequest>,
     ) -> Result<tonic::Response<TrainerHeartbeatReply>, tonic::Status> {
         let reply = forward!(self.0, request.into_inner(), trainer_heartbeat)?;
+        Ok(tonic::Response::new(reply))
+    }
+
+    async fn report_feature_pack(
+        &self,
+        request: tonic::Request<FeaturePackMeta>,
+    ) -> Result<tonic::Response<FeaturePackAck>, tonic::Status> {
+        let reply = forward!(self.0, request.into_inner(), report_feature_pack)?;
+        Ok(tonic::Response::new(reply))
+    }
+
+    async fn request_feature_pack(
+        &self,
+        request: tonic::Request<FeaturePackRequest>,
+    ) -> Result<tonic::Response<FeaturePackReply>, tonic::Status> {
+        let reply = forward!(self.0, request.into_inner(), request_feature_pack)?;
         Ok(tonic::Response::new(reply))
     }
 

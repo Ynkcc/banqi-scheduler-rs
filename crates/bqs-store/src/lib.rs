@@ -1,4 +1,5 @@
 mod episodes;
+mod featurepacks;
 mod jobs;
 #[cfg(test)]
 mod jobs_tests;
@@ -111,6 +112,7 @@ const _: () = {
                 + ports::EpisodeStore
                 + ports::WorkerStore
                 + ports::TrainerRegistryStore
+                + ports::FeaturePackStore
                 + ports::JobStore,
         {
         }

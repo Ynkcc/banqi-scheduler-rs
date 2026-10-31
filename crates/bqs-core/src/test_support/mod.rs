@@ -3,6 +3,7 @@ mod episodes;
 mod jobstore;
 mod matches;
 mod networks;
+mod packs;
 mod registry;
 mod settings;
 mod signer;
@@ -14,6 +15,7 @@ pub use episodes::FakeEpisodes;
 pub use jobstore::FakeJobs;
 pub use matches::FakeMatches;
 pub use networks::FakeNetworks;
+pub use packs::FakePacks;
 pub use registry::FakeRegistry;
 pub use settings::FakeSettings;
 pub use signer::FakeSigner;
@@ -43,6 +45,7 @@ pub struct Fakes {
     pub registry: Arc<FakeRegistry>,
     pub episodes: Arc<FakeEpisodes>,
     pub workers: Arc<FakeWorkers>,
+    pub packs: Arc<FakePacks>,
     pub jobs: Arc<FakeJobs>,
     pub signer: Arc<FakeSigner>,
 }
@@ -62,6 +65,7 @@ impl Fakes {
             registry,
             episodes: Arc::new(FakeEpisodes::default()),
             workers: Arc::new(FakeWorkers::default()),
+            packs: Arc::new(FakePacks::default()),
             jobs: Arc::new(FakeJobs::default()),
             signer: Arc::new(FakeSigner),
         }
@@ -77,6 +81,7 @@ impl Fakes {
             episodes: self.episodes.clone(),
             workers: self.workers.clone(),
             trainer_registry: self.registry.clone(),
+            feature_packs: self.packs.clone(),
             jobs: self.jobs.clone(),
         }
     }

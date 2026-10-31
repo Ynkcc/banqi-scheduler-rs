@@ -133,6 +133,9 @@ static SPECS: &[(&str, TrainConfigSpec)] = &[
     ("DATA_AUGMENT_ENABLED", b()),
     ("DATA_AUGMENT_K", i(1.0)),
     ("DATA_AUGMENT_KEEP_ORIGINAL", b()),
+    ("REANALYSIS_BATCH_POSITIONS", i(1.0)),
+    ("REANALYSIS_SUBMIT_EVERY_N_ROUNDS", i(1.0)),
+    ("REANALYSIS_MCTS_SIMS", i(0.0)),
     ("MAX_RUNTIME_SECONDS", i(0.0)),
     ("SHOULD_STOP_POLL_SECONDS", i(0.0)),
     ("CKPT_EXPORT_EVERY", i(1.0)),
@@ -282,7 +285,7 @@ mod tests {
     #[test]
     fn whitelist_complete() {
         let names = TrainConfig::field_names();
-        assert_eq!(names.len(), 27);
+        assert_eq!(names.len(), 30);
 
         let mut sorted = names.clone();
         sorted.sort();

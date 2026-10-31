@@ -244,6 +244,8 @@ pub struct BalanceConfigView {
     pub stalled_seconds: i64,
     #[serde(rename = "backlogPauseBatches")]
     pub backlog_pause_batches: i64,
+    #[serde(rename = "pauseReanalysis")]
+    pub pause_reanalysis: bool,
 }
 
 #[derive(Debug, Serialize)]

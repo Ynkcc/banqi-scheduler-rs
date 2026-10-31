@@ -133,6 +133,23 @@ pub trait TrainerRegistryStore: Send + Sync {
     fn touch_trainer(&self, t: Trainer) -> CoreResult<()>;
 }
 
+pub trait FeaturePackStore: Send + Sync {
+    fn insert_feature_pack(&self, fp: FeaturePackDraft) -> CoreResult<()>;
+    fn get_feature_pack(
+        &self,
+        episode_object_key: &str,
+        pack_version: i64,
+    ) -> CoreResult<Option<FeaturePack>>;
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FeaturePackDraft {
+    pub episode_object_key: String,
+    pub pack_version: i64,
+    pub object_key: String,
+    pub created_at: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct JobRow {
     pub job_id: String,
@@ -221,6 +238,7 @@ pub struct Ports {
     pub episodes: Arc<dyn EpisodeStore>,
     pub workers: Arc<dyn WorkerStore>,
     pub trainer_registry: Arc<dyn TrainerRegistryStore>,
+    pub feature_packs: Arc<dyn FeaturePackStore>,
     pub jobs: Arc<dyn JobStore>,
 }
 

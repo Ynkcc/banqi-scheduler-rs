@@ -207,6 +207,7 @@ fn trainers_view() {
             trainer_online_seconds: 120,
             stalled_seconds: 600,
             backlog_pause_batches: 0,
+            pause_reanalysis: false,
         },
         auto_paused: false,
         auto_pause_reason: String::new(),
@@ -224,6 +225,7 @@ fn trainers_view() {
             "trainerOnlineSeconds",
             "stalledSeconds",
             "backlogPauseBatches",
+            "pauseReanalysis",
         ],
     );
     assert_keys(

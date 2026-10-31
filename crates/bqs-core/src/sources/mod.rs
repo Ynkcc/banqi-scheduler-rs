@@ -1,9 +1,13 @@
+mod derive;
 mod job;
+mod reana;
 
 #[cfg(test)]
 mod tests;
 
+pub use derive::DeriveSource;
 pub use job::JobSource;
+pub use reana::ReanaSource;
 
 use std::sync::Arc;
 
@@ -15,8 +19,10 @@ use crate::{
     assembler::TaskAssembler,
     control::Control,
     dispatch::TaskDispatcher,
+    featurepack::DeriveQueue,
     jobs::JobManager,
     ports::{MatchStore, NetworkStore},
+    reanalysis::ReanaQueue,
 };
 
 pub trait TaskSource: Send + Sync {
@@ -33,6 +39,8 @@ impl Sources {
     #[allow(clippy::too_many_arguments)]
     pub fn assemble(
         jobs: Arc<JobManager>,
+        reana: Arc<ReanaQueue>,
+        derive: Arc<DeriveQueue>,
         matches: Arc<dyn MatchStore>,
         nets: Arc<dyn NetworkStore>,
         disp: Arc<TaskDispatcher>,
@@ -40,14 +48,29 @@ impl Sources {
         ctl: Arc<Control>,
         cfg: Arc<Config>,
     ) -> Vec<Box<dyn TaskSource>> {
-        vec![Box::new(JobSource {
-            jobs,
-            matches,
-            nets,
-            disp,
-            asm,
-            ctl,
-            cfg,
-        })]
+        vec![
+            Box::new(ReanaSource {
+                reana: reana.clone(),
+                disp: disp.clone(),
+                asm: asm.clone(),
+                ctl: ctl.clone(),
+                cfg: cfg.clone(),
+            }),
+            Box::new(DeriveSource {
+                derive,
+                disp: disp.clone(),
+                asm: asm.clone(),
+            }),
+            Box::new(JobSource {
+                jobs,
+                matches,
+                nets,
+                disp,
+                reana,
+                asm,
+                ctl,
+                cfg,
+            }),
+        ]
     }
 }

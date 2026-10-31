@@ -41,6 +41,7 @@ fn env() -> Env {
         matches: ports.matches.clone(),
         nets: ports.networks.clone(),
         disp,
+        reana: Arc::new(ReanaQueue::new(&ports, cfg.clone(), f.clock.clone())),
         asm,
         ctl,
         cfg,
@@ -99,6 +100,7 @@ fn rating_dispatch_builds_task_and_books_job() {
     let g = resp.generation.clone().expect("generation");
     let p = match g.behavior.expect("behavior") {
         bqs_proto::generation_spec::Behavior::Plays(p) => p,
+        _ => panic!("expected plays"),
     };
     assert_eq!(p.player_a.unwrap().network_sha, "cand");
     assert_eq!(resp.network_sha, "cand");
@@ -220,6 +222,7 @@ fn rating_dispatch_with_sides_and_non_network_opponent() {
     let g = resp.generation.clone().expect("generation");
     let sides = match g.behavior.expect("behavior") {
         bqs_proto::generation_spec::Behavior::Plays(p) => p,
+        _ => panic!("expected plays"),
     };
     assert_eq!(resp.network_sha, "cand");
     assert_eq!(resp.network_key, "networks/cand.onnx");
@@ -256,6 +259,7 @@ fn plays_of(resp: &bqs_proto::TaskResponse) -> bqs_proto::Plays {
     let g = resp.generation.clone().expect("generation");
     match g.behavior.expect("behavior") {
         bqs_proto::generation_spec::Behavior::Plays(p) => p,
+        _ => panic!("expected plays"),
     }
 }
 

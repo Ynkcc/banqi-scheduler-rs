@@ -51,6 +51,7 @@ pub async fn trainers(State(st): State<AppState>) -> ApiResult<Json<TrainersView
                 trainer_online_seconds: cfg.trainer_online_seconds,
                 stalled_seconds: cfg.stalled_seconds,
                 backlog_pause_batches: cfg.backlog_pause_batches,
+                pause_reanalysis: cfg.pause_reanalysis,
             },
             auto_paused: server.ctl.auto_paused(),
             auto_pause_reason: server.ctl.auto_pause_reason(),

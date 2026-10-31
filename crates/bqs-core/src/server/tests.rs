@@ -170,6 +170,144 @@ fn list_episodes_paging_and_kind_filter() {
     assert!(!none.has_more);
 }
 
+#[test]
+fn submit_reanalysis_rejection_paths() {
+    let (s, _) = default_server();
+    let req = SubmitReanalysisRequest {
+        requester: "trainer".into(),
+        variant: "4x8".into(),
+        mcts_sims: 0,
+        positions: 5,
+        payload: vec![1, 2, 3],
+    };
+    let r = s.submit_reanalysis(req.clone()).unwrap();
+    assert!(!r.accepted);
+    assert!(r.message.contains("未启用局面重搜"), "{}", r.message);
+
+    let (s, _) = server_with("[reanalysis]\ninterval_tasks = 2\nmax_queue = 10\n");
+    let r = s
+        .submit_reanalysis(SubmitReanalysisRequest {
+            variant: "4x4".into(),
+            ..req.clone()
+        })
+        .unwrap();
+    assert!(!r.accepted);
+    assert!(r.message.contains("变体不一致"), "{}", r.message);
+
+    let r = s
+        .submit_reanalysis(SubmitReanalysisRequest {
+            payload: vec![],
+            ..req.clone()
+        })
+        .unwrap();
+    assert!(!r.accepted);
+    assert!(r.message.contains("载荷为空"), "{}", r.message);
+
+    let r = s.submit_reanalysis(req).unwrap();
+    assert!(r.accepted);
+    assert_eq!(r.queued_positions, 5);
+    assert_eq!(s.reana.pending(), (5, 1));
+}
+
+#[test]
+fn submit_reanalysis_queue_full_rejects_without_dropping() {
+    let (s, _) = server_with("[reanalysis]\ninterval_tasks = 1\nmax_queue = 1\n");
+    let req = |p: u32| SubmitReanalysisRequest {
+        requester: "trainer".into(),
+        variant: "4x8".into(),
+        mcts_sims: 0,
+        positions: p,
+        payload: vec![1],
+    };
+    assert!(s.submit_reanalysis(req(1)).unwrap().accepted);
+    let r = s.submit_reanalysis(req(2)).unwrap();
+    assert!(!r.accepted);
+    assert!(r.message.contains("队列已满"), "{}", r.message);
+
+    assert_eq!(s.reana.pending(), (1, 1));
+}
+
+#[test]
+fn request_feature_pack_get_or_enqueue() {
+    let (s, f) = default_server();
+    let req = |key: &str| FeaturePackRequest {
+        requester: "trainer".into(),
+        episode_object_key: key.into(),
+        pack_version: 0,
+    };
+    let r1 = s
+        .request_feature_pack(req("episodes/sha/x.epb.gz"))
+        .unwrap();
+    assert!(r1.accepted);
+    assert!(!r1.ready);
+    assert_eq!(r1.message, "queued_for_derivation");
+    assert_eq!(s.derive.pending(), 1);
+
+    let r = s
+        .request_feature_pack(FeaturePackRequest {
+            episode_object_key: String::new(),
+            ..req("k")
+        })
+        .unwrap();
+    assert!(!r.accepted);
+    assert_eq!(r.message, "missing_episode_object_key");
+
+    f.packs
+        .insert_feature_pack(crate::ports::FeaturePackDraft {
+            episode_object_key: "episodes/sha/y.epb.gz".into(),
+            pack_version: 1,
+            object_key: "episodes/sha/y.pack.v1.fpb.gz".into(),
+            created_at: 0,
+        })
+        .unwrap();
+    let r2 = s
+        .request_feature_pack(req("episodes/sha/y.epb.gz"))
+        .unwrap();
+    assert!(r2.accepted);
+    assert!(r2.ready);
+    assert_eq!(r2.object_key, "episodes/sha/y.pack.v1.fpb.gz");
+    assert_eq!(r2.download_url, "get:episodes/sha/y.pack.v1.fpb.gz");
+}
+
+#[test]
+fn report_feature_pack_idempotent_and_signs_put() {
+    let (s, f) = default_server();
+
+    s.disp.register(
+        "task-1",
+        RunningTask::new(bqs_proto::TaskKind::TaskDeriveFeatures),
+    );
+    let meta = FeaturePackMeta {
+        worker_id: "w".into(),
+        task_id: "task-1".into(),
+        episode_object_key: "episodes/sha/x.epb.gz".into(),
+        pack_version: 2,
+        content_length: 10,
+        content_sha256: String::new(),
+    };
+    let ack = s.report_feature_pack(meta.clone()).unwrap();
+    assert!(ack.accepted);
+    assert_eq!(ack.object_key, "episodes/sha/x.pack.v2.fpb.gz");
+    assert_eq!(ack.upload_url, "put:episodes/sha/x.pack.v2.fpb.gz");
+    assert_eq!(f.packs.count(), 1);
+
+    assert_eq!(s.disp.lookup("task-1").unwrap().state, TaskState::Completed);
+
+    let ack2 = s.report_feature_pack(meta.clone()).unwrap();
+    assert!(ack2.accepted);
+    assert_eq!(ack2.object_key, ack.object_key);
+    assert_eq!(f.packs.count(), 1);
+
+    let bad = s
+        .report_feature_pack(FeaturePackMeta {
+            episode_object_key: String::new(),
+            ..meta
+        })
+        .unwrap();
+    assert!(!bad.accepted);
+    assert_eq!(bad.message, "missing_episode_object_key");
+}
+
 fn register_selfplay_task(s: &Server, task_id: &str, worker: &str, sha: &str) {
     s.disp.register(
         task_id,
@@ -475,10 +613,49 @@ fn get_task_returns_none_when_paused() {
 }
 
 #[test]
-fn get_task_auto_paused_stops_selfplay() {
-    let (s, _) = default_server();
+fn get_task_auto_paused_stops_selfplay_but_not_reanalysis() {
+    let (s, f) = server_with("[reanalysis]\ninterval_tasks = 1\nmax_queue = 10\n");
+    f.networks.seed_network("best", None, "onnx");
+    f.networks.promote_best("best").unwrap();
     s.ctl.set_auto_paused(true, "test");
+    s.submit_reanalysis(SubmitReanalysisRequest {
+        requester: "t".into(),
+        variant: "4x8".into(),
+        positions: 1,
+        payload: vec![1],
+        ..Default::default()
+    })
+    .unwrap();
+
+    s.reana.note_selfplay_assigned();
+
     let resp = s
+        .get_task(TaskRequest {
+            worker_id: "w".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(matches!(
+        resp_behavior(&resp),
+        generation_spec::Behavior::Reanalysis(_)
+    ));
+
+    let (s2, f2) = server_with(
+        "[reanalysis]\ninterval_tasks = 1\nmax_queue = 10\n[balance]\nenabled = false\npause_reanalysis = true\n",
+    );
+    f2.networks.seed_network("best", None, "onnx");
+    f2.networks.promote_best("best").unwrap();
+    s2.ctl.set_auto_paused(true, "test");
+    s2.reana.note_selfplay_assigned();
+    s2.submit_reanalysis(SubmitReanalysisRequest {
+        requester: "t".into(),
+        variant: "4x8".into(),
+        positions: 1,
+        payload: vec![1],
+        ..Default::default()
+    })
+    .unwrap();
+    let resp = s2
         .get_task(TaskRequest {
             worker_id: "w".into(),
             ..Default::default()
@@ -526,7 +703,7 @@ fn get_task_client_version_gate() {
 
 #[test]
 fn get_task_priority_chain() {
-    let (s, f) = default_server();
+    let (s, f) = server_with("[reanalysis]\ninterval_tasks = 1\nmax_queue = 10\n");
     let req = TaskRequest {
         worker_id: "w1".into(),
         client_version: "1.0.0".into(),
@@ -541,15 +718,53 @@ fn get_task_priority_chain() {
 
     f.networks.seed_network("best", None, "onnx");
     f.networks.promote_best("best").unwrap();
-    let resp = s.get_task(req).unwrap();
+    s.submit_reanalysis(SubmitReanalysisRequest {
+        requester: "t".into(),
+        variant: "4x8".into(),
+        positions: 9,
+        payload: vec![1],
+        ..Default::default()
+    })
+    .unwrap();
+    let resp = s.get_task(req.clone()).unwrap();
     assert!(
         matches!(resp_behavior(&resp), generation_spec::Behavior::Plays(_)),
-        "selfplay 派发"
+        "节流未满足：先 selfplay"
     );
     assert_eq!(resp.network_sha, "best");
     assert_eq!(resp.network_key, "networks/best.onnx");
     assert_eq!(resp.network_url, "", "current_network == best 不签下载 URL");
+
+    let resp = s.get_task(req.clone()).unwrap();
+    assert!(matches!(
+        resp_behavior(&resp),
+        generation_spec::Behavior::Reanalysis(_)
+    ));
+    assert_eq!(resp_generation(&resp).games, 9, "games = 位置条数");
+    assert_eq!(s.reana.pending().1, 0);
+
     assert!(s.disp.lookup(&resp.task_id).is_some());
+
+    s.request_feature_pack(FeaturePackRequest {
+        requester: "t".into(),
+        episode_object_key: "episodes/best/x.epb.gz".into(),
+        pack_version: 1,
+    })
+    .unwrap();
+    let resp = s.get_task(req.clone()).unwrap();
+    assert!(matches!(
+        resp_behavior(&resp),
+        generation_spec::Behavior::Derive(_)
+    ));
+    if let generation_spec::Behavior::Derive(d) = resp_behavior(&resp) {
+        assert_eq!(d.episode_object_key, "episodes/best/x.epb.gz");
+    }
+
+    let resp = s.get_task(req).unwrap();
+    assert!(matches!(
+        resp_behavior(&resp),
+        generation_spec::Behavior::Plays(_)
+    ));
 }
 
 #[test]
