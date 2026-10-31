@@ -214,15 +214,25 @@ impl TaskAssembler {
     pub fn collect_task(
         &self,
         task_id: &str,
+        req: &TaskRequest,
         spec: &CollectionJobSpec,
         games: u64,
         seed: u64,
         deadline_unix: u64,
-    ) -> TaskResponse {
+        a_net: Option<&Network>,
+        b_net: Option<&Network>,
+    ) -> CoreResult<TaskResponse> {
         let player_a = spec.player_a.clone().map(|p| self.player_with_search(p));
         let player_b = spec.player_b.clone().map(|p| self.player_with_search(p));
-        TaskResponse {
+        let (a_sha, a_key) = match a_net {
+            Some(n) => (n.sha.clone(), network_key(&n.sha, &n.format)),
+            None => (String::new(), String::new()),
+        };
+        let mut resp = TaskResponse {
             task_id: task_id.to_string(),
+            network_sha: a_sha.clone(),
+            network_sha_remote: a_sha.clone(),
+            network_key: a_key.clone(),
             params: Some(SelfPlayParams {
                 extra_config: self.extra_config(),
                 ..Default::default()
@@ -243,7 +253,23 @@ impl TaskAssembler {
                 })),
             }),
             ..Default::default()
+        };
+        if let Some(a) = a_net {
+            self.with_network_download(req, &mut resp, &a.sha, &a_key)?;
         }
+        if let Some(opp) = b_net {
+            let opp_key = network_key(&opp.sha, &opp.format);
+            resp.opponent_sha = opp.sha.clone();
+            resp.opponent_key = opp_key.clone();
+            match self.signer.presign_get(&opp_key, self.ttl_secs()) {
+                Ok(url) => resp.opponent_url = url,
+                Err(e) => tracing::warn!(
+                    "[task] presign opponent {} 失败（本地有缓存的 worker 不受影响）: {e}",
+                    opp_key
+                ),
+            }
+        }
+        Ok(resp)
     }
 
     pub fn rating_task(

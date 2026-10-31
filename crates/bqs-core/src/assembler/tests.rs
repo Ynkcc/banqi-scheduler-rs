@@ -570,13 +570,75 @@ fn collect_task_passthrough_pair_overrides() {
         }
     };
 
-    let resp = asm.collect_task("t1", &spec(Some(false), Some(false)), 2, 42, 1000);
+    let req = TaskRequest {
+        threads: 4,
+        ..Default::default()
+    };
+
+    let resp = asm
+        .collect_task(
+            "t1",
+            &req,
+            &spec(Some(false), Some(false)),
+            2,
+            42,
+            1000,
+            None,
+            None,
+        )
+        .unwrap();
     let g = gen_spec(&resp);
     assert_eq!(g.pairs_parallel, Some(false), "pairs_parallel 应透传");
     assert_eq!(g.pair_seed_refresh, Some(false), "pair_seed_refresh 应透传");
 
-    let resp = asm.collect_task("t2", &spec(None, None), 2, 42, 1000);
+    let resp = asm
+        .collect_task("t2", &req, &spec(None, None), 2, 42, 1000, None, None)
+        .unwrap();
     let g = gen_spec(&resp);
     assert_eq!(g.pairs_parallel, None, "None 不应覆写");
     assert_eq!(g.pair_seed_refresh, None, "None 不应覆写");
+}
+
+#[test]
+fn collect_task_fills_network_keys() {
+    let f = Fakes::new();
+    f.networks
+        .register_network("best-nnue", None, None, "nnue")
+        .unwrap();
+    let asm = assembler(&f);
+    let best = f.networks.get_network("best-nnue").unwrap().unwrap();
+    let req = TaskRequest {
+        threads: 4,
+        ..Default::default()
+    };
+    let player = |sha: &str| bqs_proto::CollectPlayerSpec {
+        kind: "expectimax_nnue".into(),
+        network_sha: sha.into(),
+        ..Default::default()
+    };
+    let spec = bqs_proto::CollectionJobSpec {
+        variant: "4x8".into(),
+        data_kind: bqs_proto::DataKind::DataNnue as i32,
+        total_games: 4,
+        player_a: Some(player("best-nnue")),
+        player_b: Some(player("best-nnue")),
+        ..Default::default()
+    };
+
+    let resp = asm
+        .collect_task("t1", &req, &spec, 2, 42, 1000, Some(&best), Some(&best))
+        .unwrap();
+    assert_eq!(resp.network_sha, "best-nnue");
+    assert_eq!(
+        resp.network_key, "networks/best-nnue.nnue",
+        "collect 任务必须下发主网络对象键"
+    );
+    assert_eq!(
+        resp.opponent_key, "networks/best-nnue.nnue",
+        "collect 任务必须下发对手网络对象键"
+    );
+    assert_eq!(
+        resp.network_url, "get:networks/best-nnue.nnue",
+        "worker 未持有时应签下载 URL"
+    );
 }

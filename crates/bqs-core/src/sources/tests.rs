@@ -12,9 +12,15 @@ struct Env {
 }
 
 fn env() -> Env {
+    env_with_jobs("[jobs]\ncollect_overdispatch_games = -1\n")
+}
+
+fn env_with_jobs(jobs_toml: &str) -> Env {
     let f = Fakes::new();
     let cfg = Arc::new(Config::parse(
-        "[selfplay]\ngames_per_task = 8\n[sprt]\nelo0 = 0.0\nelo1 = 15.0\nalpha = 0.05\nbeta = 0.05\n",
+        &format!(
+            "[selfplay]\ngames_per_task = 8\n[sprt]\nelo0 = 0.0\nelo1 = 15.0\nalpha = 0.05\nbeta = 0.05\n{jobs_toml}"
+        ),
         "test",
     )
     .unwrap());
@@ -78,8 +84,12 @@ fn submit_rating(env: &Env, total: u64, opponent: &str) -> (String, i64) {
 }
 
 fn req(threads: i32) -> TaskRequest {
+    req_as("w1", threads)
+}
+
+fn req_as(worker: &str, threads: i32) -> TaskRequest {
     TaskRequest {
-        worker_id: "w1".into(),
+        worker_id: worker.into(),
         threads,
         ..Default::default()
     }
@@ -342,7 +352,7 @@ fn collect_dispatch_clamps_to_remaining_games() {
 
     let resp = e
         .src
-        .dispatch_collect(&job_row(), &req(4))
+        .dispatch_collect(&job_row(), &req_as("w1", 4))
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -353,7 +363,7 @@ fn collect_dispatch_clamps_to_remaining_games() {
 
     let resp = e
         .src
-        .dispatch_collect(&job_row(), &req(4))
+        .dispatch_collect(&job_row(), &req_as("w2", 4))
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -364,13 +374,126 @@ fn collect_dispatch_clamps_to_remaining_games() {
 
     assert!(
         e.src
-            .dispatch_collect(&job_row(), &req(4))
+            .dispatch_collect(&job_row(), &req_as("w3", 4))
             .unwrap()
             .is_none(),
         "余量 < 2 应停止派发 collect 任务"
     );
     let row = e.jobs.get(&job_id).unwrap().unwrap();
     assert_eq!(row.dispatched_games, 10, "dispatched 不得超出 total_games");
+}
+
+#[test]
+fn collect_dispatch_spreads_across_workers() {
+    let e = env();
+    let _job_id = submit_collect(&e, 30);
+
+    let job_row = || e.jobs.dispatchable(JobKind::JobCollect).unwrap().remove(0);
+
+    let resp = e
+        .src
+        .dispatch_collect(&job_row(), &req_as("w1", 4))
+        .unwrap()
+        .unwrap();
+    assert_eq!(resp.generation.clone().unwrap().games, 8);
+    assert!(
+        e.src
+            .dispatch_collect(&job_row(), &req_as("w1", 4))
+            .unwrap()
+            .is_none(),
+        "同一 worker 在飞上限内不得连拿同 job 任务"
+    );
+
+    let resp = e
+        .src
+        .dispatch_collect(&job_row(), &req_as("w2", 4))
+        .unwrap()
+        .unwrap();
+    assert_eq!(resp.generation.unwrap().games, 8);
+    let resp = e
+        .src
+        .dispatch_collect(&job_row(), &req_as("w3", 4))
+        .unwrap()
+        .unwrap();
+    assert_eq!(resp.generation.unwrap().games, 8);
+}
+
+#[test]
+fn collect_dispatch_released_after_expiry() {
+    let e = env();
+    let job_id = submit_collect(&e, 10);
+
+    let job_row = || e.jobs.dispatchable(JobKind::JobCollect).unwrap().remove(0);
+
+    let resp = e
+        .src
+        .dispatch_collect(&job_row(), &req_as("w1", 4))
+        .unwrap()
+        .unwrap();
+    assert_eq!(resp.generation.clone().unwrap().games, 8);
+    e.f.clock.advance(1800);
+    e.src.disp.prune();
+    assert_eq!(
+        e.src.disp.lookup(&resp.task_id).unwrap().state,
+        crate::dispatch::TaskState::Expired
+    );
+
+    let resp = e
+        .src
+        .dispatch_collect(&job_row(), &req_as("w2", 4))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        resp.generation.unwrap().games,
+        8,
+        "超期任务应释放预算，慢/掉线 worker 由其他 worker 对冲重派"
+    );
+    let row = e.jobs.get(&job_id).unwrap().unwrap();
+    assert!(row.completed_games < 10, "尚未完成，job 不应终结");
+    let _ = job_id;
+}
+
+#[test]
+fn collect_dispatch_overdispatch_fills_idle_workers() {
+    let e = env_with_jobs("");
+    let job_id = submit_collect(&e, 10);
+
+    let job_row = || e.jobs.dispatchable(JobKind::JobCollect).unwrap().remove(0);
+
+    let resp = e
+        .src
+        .dispatch_collect(&job_row(), &req_as("w1", 4))
+        .unwrap()
+        .unwrap();
+    assert_eq!(resp.generation.clone().unwrap().games, 8);
+
+    let resp = e
+        .src
+        .dispatch_collect(&job_row(), &req_as("w2", 4))
+        .unwrap()
+        .unwrap();
+    assert_eq!(resp.generation.clone().unwrap().games, 8);
+
+    let resp = e
+        .src
+        .dispatch_collect(&job_row(), &req_as("w3", 4))
+        .unwrap()
+        .unwrap();
+    assert_eq!(resp.generation.clone().unwrap().games, 2);
+
+    assert!(
+        e.src
+            .dispatch_collect(&job_row(), &req_as("w4", 4))
+            .unwrap()
+            .is_none(),
+        "超发有上界：completed+inflight 达 total+slack 后停发"
+    );
+    let row = e.jobs.get(&job_id).unwrap().unwrap();
+    assert_eq!(
+        row.dispatched_games, 18,
+        "在飞+已完成超出目标的量恰好 = 超发余量"
+    );
+    let _ = job_id;
 }
 
 #[test]
@@ -471,7 +594,7 @@ fn rating_dispatch_boundary_remaining_three_games() {
             &job_id,
             7,
             "wx",
-            bqs_proto::TaskKind::TaskCollect,
+            bqs_proto::TaskKind::TaskRating,
             "",
             "",
             "",

@@ -261,6 +261,10 @@ pub struct JobsSection {
 
     pub collect_deadline_seconds: i64,
 
+    pub collect_max_inflight_per_worker: i64,
+
+    pub collect_overdispatch_games: i64,
+
     pub priority_selfplay: i64,
     pub priority_collect: i64,
 
@@ -272,6 +276,8 @@ impl Default for JobsSection {
         Self {
             collect_games_per_task: 0,
             collect_deadline_seconds: 1800,
+            collect_max_inflight_per_worker: 1,
+            collect_overdispatch_games: 0,
             priority_selfplay: 0,
             priority_collect: 50,
             priority_rating: 80,

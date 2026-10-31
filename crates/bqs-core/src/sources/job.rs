@@ -79,6 +79,75 @@ impl JobSource {
         };
         let proto_spec = spec.to_proto();
 
+        let a_net = if bq_policy::player_kind::requires_model(&spec.player_a.kind) {
+            if spec.player_a.network_sha.is_empty() {
+                tracing::warn!(
+                    "[job] collect job {} player_a 模型棋手缺 network_sha，跳过",
+                    job.job_id
+                );
+                return Ok(None);
+            }
+            match self.nets.get_network(&spec.player_a.network_sha)? {
+                Some(n) => Some(n),
+                None => {
+                    tracing::warn!(
+                        "[job] collect job {} player_a 网络登记记录缺失 sha={}，跳过",
+                        job.job_id,
+                        spec.player_a.network_sha
+                    );
+                    return Ok(None);
+                }
+            }
+        } else {
+            None
+        };
+        let b_net = if bq_policy::player_kind::requires_model(&spec.player_b.kind) {
+            if spec.player_b.network_sha.is_empty() {
+                tracing::warn!(
+                    "[job] collect job {} player_b 模型棋手缺 network_sha，跳过",
+                    job.job_id
+                );
+                return Ok(None);
+            }
+            match self.nets.get_network(&spec.player_b.network_sha)? {
+                Some(n) => Some(n),
+                None => {
+                    tracing::warn!(
+                        "[job] collect job {} player_b 网络登记记录缺失 sha={}，跳过",
+                        job.job_id,
+                        spec.player_b.network_sha
+                    );
+                    return Ok(None);
+                }
+            }
+        } else {
+            None
+        };
+
+        let inflight: Vec<_> = self
+            .disp
+            .running()
+            .into_iter()
+            .filter(|t| t.kind == bqs_proto::TaskKind::TaskCollect && t.job_id == job.job_id)
+            .collect();
+
+        let max_per_worker = self.cfg.jobs.collect_max_inflight_per_worker;
+        if max_per_worker > 0 {
+            let worker_inflight = inflight
+                .iter()
+                .filter(|t| t.worker_id == req.worker_id)
+                .count() as i64;
+            if worker_inflight >= max_per_worker {
+                tracing::debug!(
+                    "[job] worker={} 在 job={} 上已有 {} 批在飞（上限 {max_per_worker}），本请求跳过",
+                    req.worker_id,
+                    job.job_id,
+                    worker_inflight
+                );
+                return Ok(None);
+            }
+        }
+
         let base = if self.cfg.jobs.collect_games_per_task > 0 {
             self.cfg.jobs.collect_games_per_task
         } else {
@@ -88,7 +157,15 @@ impl JobSource {
         games += games & 1;
 
         if spec.total_games > 0 {
-            let remaining = spec.total_games as i64 - job.dispatched_games;
+            let slack = if self.cfg.jobs.collect_overdispatch_games < 0 {
+                0
+            } else if self.cfg.jobs.collect_overdispatch_games > 0 {
+                self.cfg.jobs.collect_overdispatch_games
+            } else {
+                base
+            };
+            let inflight_games: i64 = inflight.iter().map(|t| t.games).sum();
+            let remaining = spec.total_games as i64 - job.completed_games - inflight_games + slack;
             if remaining < 2 {
                 return Ok(None);
             }
@@ -102,9 +179,16 @@ impl JobSource {
         let deadline_unix =
             (self.jobs.now() + self.cfg.jobs.collect_deadline_seconds).max(0) as u64;
         let task_id = new_id();
-        let resp = self
-            .asm
-            .collect_task(&task_id, &proto_spec, games as u64, seed, deadline_unix);
+        let resp = self.asm.collect_task(
+            &task_id,
+            req,
+            &proto_spec,
+            games as u64,
+            seed,
+            deadline_unix,
+            a_net.as_ref(),
+            b_net.as_ref(),
+        );
         self.jobs.note_dispatch(
             &task_id,
             &job.job_id,
@@ -127,7 +211,7 @@ impl JobSource {
             seed,
             proto_spec.data_kind
         );
-        Ok(Some(resp))
+        Ok(Some(resp?))
     }
 
     pub(super) fn dispatch_rating(
@@ -198,7 +282,14 @@ impl JobSource {
         );
         games += games & 1;
         if spec.total_games > 0 {
-            let remaining = spec.total_games as i64 - job.dispatched_games;
+            let inflight_games: i64 = self
+                .disp
+                .running()
+                .into_iter()
+                .filter(|t| t.kind == bqs_proto::TaskKind::TaskRating && t.job_id == job.job_id)
+                .map(|t| t.games)
+                .sum();
+            let remaining = spec.total_games as i64 - job.completed_games - inflight_games;
             if remaining < 2 {
                 return Ok(None);
             }
@@ -333,19 +424,20 @@ impl JobSource {
         let resp = match (&sel.mode, &sel.m) {
             (SelfplayMode::Mix, Some(m)) => {
                 let opponent = self.nets.get_network(&m.opponent)?;
-                if opponent.is_none() {
+                let Some(opponent) = opponent else {
                     tracing::warn!(
-                        "[task] gatekeeper 对手网络登记记录缺失 sha={}，本批不下发对手网络",
+                        "[task] gatekeeper 对手网络登记记录缺失 sha={}，本批跳过（对手棋手无对象键必被 collector 拒绝）",
                         m.opponent
                     );
-                }
+                    return Ok(None);
+                };
                 let games = self.asm.games_for(req.threads);
                 let resp = self.asm.gatekeeper_task(
                     &task_id,
                     req,
                     &producer,
                     &m.opponent,
-                    opponent.as_ref(),
+                    Some(&opponent),
                     games,
                 )?;
                 self.jobs.note_dispatch(
