@@ -56,6 +56,33 @@ fn assembler(f: &Fakes) -> TaskAssembler {
     TaskAssembler::new(f.networks.clone(), Arc::new(FakeSigner), cfg, ctl)
 }
 
+fn valid_4x8_fen() -> String {
+    let cfg = bq_env::Variant::DarkChess4x8.config();
+    let bag = |p: bq_env::Player| -> String {
+        (0..bq_env::NUM_PIECE_TYPES_MAX)
+            .filter(|&t| cfg.piece_counts[t] > 0)
+            .map(|t| {
+                format!(
+                    "{}{}",
+                    bq_env::piece_letter(bq_env::PieceType::from_index(t), p),
+                    cfg.piece_counts[t]
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    };
+    let rows = (0..cfg.rows)
+        .map(|_| "*".repeat(cfg.cols))
+        .collect::<Vec<_>>()
+        .join("/");
+    format!(
+        "{} {rows} {}/{} r",
+        cfg.variant.as_str(),
+        bag(bq_env::Player::Red),
+        bag(bq_env::Player::Black)
+    )
+}
+
 #[test]
 fn select_producer_table() {
     let best_onnx = net("best-onnx", "onnx");
@@ -459,6 +486,7 @@ fn rating_task_assembly() {
         network_sha: "opp".into(),
         search: None,
     };
+    let fens = vec![valid_4x8_fen()];
     let resp = asm
         .rating_task(
             "t1",
@@ -468,12 +496,14 @@ fn rating_task_assembly() {
             Some(&cand),
             Some(&opp),
             8,
+            fens.clone(),
             &req,
         )
         .unwrap();
     let g = gen_spec(&resp);
     assert_eq!(g.variant, "4x8");
     assert_eq!(g.games, 8);
+    assert_eq!(g.start_fens, fens, "rating 任务须携带 start_fens");
     assert_eq!(
         g.data_kind,
         bqs_proto::DataKind::DataResnet as i32,
@@ -497,7 +527,17 @@ fn rating_task_assembly() {
         ..Default::default()
     };
     let resp2 = asm
-        .rating_task("t2", "4x8", &side_a, &side_b, Some(&cand), None, 4, &req2)
+        .rating_task(
+            "t2",
+            "4x8",
+            &side_a,
+            &side_b,
+            Some(&cand),
+            None,
+            4,
+            Vec::new(),
+            &req2,
+        )
         .unwrap();
     assert_eq!(resp2.network_url, "get:networks/cand.onnx");
     assert_eq!(resp2.opponent_key, "", "无对手时不签对手键");

@@ -247,6 +247,7 @@ impl TaskAssembler {
 
                 pairs_parallel: spec.pairs_parallel,
                 pair_seed_refresh: spec.pair_seed_refresh,
+                start_fens: spec.start_fens.clone(),
                 behavior: Some(bqs_proto::generation_spec::Behavior::Plays(Plays {
                     player_a,
                     player_b,
@@ -281,6 +282,7 @@ impl TaskAssembler {
         a_net: Option<&Network>,
         b_net: Option<&Network>,
         games: i64,
+        start_fens: Vec<String>,
         req: &TaskRequest,
     ) -> CoreResult<TaskResponse> {
         let data_kind = a_net
@@ -304,6 +306,7 @@ impl TaskAssembler {
                     player_a: Some(self.player_with_search(side_a.clone())),
                     player_b: Some(self.player_with_search(side_b.clone())),
                 })),
+                start_fens,
                 ..Default::default()
             }),
             ..Default::default()

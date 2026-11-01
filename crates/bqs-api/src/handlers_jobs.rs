@@ -79,6 +79,8 @@ pub struct CollectBody {
     pub pairs_parallel: Option<bool>,
 
     pub pair_seed_refresh: Option<bool>,
+
+    pub start_fens: Vec<String>,
 }
 
 impl CollectBody {
@@ -103,6 +105,7 @@ impl CollectBody {
             total_games: self.total_games,
             pairs_parallel: self.pairs_parallel,
             pair_seed_refresh: self.pair_seed_refresh,
+            start_fens: self.start_fens.clone(),
         })
     }
 
@@ -120,6 +123,7 @@ impl CollectBody {
             total_games: c.total_games,
             pairs_parallel: c.pairs_parallel,
             pair_seed_refresh: c.pair_seed_refresh,
+            start_fens: c.start_fens.clone(),
         }
     }
 }
@@ -199,6 +203,8 @@ pub struct RatingBody {
     pub side_a: Option<PlayerSpecJson>,
 
     pub side_b: Option<PlayerSpecJson>,
+
+    pub start_fens: Vec<String>,
 }
 
 impl RatingBody {
@@ -214,6 +220,7 @@ impl RatingBody {
             sprt_beta: self.sprt_beta,
             side_a: self.side_a.as_ref().map(|p| p.to_proto()),
             side_b: self.side_b.as_ref().map(|p| p.to_proto()),
+            start_fens: self.start_fens.clone(),
         }
     }
 
@@ -230,6 +237,7 @@ impl RatingBody {
             sprt_beta: r.sprt_beta,
             side_a: Some(side_a),
             side_b: Some(side_b),
+            start_fens: r.start_fens.clone(),
         }
     }
 }

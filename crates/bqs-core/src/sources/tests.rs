@@ -302,6 +302,7 @@ fn submit_collect(env: &Env, total: u64) -> String {
                 total_games: total,
                 pairs_parallel: None,
                 pair_seed_refresh: None,
+                start_fens: Vec::new(),
             }),
             ..Default::default()
         })
