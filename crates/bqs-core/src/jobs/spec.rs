@@ -232,6 +232,9 @@ pub struct CollectSpecJson {
     pub pairs_parallel: Option<bool>,
 
     pub pair_seed_refresh: Option<bool>,
+
+    #[serde(alias = "start_fens")]
+    pub start_fens: Vec<String>,
 }
 
 impl CollectSpecJson {
@@ -246,6 +249,7 @@ impl CollectSpecJson {
             total_games: s.total_games,
             pairs_parallel: s.pairs_parallel,
             pair_seed_refresh: s.pair_seed_refresh,
+            start_fens: s.start_fens,
         }
     }
 
@@ -260,6 +264,7 @@ impl CollectSpecJson {
             total_games: self.total_games,
             pairs_parallel: self.pairs_parallel,
             pair_seed_refresh: self.pair_seed_refresh,
+            start_fens: self.start_fens.clone(),
         }
     }
 }
@@ -331,6 +336,8 @@ pub struct RatingSpecJson {
     pub side_b: PlayerSpecJson,
     #[serde(alias = "match_id")]
     pub match_id: i64,
+    #[serde(alias = "start_fens")]
+    pub start_fens: Vec<String>,
 }
 
 impl RatingSpecJson {
@@ -347,6 +354,7 @@ impl RatingSpecJson {
             side_a: PlayerSpecJson::default(),
             side_b: PlayerSpecJson::default(),
             match_id: 0,
+            start_fens: s.start_fens,
         }
     }
 
@@ -394,6 +402,7 @@ impl RatingSpecJson {
             sprt_beta: self.sprt_beta,
             side_a: Some(side_a.to_proto()),
             side_b: Some(side_b.to_proto()),
+            start_fens: self.start_fens.clone(),
         }
     }
 }

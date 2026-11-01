@@ -31,6 +31,9 @@ message GenerationSpec {
     Reanalysis reanalysis = 11;
     DeriveFeatures derive = 12;
   }
+  // 指定 BFEN 起始局面（rating 链路下发通道；collect 链路经 CollectionJobSpec 内嵌透传）。
+  // 非空时对局从这些局面开始、按对局序号取模循环选取；覆盖 scenario/initial_revealed。
+  repeated string start_fens = 13;
 }
 
 message Plays {
@@ -478,6 +481,9 @@ message CollectionJobSpec {
   optional bool pairs_parallel = 8;
   // 任务级覆写：对内第二局是否刷新种子（缺省 = 调度器默认 true；rating 类保持同种子传 false）
   optional bool pair_seed_refresh = 9;
+  // 指定 BFEN 起始局面：非空时对局从这些局面开始、按对局序号取模循环选取；
+  // 覆盖 scenario/initial_revealed。空 = 完全走既有路径。
+  repeated string start_fens = 10;
 }
 
 message SelfPlayJobSpec {
@@ -501,6 +507,8 @@ message RatingJobSpec {
   double sprt_beta = 8;
   CollectPlayerSpec side_a = 9;
   CollectPlayerSpec side_b = 10;
+  // 指定 BFEN 起始局面：非空时对局从这些局面开始、按对局序号取模循环选取；覆盖 scenario。
+  repeated string start_fens = 11;
 }
 
 message SubmitJobRequest {

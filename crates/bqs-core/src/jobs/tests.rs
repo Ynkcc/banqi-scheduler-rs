@@ -66,6 +66,7 @@ fn collect_req(
             total_games: total,
             pairs_parallel: None,
             pair_seed_refresh: None,
+            start_fens: Vec::new(),
         }),
         ..Default::default()
     }
@@ -675,6 +676,7 @@ fn rating_req(total: u64, candidate: &str, opponent: &str) -> SubmitJobRequest {
             sprt_beta: 0.0,
             side_a: None,
             side_b: None,
+            start_fens: Vec::new(),
         }),
         ..Default::default()
     }
@@ -1031,4 +1033,132 @@ fn collect_spec_json_roundtrip_pair_overrides() {
     let back = CollectSpecJson::from_proto(empty.to_proto());
     assert_eq!(back.pairs_parallel, None);
     assert_eq!(back.pair_seed_refresh, None);
+}
+
+fn valid_fen(variant: bq_env::Variant) -> String {
+    let cfg = variant.config();
+    let bag = |p: bq_env::Player| -> String {
+        (0..bq_env::NUM_PIECE_TYPES_MAX)
+            .filter(|&t| cfg.piece_counts[t] > 0)
+            .map(|t| {
+                format!(
+                    "{}{}",
+                    bq_env::piece_letter(bq_env::PieceType::from_index(t), p),
+                    cfg.piece_counts[t]
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    };
+    let rows = (0..cfg.rows)
+        .map(|_| "*".repeat(cfg.cols))
+        .collect::<Vec<_>>()
+        .join("/");
+    format!(
+        "{} {rows} {}/{} r",
+        variant.as_str(),
+        bag(bq_env::Player::Red),
+        bag(bq_env::Player::Black)
+    )
+}
+
+fn collect_req_with_fens(variant: &str, fens: Vec<String>) -> SubmitJobRequest {
+    let mut r = collect_req(variant, 16, "", "random", "rule:capture_first");
+    r.collect.as_mut().unwrap().start_fens = fens;
+    r
+}
+
+#[test]
+fn collect_start_fens_validation() {
+    let e = env("");
+    e.f.networks.seed_network("n1", None, "onnx");
+
+    let good = valid_fen(bq_env::Variant::DarkChess4x8);
+
+    let (ok, msg, id) = e
+        .jobs
+        .submit(&collect_req_with_fens("4x8", vec![good.clone(), good.clone()]))
+        .unwrap();
+    assert!(ok, "{msg}");
+    let row = e.jobs.get(&id).unwrap().unwrap();
+    let JobSpecJson::Collect(spec) = JobSpecJson::parse(&row.spec_json).unwrap() else {
+        panic!("collect spec json");
+    };
+    assert_eq!(spec.start_fens, vec![good.clone(), good.clone()]);
+    let proto = spec.to_proto();
+    assert_eq!(proto.start_fens, vec![good.clone(), good.clone()]);
+
+    let (ok, msg, _) = e
+        .jobs
+        .submit(&collect_req_with_fens("4x8", vec![format!("{good} 垃圾字段")]))
+        .unwrap();
+    assert!(!ok, "字段数非法应拒绝");
+    assert!(msg.contains("start_fens[0]"), "{msg}");
+
+    let wrong = valid_fen(bq_env::Variant::DarkChess4x2);
+    let (ok, msg, _) = e
+        .jobs
+        .submit(&collect_req_with_fens("4x8", vec![good.clone(), wrong]))
+        .unwrap();
+    assert!(!ok, "变体不匹配应拒绝");
+    assert!(msg.contains("start_fens[1]"), "{msg}");
+    assert!(msg.contains("变体不匹配"), "{msg}");
+
+    let (ok, msg, _) = e
+        .jobs
+        .submit(&collect_req_with_fens("4x8", vec![String::new()]))
+        .unwrap();
+    assert!(!ok, "空串应拒绝");
+    assert!(msg.contains("为空串"), "{msg}");
+
+    let over = vec![good.clone(); 1025];
+    let (ok, msg, _) = e
+        .jobs
+        .submit(&collect_req_with_fens("4x8", over))
+        .unwrap();
+    assert!(!ok, "超限应拒绝");
+    assert!(msg.contains("超限"), "{msg}");
+
+    let (ok, msg, _) = e
+        .jobs
+        .submit(&collect_req_with_fens("4x8", vec![]))
+        .unwrap();
+    assert!(ok, "空 start_fens 应走既有路径: {msg}");
+}
+
+#[test]
+fn rating_start_fens_validation() {
+    let e = env("");
+    e.f.networks.seed_network("best", None, "onnx");
+    e.f.networks.promote_best("best").unwrap();
+    e.f.networks.seed_network("cand", None, "onnx");
+
+    let good = valid_fen(bq_env::Variant::DarkChess4x8);
+    let mut req = rating_req(20, "cand", "");
+    req.rating.as_mut().unwrap().start_fens = vec![good.clone()];
+    let (ok, msg, id) = e.jobs.submit(&req).unwrap();
+    assert!(ok, "{msg}");
+    let row = e.jobs.get(&id).unwrap().unwrap();
+    let JobSpecJson::Rating(spec) = JobSpecJson::parse(&row.spec_json).unwrap() else {
+        panic!("rating spec json");
+    };
+    assert_eq!(spec.start_fens, vec![good.clone()]);
+
+    let mut req = rating_req(20, "cand", "");
+    req.rating.as_mut().unwrap().variant = "4x2".into();
+    req.rating.as_mut().unwrap().start_fens = vec![good.clone()];
+    let (ok, msg, _) = e.jobs.submit(&req).unwrap();
+    assert!(!ok, "rating 变体与 FEN 不匹配应拒绝");
+    assert!(msg.contains("变体不匹配"), "{msg}");
+
+    let bad = valid_fen(bq_env::Variant::DarkChess4x2);
+    let e2 = env("");
+    e2.f.networks.seed_network("best", None, "onnx");
+    e2.f.networks.promote_best("best").unwrap();
+    e2.f.networks.seed_network("cand", None, "onnx");
+    let mut req = rating_req(20, "cand", "");
+    req.rating.as_mut().unwrap().start_fens = vec![bad];
+    let (ok, msg, _) = e2.jobs.submit(&req).unwrap();
+    assert!(!ok, "rating variant 空时按 cfg.selfplay.variant 回落校验");
+    assert!(msg.contains("变体不匹配"), "{msg}");
 }

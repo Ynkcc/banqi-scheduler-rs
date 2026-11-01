@@ -53,9 +53,38 @@ fn validate_variant(v: &str) -> Result<(), String> {
     }
 }
 
+const MAX_START_FENS: usize = 1024;
+
+fn validate_start_fens(start_fens: &[String], variant: &str) -> Result<(), String> {
+    if start_fens.is_empty() {
+        return Ok(());
+    }
+    if start_fens.len() > MAX_START_FENS {
+        return Err(format!(
+            "start_fens 条数超限（{} > {MAX_START_FENS}）",
+            start_fens.len()
+        ));
+    }
+    for (i, fen) in start_fens.iter().enumerate() {
+        if fen.trim().is_empty() {
+            return Err(format!("start_fens[{i}] 为空串"));
+        }
+        let snap = bq_env::PositionSnapshot::from_fen(fen)
+            .map_err(|e| format!("start_fens[{i}] 非法 BFEN: {e}"))?;
+        if snap.variant.as_str() != variant {
+            return Err(format!(
+                "start_fens[{i}] 变体不匹配: BFEN 为 \"{}\"，任务为 \"{variant}\"",
+                snap.variant.as_str()
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl JobManager {
     pub(super) fn validate_collect(&self, c: &CollectionJobSpec) -> Result<(), String> {
         validate_variant(&c.variant)?;
+        validate_start_fens(&c.start_fens, &c.variant)?;
         if c.total_games < 2 || c.total_games % 2 != 0 {
             return Err(format!(
                 "collect.total_games 必须 ≥2 且为偶数，当前 {}",
@@ -103,6 +132,14 @@ impl JobManager {
     ) -> Result<(PlayerSpecJson, PlayerSpecJson), String> {
         if !r.variant.is_empty() {
             validate_variant(&r.variant)?;
+        }
+        if !r.start_fens.is_empty() {
+            let resolved = if r.variant.is_empty() {
+                self.cfg.selfplay.variant.as_str()
+            } else {
+                r.variant.as_str()
+            };
+            validate_start_fens(&r.start_fens, resolved)?;
         }
 
         if r.total_games != 0 && (r.total_games < 2 || r.total_games % 2 != 0) {
