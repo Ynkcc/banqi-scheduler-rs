@@ -15,7 +15,10 @@ use crate::{
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/api/status", get(handlers_status::status))
-        .route("/api/networks", get(handlers_status::networks))
+        .route(
+            "/api/networks",
+            get(handlers_status::networks).post(handlers_status::register_network),
+        )
         .route(
             "/api/networks/{sha}/promote",
             post(handlers_status::promote),
@@ -56,6 +59,7 @@ pub fn router(state: AppState) -> Router {
             "/api/jobs",
             get(handlers_jobs::list_jobs).post(handlers_jobs::submit_job),
         )
+        .route("/api/jobs/{id}", get(handlers_jobs::get_job))
         .route("/api/jobs/{id}/{action}", post(handlers_jobs::control_job))
         .route("/api/control", post(handlers_control::control))
         .layer(DefaultBodyLimit::max(MAX_BODY_LIMIT))

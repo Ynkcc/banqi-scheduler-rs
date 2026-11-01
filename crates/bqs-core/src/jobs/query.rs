@@ -1,12 +1,12 @@
 use bqs_proto::JobKind;
 
-use super::JobManager;
 use super::spec::{JobSpecJson, RatingSpecJson};
-use crate::{CoreResult, ports::JobRow};
+use super::JobManager;
+use crate::{ports::JobPage, ports::JobQuery, ports::JobRow, CoreResult};
 
 impl JobManager {
-    pub fn list(&self, state: Option<&str>, kind: Option<i64>) -> CoreResult<Vec<JobRow>> {
-        self.store.list_jobs(state, kind)
+    pub fn list(&self, query: &JobQuery) -> CoreResult<JobPage> {
+        self.store.list_jobs(query)
     }
 
     pub fn get(&self, job_id: &str) -> CoreResult<Option<JobRow>> {
@@ -14,7 +14,13 @@ impl JobManager {
     }
 
     pub fn dispatchable(&self, kind: JobKind) -> CoreResult<Vec<JobRow>> {
-        let all = self.store.list_jobs(None, Some(kind as i64))?;
+        let all = self
+            .store
+            .list_jobs(&JobQuery {
+                kind: Some(kind as i64),
+                ..JobQuery::all()
+            })?
+            .items;
         Ok(all
             .into_iter()
             .filter(|j| {
@@ -38,9 +44,12 @@ impl JobManager {
 
     pub fn is_rating_match(&self, match_id: i64) -> bool {
         self.store
-            .list_jobs(None, Some(JobKind::JobRating as i64))
-            .map(|rows| {
-                rows.iter().any(|j| {
+            .list_jobs(&JobQuery {
+                kind: Some(JobKind::JobRating as i64),
+                ..JobQuery::all()
+            })
+            .map(|page| {
+                page.items.iter().any(|j| {
                     matches!(
                         JobSpecJson::parse(&j.spec_json),
                         Some(JobSpecJson::Rating(r)) if r.match_id == match_id

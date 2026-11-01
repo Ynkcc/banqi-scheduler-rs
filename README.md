@@ -49,6 +49,7 @@ SDK。调度器与对象存储之间没有数据面流量（预签名是纯字�
 | `min_client_version` | 字符串字典序（`0.10.0 < 0.9.0` 缺陷） | 语义化版本感知比较 |
 | magic number | 散落各处、部分为 var | `consts.rs` 唯一定义 |
 | 配置解析 | 手写 TOML 风格解析器 | `toml` crate 权威解析（不支持 `;` 注释） |
+| gatekeeper 自动对打 | 无开关 | 请求级 `RegisterNetworkRequest.skip_match`（单次跳过）+ 全局默认 `[gatekeeper] auto_match`；HTTP 等价入口 `POST /api/networks` |
 | eval 启动恢复失败 | 上抛拒启 | 告警降级（作业在 DB，可再恢复） |
 | trainconfig float | `ParseFloat` 放行 inf/NaN | 拒绝 |
 | WebUI 静态资源 | `go:embed` 内嵌 | `server.webui_dist` 目录托管（构建产物解耦） |
@@ -82,8 +83,9 @@ cargo test --workspace        # 全部单测（判定向量 / 迁移链 / 子系
 ## WebUI 路由摘要
 
 只读：`/api/status|networks|matches|eval|eval-config|workers|trainers|episodes|data-stats|tasks|task-stats|train-config|storage(/active|/profiles/{name})`、
-`GET /api/jobs?state=&kind=`（统一 Job 进度列表，completedGames 为上报口径不含在飞）
-控制：`POST /api/networks/{sha}/promote`、`/api/eval/trigger`、`/api/control`、
+`GET /api/jobs?state=&kind=&jobId=&limit=&offset=`（统一 Job 分页列表，响应含 `total/limit/offset`，limit 缺省 100、0 = 全量）、
+`GET /api/jobs/{id}`（单 job 状态查询）
+控制：`POST /api/networks`（手动登记网络，`skipMatch=true` 不发起对打）、`POST /api/networks/{sha}/promote`、`/api/eval/trigger`、`/api/control`、
 `/api/storage/activate`、`POST /api/jobs`（提交 job）、`POST /api/jobs/{id}/{pause|resume|cancel}`；
 `PUT /api/eval-config|train-config|workers/{id}/note|storage/profiles/{name}`；
 `DELETE /api/storage/profiles/{name}`。

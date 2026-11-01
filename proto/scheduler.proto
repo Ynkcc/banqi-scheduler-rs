@@ -131,6 +131,9 @@ message RegisterNetworkRequest {
   string upload_url = 3;
   string notes = 4;
   string format = 5;
+  // 单次上报覆盖：true = 本次仅登记网络，不创建 gatekeeper 对打任务
+  //（不设置时回退到调度器 [gatekeeper] auto_match 配置）
+  optional bool skip_match = 6;
 }
 
 message RegisterNetworkAck {
@@ -534,9 +537,17 @@ message JobStatus {
 message ListJobsRequest {
   string state_filter = 1;
   optional JobKind kind_filter = 2;
+  // 精确 job_id 查询（非空时仅返回该 job）
+  string job_id = 3;
+  // 单页上限；<= 0 表示不分页（全量返回）
+  int64 limit = 4;
+  // 跳过条数（与 limit 配合实现分页）
+  int64 offset = 5;
 }
 message ListJobsReply {
   repeated JobStatus jobs = 1;
+  // 满足过滤条件的总条数（不受 limit/offset 影响）
+  int64 total = 2;
 }
 
 message JobControlRequest {

@@ -3,6 +3,7 @@ use bqs_proto::JobKind;
 use super::spec::JobSpecJson;
 use super::JobManager;
 use crate::consts;
+use crate::ports::JobQuery;
 use crate::CoreResult;
 
 impl JobManager {
@@ -168,8 +169,8 @@ impl JobManager {
             }
             inner.last_preempt = Some(now);
         }
-        let jobs = match self.store.list_jobs(None, None) {
-            Ok(j) => j,
+        let jobs = match self.store.list_jobs(&JobQuery::all()) {
+            Ok(p) => p.items,
             Err(e) => {
                 tracing::warn!("[job] ⚠️ 抢占评估读取 job 列表失败: {e}");
                 return;

@@ -1,7 +1,6 @@
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 use bqs_core::data_kind;
 use bqs_core::jobs::{
@@ -368,75 +367,130 @@ pub async fn submit_job(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListJobsQuery {
     pub state: Option<String>,
+
     pub kind: Option<String>,
+
+    pub job_id: Option<String>,
+
+    pub limit: Option<u64>,
+
+    pub offset: Option<u64>,
+}
+
+const LIST_JOBS_DEFAULT_LIMIT: u64 = 100;
+const LIST_JOBS_MAX_LIMIT: u64 = 1000;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobListView {
+    pub jobs: Vec<JobView>,
+
+    pub total: u64,
+    pub limit: u64,
+    pub offset: u64,
+}
+
+fn job_view(st: &AppState, r: &bqs_core::ports::JobRow) -> JobView {
+    let parsed = JobSpecJson::parse(&r.spec_json);
+    let spec = spec_echo(parsed.as_ref());
+
+    let rating_stats = match (&parsed, JobKind::try_from(r.kind as i32)) {
+        (Some(JobSpecJson::Rating(rt)), Ok(JobKind::JobRating)) if rt.match_id != 0 => st
+            .server
+            .ports
+            .matches
+            .get_match(rt.match_id)
+            .ok()
+            .flatten()
+            .map(|m| {
+                let (sa, sb) = rt.resolved_sides();
+                RatingStatsView {
+                    ll: m.pairs.0[0],
+                    ld: m.pairs.0[1],
+                    dd: m.pairs.0[2],
+                    wl: m.pairs.0[3],
+                    dw: m.pairs.0[4],
+                    ww: m.pairs.0[5],
+                    num_games: m.num_games,
+                    match_status: m.status,
+                    side_a_kind: sa.kind.clone(),
+                    side_b_kind: sb.kind.clone(),
+                }
+            }),
+        _ => None,
+    };
+    JobView {
+        job_id: r.job_id.clone(),
+        kind: JobKind::try_from(r.kind as i32)
+            .map(kind_name)
+            .unwrap_or("unknown")
+            .to_string(),
+        priority: r.priority,
+        state: r.state.clone(),
+        total_games: r.total_games as u64,
+        completed_games: r.completed_games as u64,
+        dispatched_games: r.dispatched_games as u64,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        spec,
+        rating_stats,
+    }
 }
 
 pub async fn list_jobs(
     State(st): State<AppState>,
     Query(q): Query<ListJobsQuery>,
-) -> ApiResult<Json<HashMap<String, Vec<JobView>>>> {
+) -> ApiResult<Json<JobListView>> {
     let kind = match q.kind.as_deref() {
         None | Some("") => None,
         Some(k) => Some(parse_job_kind(k)? as i64),
     };
-    let state = q.state.as_deref().filter(|s| !s.is_empty());
-    let rows = st
+    let (limit, limit_out) = match q.limit {
+        None => (
+            Some(LIST_JOBS_DEFAULT_LIMIT as i64),
+            LIST_JOBS_DEFAULT_LIMIT,
+        ),
+        Some(0) => (None, 0),
+        Some(n) => (
+            Some(n.min(LIST_JOBS_MAX_LIMIT) as i64),
+            n.min(LIST_JOBS_MAX_LIMIT),
+        ),
+    };
+    let offset = q.offset.unwrap_or(0).min(i64::MAX as u64) as i64;
+    let page = st
         .server
         .jobs
-        .list(state, kind)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let jobs = rows
-        .iter()
-        .map(|r| {
-            let parsed = JobSpecJson::parse(&r.spec_json);
-            let spec = spec_echo(parsed.as_ref());
-
-            let rating_stats = match (&parsed, JobKind::try_from(r.kind as i32)) {
-                (Some(JobSpecJson::Rating(rt)), Ok(JobKind::JobRating)) if rt.match_id != 0 => st
-                    .server
-                    .ports
-                    .matches
-                    .get_match(rt.match_id)
-                    .ok()
-                    .flatten()
-                    .map(|m| {
-                        let (sa, sb) = rt.resolved_sides();
-                        RatingStatsView {
-                            ll: m.pairs.0[0],
-                            ld: m.pairs.0[1],
-                            dd: m.pairs.0[2],
-                            wl: m.pairs.0[3],
-                            dw: m.pairs.0[4],
-                            ww: m.pairs.0[5],
-                            num_games: m.num_games,
-                            match_status: m.status,
-                            side_a_kind: sa.kind.clone(),
-                            side_b_kind: sb.kind.clone(),
-                        }
-                    }),
-                _ => None,
-            };
-            JobView {
-                job_id: r.job_id.clone(),
-                kind: JobKind::try_from(r.kind as i32)
-                    .map(kind_name)
-                    .unwrap_or("unknown")
-                    .to_string(),
-                priority: r.priority,
-                state: r.state.clone(),
-                total_games: r.total_games as u64,
-                completed_games: r.completed_games as u64,
-                dispatched_games: r.dispatched_games as u64,
-                created_at: r.created_at,
-                updated_at: r.updated_at,
-                spec,
-                rating_stats,
-            }
+        .list(&bqs_core::ports::JobQuery {
+            job_id: q.job_id.clone().filter(|s| !s.is_empty()),
+            state: q.state.clone().filter(|s| !s.is_empty()),
+            kind,
+            limit,
+            offset,
         })
-        .collect();
-    Ok(Json(HashMap::from([("jobs".to_string(), jobs)])))
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let jobs = page.items.iter().map(|r| job_view(&st, r)).collect();
+    Ok(Json(JobListView {
+        jobs,
+        total: page.total.max(0) as u64,
+        limit: limit_out,
+        offset: q.offset.unwrap_or(0),
+    }))
+}
+
+pub async fn get_job(
+    State(st): State<AppState>,
+    Path(job_id): Path<String>,
+) -> ApiResult<Json<JobView>> {
+    let row = st
+        .server
+        .jobs
+        .get(&job_id)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found(format!("job_not_found:{job_id}")))?;
+    Ok(Json(job_view(&st, &row)))
 }
 
 pub async fn control_job(

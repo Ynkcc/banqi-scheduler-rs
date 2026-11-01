@@ -5,6 +5,7 @@ use bqs_proto::{
 
 use super::*;
 use crate::consts;
+use crate::ports::JobQuery;
 use crate::ports::JobRow;
 use crate::test_support::Fakes;
 use std::sync::Arc;
@@ -525,8 +526,12 @@ fn selfplay_bootstrap_is_idempotent() {
     e.jobs.ensure_selfplay_job().unwrap();
     let rows = e
         .jobs
-        .list(None, Some(JobKind::JobSelfplay as i64))
-        .unwrap();
+        .list(&JobQuery {
+            kind: Some(JobKind::JobSelfplay as i64),
+            ..JobQuery::all()
+        })
+        .unwrap()
+        .items;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].state, "running");
     assert_eq!(rows[0].total_games, 0, "引导的是持续型 job");
@@ -535,8 +540,12 @@ fn selfplay_bootstrap_is_idempotent() {
     e.jobs.ensure_selfplay_job().unwrap();
     assert_eq!(
         e.jobs
-            .list(None, Some(JobKind::JobSelfplay as i64))
+            .list(&JobQuery {
+                kind: Some(JobKind::JobSelfplay as i64),
+                ..JobQuery::all()
+            })
             .unwrap()
+            .items
             .len(),
         1
     );
@@ -545,8 +554,12 @@ fn selfplay_bootstrap_is_idempotent() {
     other.jobs.ensure_selfplay_job().unwrap();
     let id = other
         .jobs
-        .list(None, Some(JobKind::JobSelfplay as i64))
-        .unwrap()[0]
+        .list(&JobQuery {
+            kind: Some(JobKind::JobSelfplay as i64),
+            ..JobQuery::all()
+        })
+        .unwrap()
+        .items[0]
         .job_id
         .clone();
     other.jobs.control(&id, "pause").unwrap();
@@ -554,8 +567,12 @@ fn selfplay_bootstrap_is_idempotent() {
     assert_eq!(
         other
             .jobs
-            .list(None, Some(JobKind::JobSelfplay as i64))
+            .list(&JobQuery {
+                kind: Some(JobKind::JobSelfplay as i64),
+                ..JobQuery::all()
+            })
             .unwrap()
+            .items
             .len(),
         1
     );

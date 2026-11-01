@@ -1,6 +1,6 @@
 use bqs_proto::*;
 
-use crate::{CoreResult, jobs::JobSpecJson, ports::JobRow};
+use crate::{CoreResult, jobs::JobSpecJson, ports::JobQuery, ports::JobRow};
 
 use super::Server;
 
@@ -16,16 +16,18 @@ impl Server {
 
     pub fn list_jobs(&self, req: ListJobsRequest) -> CoreResult<ListJobsReply> {
         let kind = req.kind_filter.map(|k| k as i64);
-        let rows = self.jobs.list(
-            if req.state_filter.is_empty() {
-                None
-            } else {
-                Some(req.state_filter.as_str())
-            },
+        let page = self.jobs.list(&JobQuery {
+            job_id: (!req.job_id.is_empty()).then_some(req.job_id),
+            state: (!req.state_filter.is_empty()).then_some(req.state_filter),
             kind,
-        )?;
-        let jobs = rows.iter().map(|r| self.job_status(r)).collect();
-        Ok(ListJobsReply { jobs })
+            limit: (req.limit > 0).then_some(req.limit),
+            offset: req.offset.max(0),
+        })?;
+        let jobs = page.items.iter().map(|r| self.job_status(r)).collect();
+        Ok(ListJobsReply {
+            jobs,
+            total: page.total,
+        })
     }
 
     pub fn control_job(&self, req: JobControlRequest) -> CoreResult<JobControlReply> {

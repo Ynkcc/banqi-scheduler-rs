@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::{
-    ports::{JobRow, JobStore, JobTaskLink},
+    ports::{JobPage, JobQuery, JobRow, JobStore, JobTaskLink},
     CoreError, CoreResult,
 };
 
@@ -32,12 +32,19 @@ impl JobStore for FakeJobs {
         Ok(self.inner.lock().unwrap().jobs.get(job_id).cloned())
     }
 
-    fn list_jobs(&self, state: Option<&str>, kind: Option<i64>) -> CoreResult<Vec<JobRow>> {
+    fn list_jobs(&self, query: &JobQuery) -> CoreResult<JobPage> {
         let inner = self.inner.lock().unwrap();
         let mut rows: Vec<JobRow> = inner
             .jobs
             .values()
-            .filter(|j| state.is_none_or(|s| j.state == s) && kind.is_none_or(|k| j.kind == k))
+            .filter(|j| {
+                query
+                    .job_id
+                    .as_deref()
+                    .is_none_or(|id| j.job_id == id)
+                    && query.state.as_deref().is_none_or(|s| j.state == s)
+                    && query.kind.is_none_or(|k| j.kind == k)
+            })
             .cloned()
             .collect();
         rows.sort_by(|a, b| {
@@ -45,7 +52,12 @@ impl JobStore for FakeJobs {
                 .cmp(&a.priority)
                 .then(a.created_at.cmp(&b.created_at))
         });
-        Ok(rows)
+        let total = rows.len() as i64;
+        if let Some(l) = query.limit.filter(|l| *l > 0) {
+            let start = query.offset.max(0) as usize;
+            rows = rows.into_iter().skip(start).take(l as usize).collect();
+        }
+        Ok(JobPage { items: rows, total })
     }
 
     fn update_job_state(&self, job_id: &str, state: &str, now: i64) -> CoreResult<bool> {

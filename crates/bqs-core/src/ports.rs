@@ -178,11 +178,37 @@ pub struct JobTaskLink {
     pub games: i64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JobQuery {
+    pub job_id: Option<String>,
+
+    pub state: Option<String>,
+
+    pub kind: Option<i64>,
+
+    pub limit: Option<i64>,
+
+    pub offset: i64,
+}
+
+impl JobQuery {
+    pub fn all() -> Self {
+        Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct JobPage {
+    pub items: Vec<JobRow>,
+
+    pub total: i64,
+}
+
 pub trait JobStore: Send + Sync {
     fn insert_job(&self, row: JobRow) -> CoreResult<()>;
     fn get_job(&self, job_id: &str) -> CoreResult<Option<JobRow>>;
 
-    fn list_jobs(&self, state: Option<&str>, kind: Option<i64>) -> CoreResult<Vec<JobRow>>;
+    fn list_jobs(&self, query: &JobQuery) -> CoreResult<JobPage>;
 
     fn update_job_state(&self, job_id: &str, state: &str, now: i64) -> CoreResult<bool>;
 

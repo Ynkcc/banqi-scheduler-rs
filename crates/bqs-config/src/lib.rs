@@ -202,10 +202,21 @@ impl Default for SearchDefaults {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct GatekeeperSection {
     pub pairs: i32,
+
+    pub auto_match: bool,
+}
+
+impl Default for GatekeeperSection {
+    fn default() -> Self {
+        Self {
+            pairs: 400,
+            auto_match: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -358,6 +369,13 @@ mod tests {
         assert_eq!(cfg.server.listen, ":50051");
         assert_eq!(cfg.selfplay.variant, "4x8");
         assert!(cfg.storage.is_none());
+        assert!(cfg.gatekeeper.auto_match, "默认自动创建对打任务");
+    }
+
+    #[test]
+    fn auto_match_can_disable() {
+        let cfg = Config::parse("[gatekeeper]\nauto_match = false\n", "test").unwrap();
+        assert!(!cfg.gatekeeper.auto_match);
     }
 
     #[test]

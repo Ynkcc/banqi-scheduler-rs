@@ -6,6 +6,7 @@ use axum::Json;
 use bqs_core::dispatch::TaskStateStats;
 use bqs_core::types::Network;
 use bqs_judgment::sprt::{judge, llr, new_bounds};
+use bqs_proto::RegisterNetworkRequest;
 
 use crate::views::{
     EpisodeRateEstimateView, KindStatsView, MatchView, NetworkView, OkView, SprtView, StatusView,
@@ -102,6 +103,70 @@ pub async fn networks(State(st): State<AppState>) -> ApiResult<Json<Vec<NetworkV
     .await
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterNetworkBody {
+    pub sha: String,
+
+    #[serde(default)]
+    pub parent_sha: String,
+
+    #[serde(default)]
+    pub notes: String,
+
+    #[serde(default)]
+    pub format: String,
+
+    #[serde(default)]
+    pub skip_match: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterNetworkView {
+    pub accepted: bool,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_task_hint: Option<String>,
+}
+
+pub async fn register_network(
+    State(st): State<AppState>,
+    bytes: axum::body::Bytes,
+) -> ApiResult<Json<RegisterNetworkView>> {
+    let body: RegisterNetworkBody = crate::decode_body(&bytes, MAX_CONTROL_BODY)?;
+    let sha = body.sha.trim().to_string();
+    if sha.is_empty() {
+        return Err(ApiError::bad_request("sha 不能为空"));
+    }
+    let parent_sha = body.parent_sha.trim().to_string();
+    let notes = body.notes.trim().to_string();
+    let format = body.format.trim().to_string();
+    let skip_match = body.skip_match;
+    read_endpoint(&st, move |st| -> Result<RegisterNetworkView, ApiError> {
+        let ack = st.server.register_network(RegisterNetworkRequest {
+            sha,
+            parent_sha,
+            upload_url: String::new(),
+            notes,
+            format,
+            skip_match: skip_match.then_some(true),
+        })?;
+        tracing::info!(
+            "[webui] manual register network accepted={} skip_match={} message={}",
+            ack.accepted,
+            skip_match,
+            ack.message
+        );
+        Ok(RegisterNetworkView {
+            accepted: ack.accepted,
+            message: ack.message,
+            match_task_hint: (!ack.match_task_hint.is_empty()).then_some(ack.match_task_hint),
+        })
+    })
+    .await
+}
+
 pub async fn promote(
     State(st): State<AppState>,
     Path(sha): Path<String>,
@@ -131,7 +196,11 @@ pub async fn matches(State(st): State<AppState>) -> ApiResult<Json<Vec<MatchView
         let mut side_kinds: BTreeMap<i64, (String, String)> = BTreeMap::new();
         for j in server
             .jobs
-            .list(None, Some(bqs_proto::JobKind::JobRating as i64))
+            .list(&bqs_core::ports::JobQuery {
+                kind: Some(bqs_proto::JobKind::JobRating as i64),
+                ..bqs_core::ports::JobQuery::all()
+            })
+            .map(|p| p.items)
             .unwrap_or_default()
         {
             if let Some(bqs_core::jobs::JobSpecJson::Rating(spec)) =

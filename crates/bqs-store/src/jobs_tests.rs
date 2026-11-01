@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use bqs_core::ports::{JobRow, JobStore, JobTaskLink};
+    use bqs_core::ports::{JobQuery, JobRow, JobStore, JobTaskLink};
 
     fn row(job_id: &str, kind: i64, priority: i64, state: &str, created_at: i64) -> JobRow {
         JobRow {
@@ -32,17 +32,59 @@ mod tests {
         store
             .insert_job(row("j-high", 2, 100, "running", 3))
             .unwrap();
-        let all = store.list_jobs(None, None).unwrap();
-        let ids: Vec<&str> = all.iter().map(|j| j.job_id.as_str()).collect();
+        let all = store.list_jobs(&JobQuery::all()).unwrap();
+        let ids: Vec<&str> = all.items.iter().map(|j| j.job_id.as_str()).collect();
         assert_eq!(
             ids,
             vec!["j-high", "j-low-2", "j-low-1"],
             "优先级 DESC、created_at ASC"
         );
-        let collect = store.list_jobs(None, Some(0)).unwrap();
-        assert_eq!(collect.len(), 2);
-        let running = store.list_jobs(Some("running"), None).unwrap();
-        assert_eq!(running.len(), 3);
+        assert_eq!(all.total, 3);
+        let collect = store
+            .list_jobs(&JobQuery {
+                kind: Some(0),
+                ..JobQuery::all()
+            })
+            .unwrap();
+        assert_eq!(collect.items.len(), 2);
+        let running = store
+            .list_jobs(&JobQuery {
+                state: Some("running".into()),
+                ..JobQuery::all()
+            })
+            .unwrap();
+        assert_eq!(running.items.len(), 3);
+
+        let page = store
+            .list_jobs(&JobQuery {
+                limit: Some(2),
+                offset: 1,
+                ..JobQuery::all()
+            })
+            .unwrap();
+        assert_eq!(page.total, 3, "total 不受 limit/offset 影响");
+        let page_ids: Vec<&str> = page.items.iter().map(|j| j.job_id.as_str()).collect();
+        assert_eq!(page_ids, vec!["j-low-2", "j-low-1"]);
+
+        let one = store
+            .list_jobs(&JobQuery {
+                job_id: Some("j-high".into()),
+                ..JobQuery::all()
+            })
+            .unwrap();
+        assert_eq!(one.total, 1);
+        assert_eq!(one.items[0].job_id, "j-high");
+
+        let combo = store
+            .list_jobs(&JobQuery {
+                state: Some("running".into()),
+                kind: Some(0),
+                limit: Some(1),
+                ..JobQuery::all()
+            })
+            .unwrap();
+        assert_eq!(combo.total, 2);
+        assert_eq!(combo.items.len(), 1);
 
         let r = store.incr_job_dispatched("j-low-1", 32, 10).unwrap();
         assert_eq!(r.dispatched_games, 32);
@@ -70,14 +112,17 @@ mod tests {
             "completed"
         );
 
-        let done = store.list_jobs(Some("completed"), None).unwrap();
-        assert_eq!(done.len(), 1);
-        assert_eq!(done[0].job_id, "j-low-1");
+        let done = store
+            .list_jobs(&JobQuery {
+                state: Some("completed".into()),
+                ..JobQuery::all()
+            })
+            .unwrap();
+        assert_eq!(done.items.len(), 1);
+        assert_eq!(done.items[0].job_id, "j-low-1");
 
-        assert!(
-            store
-                .insert_job(row("j-low-1", 0, 50, "running", 2))
-                .is_err()
-        );
+        assert!(store
+            .insert_job(row("j-low-1", 0, 50, "running", 2))
+            .is_err());
     }
 }

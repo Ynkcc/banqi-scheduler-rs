@@ -1,5 +1,5 @@
+use bqs_core::ports::{JobPage, JobQuery, JobRow, JobStore, JobTaskLink};
 use bqs_core::CoreResult;
-use bqs_core::ports::{JobRow, JobStore, JobTaskLink};
 use rusqlite::OptionalExtension;
 
 use crate::{Store, StoreError};
@@ -87,31 +87,45 @@ impl JobStore for Store {
         })
     }
 
-    fn list_jobs(&self, state: Option<&str>, kind: Option<i64>) -> CoreResult<Vec<JobRow>> {
+    fn list_jobs(&self, query: &JobQuery) -> CoreResult<JobPage> {
         self.with_conn(|conn| {
-            let mut sql = String::from(
-                "SELECT job_id, kind, priority, state, total_games, completed_games,
-				 dispatched_games, spec_json, created_at, updated_at, next_seq FROM jobs",
-            );
-
+            let mut where_sql = String::new();
             let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-            if let Some(s) = state {
-                sql.push_str(if args.is_empty() {
-                    " WHERE state = ?"
-                } else {
-                    " AND state = ?"
-                });
+            if let Some(id) = query.job_id.as_deref().filter(|s| !s.is_empty()) {
+                where_sql.push_str(if args.is_empty() { " WHERE" } else { " AND" });
+                where_sql.push_str(" job_id = ?");
+                args.push(Box::new(id.to_string()));
+            }
+            if let Some(s) = query.state.as_deref().filter(|s| !s.is_empty()) {
+                where_sql.push_str(if args.is_empty() { " WHERE" } else { " AND" });
+                where_sql.push_str(" state = ?");
                 args.push(Box::new(s.to_string()));
             }
-            if let Some(k) = kind {
-                sql.push_str(if args.is_empty() {
-                    " WHERE kind = ?"
-                } else {
-                    " AND kind = ?"
-                });
+            if let Some(k) = query.kind {
+                where_sql.push_str(if args.is_empty() { " WHERE" } else { " AND" });
+                where_sql.push_str(" kind = ?");
                 args.push(Box::new(k));
             }
-            sql.push_str(" ORDER BY priority DESC, created_at ASC");
+
+            let count_sql = format!("SELECT COUNT(*) FROM jobs{where_sql}");
+            let total: i64 = conn
+                .query_row(
+                    &count_sql,
+                    rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())),
+                    |row| row.get(0),
+                )
+                .map_err(StoreError::from)?;
+
+            let mut sql = format!(
+                "SELECT job_id, kind, priority, state, total_games, completed_games,
+				 dispatched_games, spec_json, created_at, updated_at, next_seq FROM jobs{where_sql}
+				 ORDER BY priority DESC, created_at ASC"
+            );
+
+            if let Some(l) = query.limit.filter(|l| *l > 0) {
+                sql.push_str(&format!(" LIMIT {l} OFFSET {}", query.offset));
+            }
+
             let mut stmt = conn.prepare(&sql).map_err(StoreError::from)?;
             let map = |row: &rusqlite::Row| {
                 Ok(row_from(
@@ -136,7 +150,7 @@ impl JobStore for Store {
                 .map_err(StoreError::from)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(StoreError::from)?;
-            Ok(rows)
+            Ok(JobPage { items: rows, total })
         })
     }
 

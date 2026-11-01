@@ -4,6 +4,7 @@ use super::JobManager;
 use super::spec::{
     CollectSpecJson, JobSpecJson, RatingSpecJson, SelfPlaySpecJson, spec_total,
 };
+use crate::ports::JobQuery;
 use crate::CoreResult;
 
 impl JobManager {
@@ -125,7 +126,11 @@ impl JobManager {
     pub fn ensure_selfplay_job(&self) -> CoreResult<()> {
         let existing = self
             .store
-            .list_jobs(None, Some(JobKind::JobSelfplay as i64))?;
+            .list_jobs(&JobQuery {
+                kind: Some(JobKind::JobSelfplay as i64),
+                ..JobQuery::all()
+            })?
+            .items;
         if existing
             .iter()
             .any(|j| j.state == "running" || j.state == "paused")

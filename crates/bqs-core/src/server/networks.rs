@@ -1,6 +1,6 @@
 use bqs_proto::*;
 
-use crate::{CoreResult, assembler::network_key, consts};
+use crate::{assembler::network_key, consts, CoreResult};
 
 use super::Server;
 
@@ -61,6 +61,16 @@ impl Server {
                 Ok(ack(true, "first_network_promoted".into()))
             }
             Some(best) => {
+                let skip_match = req.skip_match.unwrap_or(false);
+                if skip_match || !self.cfg.gatekeeper.auto_match {
+                    let reason = if skip_match {
+                        "skip_match_requested"
+                    } else {
+                        "auto_match_disabled"
+                    };
+                    tracing::info!("[gatekeeper] {reason}，仅登记网络 candidate={}", req.sha);
+                    return Ok(ack(true, format!("{reason}_network_registered")));
+                }
                 let match_id = self.ports.matches.create_match(
                     &req.sha,
                     &best.sha,
