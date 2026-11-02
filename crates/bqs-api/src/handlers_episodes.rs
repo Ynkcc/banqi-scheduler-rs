@@ -31,7 +31,7 @@ fn to_episode_view(e: &Episode) -> EpisodeView {
         black_wins: e.black_wins,
         draw_no_capture: e.draw_no_capture,
         draw_truncation: e.draw_truncation,
-        seed_base: e.seed_base,
+        seed_base: e.seed_base.map(|s| (s as u64).to_string()),
         pairs_parallel: e.pairs_parallel,
         pair_seed_refresh: e.pair_seed_refresh,
     }

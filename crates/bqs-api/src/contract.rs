@@ -227,7 +227,7 @@ fn episode_views() {
         draw_no_capture: 0,
         draw_truncation: 0,
         created_at: 0,
-        seed_base: Some(42),
+        seed_base: Some("42".into()),
         pairs_parallel: Some(true),
         pair_seed_refresh: Some(false),
     };
@@ -318,6 +318,11 @@ fn replay_views() {
         winner: Some(1),
         termination: "decisive".into(),
         has_seed: true,
+        red_is_a: true,
+        seed: Some("42".into()),
+        seed_refreshed: false,
+        pair_index: 0,
+        pair_position: 0,
     };
     assert_keys(
         &keys(&summary),
@@ -328,6 +333,11 @@ fn replay_views() {
             "winner",
             "termination",
             "hasSeed",
+            "redIsA",
+            "seed",
+            "seedRefreshed",
+            "pairIndex",
+            "pairPosition",
         ],
     );
 
@@ -439,7 +449,7 @@ fn replay_views() {
         game_length: 8,
         winner: Some(1),
         termination: "decisive".into(),
-        seed: 42,
+        seed: "42".into(),
         has_seed: true,
         side_a: "NNUE abcdef123456".into(),
         side_b: "规则评估器（capture_first）".into(),

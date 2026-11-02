@@ -284,7 +284,7 @@ pub struct EpisodeView {
     pub created_at: i64,
 
     #[serde(rename = "seedBase")]
-    pub seed_base: Option<i64>,
+    pub seed_base: Option<String>,
 
     #[serde(rename = "pairsParallel")]
     pub pairs_parallel: Option<bool>,
@@ -302,7 +302,7 @@ pub struct EpisodeGameView {
     #[serde(rename = "pairPosition")]
     pub pair_position: i64,
     #[serde(rename = "gameSeed")]
-    pub game_seed: Option<i64>,
+    pub game_seed: Option<String>,
     #[serde(rename = "aIsRed")]
     pub a_is_red: bool,
     #[serde(rename = "seedRefreshed")]
@@ -319,7 +319,7 @@ impl EpisodeGameView {
             game_index: g.game_index,
             pair_index: g.pair_index,
             pair_position: g.pair_position,
-            game_seed: g.game_seed,
+            game_seed: g.game_seed.map(|s| (s as u64).to_string()),
             a_is_red: g.a_is_red,
             seed_refreshed: g.seed_refreshed,
             winner: g.winner,
@@ -441,6 +441,21 @@ pub struct ReplayGameSummaryView {
     pub termination: String,
     #[serde(rename = "hasSeed")]
     pub has_seed: bool,
+
+    #[serde(rename = "redIsA")]
+    pub red_is_a: bool,
+
+    #[serde(rename = "seed")]
+    pub seed: Option<String>,
+
+    #[serde(rename = "seedRefreshed")]
+    pub seed_refreshed: bool,
+
+    #[serde(rename = "pairIndex")]
+    pub pair_index: u32,
+
+    #[serde(rename = "pairPosition")]
+    pub pair_position: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -529,7 +544,7 @@ pub struct ReplayGameView {
     #[serde(rename = "termination")]
     pub termination: String,
     #[serde(rename = "seed")]
-    pub seed: u64,
+    pub seed: String,
     #[serde(rename = "hasSeed")]
     pub has_seed: bool,
     #[serde(rename = "sideA")]

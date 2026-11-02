@@ -344,14 +344,15 @@ pub fn build_game(
         labeler_agree /= labeler_total as f64;
     }
 
-    let red_is_a = steps > 0 && players_i8(0) > 0;
+
+    let red_is_a = crate::handlers_replay::red_is_a_of(rec);
     Ok(ReplayGameView {
         index,
         steps,
         game_length: steps,
         winner: rec.winner,
         termination: crate::handlers_replay::termination_label(rec.termination_reason).to_string(),
-        seed: rec.game_seed.unwrap_or(0),
+        seed: rec.game_seed.map(|s| s.to_string()).unwrap_or_default(),
         has_seed: rec.game_seed.is_some(),
         side_a: crate::handlers_replay::describe_side(&ep.network_sha, ""),
         side_b: crate::handlers_replay::describe_side(&ep.opponent_sha, &ep.opponent_spec),
@@ -517,7 +518,7 @@ mod tests {
         assert_eq!(g.index, 0);
         assert_eq!(g.steps, 8);
         assert_eq!(g.moves.len(), 8);
-        assert_eq!(g.seed, 42);
+        assert_eq!(g.seed, "42");
         assert!(g.has_seed);
         assert_eq!(g.termination, "decisive");
         assert_eq!(g.winner, Some(1));

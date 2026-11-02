@@ -1,11 +1,11 @@
-use axum::Json;
 use axum::extract::{Path, State};
+use axum::Json;
 use prost::Message;
 
 use bqs_proto::EpisodeBatch;
 
-use crate::views::{ReplayGameSummaryView, ReplayListView, data_kind_name};
-use crate::{ApiError, ApiResult, AppState, read_endpoint};
+use crate::views::{data_kind_name, ReplayGameSummaryView, ReplayListView};
+use crate::{read_endpoint, ApiError, ApiResult, AppState};
 
 pub(crate) fn fetch_episode_batch(
     st: &AppState,
@@ -27,6 +27,13 @@ pub(crate) fn termination_label(t: u32) -> &'static str {
         4 => "aborted",
         _ => "unspecified",
     }
+}
+
+pub(crate) fn red_is_a_of(rec: &bqs_proto::GameRecord) -> bool {
+    rec.a_is_red.unwrap_or_else(|| match rec.producers.first() {
+        Some(&p) if p != 0xFF => p == 0,
+        _ => true,
+    })
 }
 
 pub(crate) fn describe_side(sha: &str, spec: &str) -> String {
@@ -69,13 +76,22 @@ pub async fn episode_replay_list(
             .records
             .iter()
             .enumerate()
-            .map(|(i, rec)| ReplayGameSummaryView {
-                index: i,
-                steps: rec.steps as usize,
-                game_length: rec.steps as usize,
-                winner: rec.winner,
-                termination: termination_label(rec.termination_reason).to_string(),
-                has_seed: rec.game_seed.is_some(),
+            .map(|(i, rec)| {
+                let gi = rec.game_index.map(|g| g as usize).unwrap_or(i);
+                ReplayGameSummaryView {
+                    index: i,
+                    steps: rec.steps as usize,
+                    game_length: rec.steps as usize,
+                    winner: rec.winner,
+                    termination: termination_label(rec.termination_reason).to_string(),
+                    has_seed: rec.game_seed.is_some(),
+
+                    red_is_a: red_is_a_of(rec),
+                    seed: rec.game_seed.map(|s| s.to_string()),
+                    seed_refreshed: rec.seed_refreshed.unwrap_or(false),
+                    pair_index: rec.pair_index.unwrap_or((gi / 2) as u32),
+                    pair_position: rec.pair_position.unwrap_or((gi % 2) as u32),
+                }
             })
             .collect();
         Ok(ReplayListView {
@@ -145,5 +161,29 @@ mod tests {
         assert_eq!(describe_side("", ""), "镜像对手（行动未单列）");
 
         assert_eq!(describe_side("rule", "x"), "规则评估器（哨兵预热）");
+    }
+
+    #[test]
+    fn red_is_a_prefers_record_field_and_producer_fallback() {
+        let mut rec = bqs_proto::GameRecord::default();
+        rec.a_is_red = Some(false);
+        assert!(!red_is_a_of(&rec), "a_is_red=Some(false) 应判定 A 执黑");
+        rec.a_is_red = Some(true);
+        assert!(red_is_a_of(&rec));
+
+        let mut old = bqs_proto::GameRecord::default();
+        old.producers = vec![1];
+        assert!(!red_is_a_of(&old));
+        old.producers = vec![0];
+        assert!(red_is_a_of(&old));
+
+        let mut rule = bqs_proto::GameRecord::default();
+        rule.producers = vec![0xFF];
+        assert!(red_is_a_of(&rule));
+
+        let mut tricky = bqs_proto::GameRecord::default();
+        tricky.a_is_red = Some(false);
+        tricky.players = vec![1, u8::MAX];
+        assert!(!red_is_a_of(&tricky));
     }
 }
