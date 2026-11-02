@@ -311,6 +311,7 @@ impl JobSource {
             b_net.as_ref(),
             games,
             spec.start_fens.clone(),
+            spec.scenario,
             req,
         )?;
         self.jobs.note_dispatch(

@@ -497,6 +497,7 @@ fn rating_task_assembly() {
             Some(&opp),
             8,
             fens.clone(),
+            bqs_proto::OpeningScenario::ScenarioAllRevealed as i32,
             &req,
         )
         .unwrap();
@@ -504,6 +505,11 @@ fn rating_task_assembly() {
     assert_eq!(g.variant, "4x8");
     assert_eq!(g.games, 8);
     assert_eq!(g.start_fens, fens, "rating 任务须携带 start_fens");
+    assert_eq!(
+        g.scenario,
+        bqs_proto::OpeningScenario::ScenarioAllRevealed as i32,
+        "rating 任务须携带 scenario"
+    );
     assert_eq!(
         g.data_kind,
         bqs_proto::DataKind::DataResnet as i32,
@@ -536,6 +542,7 @@ fn rating_task_assembly() {
             None,
             4,
             Vec::new(),
+            0,
             &req2,
         )
         .unwrap();

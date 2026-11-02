@@ -509,6 +509,8 @@ message RatingJobSpec {
   CollectPlayerSpec side_b = 10;
   // 指定 BFEN 起始局面：非空时对局从这些局面开始、按对局序号取模循环选取；覆盖 scenario。
   repeated string start_fens = 11;
+  // 开局场景（SCENARIO_STANDARD / SCENARIO_ALL_REVEALED）；start_fens 非空时被覆盖。
+  OpeningScenario scenario = 12;
 }
 
 message SubmitJobRequest {

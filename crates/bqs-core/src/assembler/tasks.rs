@@ -283,6 +283,7 @@ impl TaskAssembler {
         b_net: Option<&Network>,
         games: i64,
         start_fens: Vec<String>,
+        scenario: i32,
         req: &TaskRequest,
     ) -> CoreResult<TaskResponse> {
         let data_kind = a_net
@@ -300,6 +301,7 @@ impl TaskAssembler {
             network_key: a_key.clone(),
             generation: Some(GenerationSpec {
                 variant: variant.to_string(),
+                scenario,
                 data_kind,
                 games: games as u64,
                 behavior: Some(bqs_proto::generation_spec::Behavior::Plays(Plays {

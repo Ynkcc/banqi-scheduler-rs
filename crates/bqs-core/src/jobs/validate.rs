@@ -1,7 +1,7 @@
 use bqs_proto::{CollectPlayerSpec, CollectionJobSpec, RatingJobSpec, SelfPlayJobSpec};
 
 use super::JobManager;
-use super::spec::PlayerSpecJson;
+use super::spec::{PlayerSpecJson, valid_scenario};
 use crate::consts;
 
 fn require_registered_sha(nets: &dyn crate::ports::NetworkStore, sha: &str, note: &str) -> Result<(), String> {
@@ -132,6 +132,12 @@ impl JobManager {
     ) -> Result<(PlayerSpecJson, PlayerSpecJson), String> {
         if !r.variant.is_empty() {
             validate_variant(&r.variant)?;
+        }
+        if !valid_scenario(r.scenario) {
+            return Err(format!(
+                "rating.scenario 非法: {}（可选 0=standard / 1=all_revealed）",
+                r.scenario
+            ));
         }
         if !r.start_fens.is_empty() {
             let resolved = if r.variant.is_empty() {

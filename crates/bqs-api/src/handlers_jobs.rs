@@ -205,11 +205,22 @@ pub struct RatingBody {
     pub side_b: Option<PlayerSpecJson>,
 
     pub start_fens: Vec<String>,
+
+    pub scenario: String,
 }
 
 impl RatingBody {
-    fn to_proto(&self) -> RatingJobSpec {
-        RatingJobSpec {
+    fn to_proto(&self) -> Result<RatingJobSpec, String> {
+        let scenario = match self.scenario.as_str() {
+            "" | "standard" => bqs_proto::OpeningScenario::ScenarioStandard as i32,
+            "all_revealed" => bqs_proto::OpeningScenario::ScenarioAllRevealed as i32,
+            other => {
+                return Err(format!(
+                    "unknown scenario \"{other}\"（可选 standard/all_revealed）"
+                ));
+            }
+        };
+        Ok(RatingJobSpec {
             variant: self.variant.clone(),
             candidate_sha: self.candidate_sha.clone(),
             opponent_sha: self.opponent_sha.clone(),
@@ -221,7 +232,8 @@ impl RatingBody {
             side_a: self.side_a.as_ref().map(|p| p.to_proto()),
             side_b: self.side_b.as_ref().map(|p| p.to_proto()),
             start_fens: self.start_fens.clone(),
-        }
+            scenario,
+        })
     }
 
     fn from_json(r: &RatingSpecJson) -> Self {
@@ -238,6 +250,10 @@ impl RatingBody {
             side_a: Some(side_a),
             side_b: Some(side_b),
             start_fens: r.start_fens.clone(),
+            scenario: match bqs_proto::OpeningScenario::try_from(r.scenario) {
+                Ok(bqs_proto::OpeningScenario::ScenarioAllRevealed) => "all_revealed".into(),
+                _ => "standard".into(),
+            },
         }
     }
 }
@@ -350,7 +366,11 @@ pub async fn submit_job(
             _ => None,
         },
         rating: match kind {
-            JobKind::JobRating => Some(take_spec(body.rating, "rating")?.to_proto()),
+            JobKind::JobRating => Some(
+                take_spec(body.rating, "rating")?
+                    .to_proto()
+                    .map_err(ApiError::bad_request)?,
+            ),
             _ => None,
         },
     };

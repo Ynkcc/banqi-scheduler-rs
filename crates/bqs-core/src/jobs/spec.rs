@@ -338,6 +338,7 @@ pub struct RatingSpecJson {
     pub match_id: i64,
     #[serde(alias = "start_fens")]
     pub start_fens: Vec<String>,
+    pub scenario: i32,
 }
 
 impl RatingSpecJson {
@@ -355,6 +356,7 @@ impl RatingSpecJson {
             side_b: PlayerSpecJson::default(),
             match_id: 0,
             start_fens: s.start_fens,
+            scenario: s.scenario,
         }
     }
 
@@ -403,6 +405,7 @@ impl RatingSpecJson {
             side_a: Some(side_a.to_proto()),
             side_b: Some(side_b.to_proto()),
             start_fens: self.start_fens.clone(),
+            scenario: self.scenario,
         }
     }
 }

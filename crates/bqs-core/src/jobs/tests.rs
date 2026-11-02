@@ -677,6 +677,7 @@ fn rating_req(total: u64, candidate: &str, opponent: &str) -> SubmitJobRequest {
             side_a: None,
             side_b: None,
             start_fens: Vec::new(),
+            scenario: 0,
         }),
         ..Default::default()
     }
@@ -1161,4 +1162,33 @@ fn rating_start_fens_validation() {
     let (ok, msg, _) = e2.jobs.submit(&req).unwrap();
     assert!(!ok, "rating variant 空时按 cfg.selfplay.variant 回落校验");
     assert!(msg.contains("变体不匹配"), "{msg}");
+}
+
+#[test]
+fn rating_scenario_validation() {
+    let e = env("");
+    e.f.networks.seed_network("best", None, "onnx");
+    e.f.networks.promote_best("best").unwrap();
+    e.f.networks.seed_network("cand", None, "onnx");
+
+    let mut req = rating_req(20, "cand", "");
+    req.rating.as_mut().unwrap().scenario =
+        bqs_proto::OpeningScenario::ScenarioAllRevealed as i32;
+    let (ok, msg, id) = e.jobs.submit(&req).unwrap();
+    assert!(ok, "{msg}");
+    let row = e.jobs.get(&id).unwrap().unwrap();
+    let JobSpecJson::Rating(spec) = JobSpecJson::parse(&row.spec_json).unwrap() else {
+        panic!("rating spec json");
+    };
+    assert_eq!(
+        spec.scenario,
+        bqs_proto::OpeningScenario::ScenarioAllRevealed as i32,
+        "scenario 须落库并在查询时回显"
+    );
+
+    let mut req = rating_req(20, "cand", "");
+    req.rating.as_mut().unwrap().scenario = 99;
+    let (ok, msg, _) = e.jobs.submit(&req).unwrap();
+    assert!(!ok, "rating 非法 scenario 应拒绝");
+    assert!(msg.contains("scenario 非法"), "{msg}");
 }
