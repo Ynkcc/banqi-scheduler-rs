@@ -220,9 +220,20 @@ impl ReportRouter {
         if let Some(ack) = self.gate_sink(&task, req)? {
             return Ok(ack);
         }
+
+        if !self.disp.claim_report(&req.task_id) {
+            return Ok(Self::already_reported(&req.task_id));
+        }
+        self.disp.complete_in_flight(&req.task_id);
+        tracing::info!(
+            "[report] non-gating 对局统计收讫 task={} games={} kind={:?}",
+            req.task_id,
+            req.games,
+            task.kind
+        );
         Ok(MatchResultAck {
-            accepted: false,
-            message: "task_is_not_gating".into(),
+            accepted: true,
+            message: "non_gating_stats_ack".into(),
             ..Default::default()
         })
     }
@@ -537,8 +548,13 @@ mod tests {
             .router
             .route(&rating_result("w0", "plain", [0, 0, 2, 0, 0, 0], 4))
             .unwrap();
-        assert!(!ack.accepted);
-        assert_eq!(ack.message, "task_is_not_gating");
+        assert!(ack.accepted, "非 gating 统计按登记表收讫，不拒绝");
+        assert_eq!(ack.message, "non_gating_stats_ack");
+        assert_eq!(
+            e.disp.lookup("plain").unwrap().state,
+            TaskState::Completed,
+            "收讫后任务落终态，重复上报走 already_reported 短路"
+        );
 
         let mut t1 = RunningTask::new(ProtoTaskKind::TaskSelfplay);
         t1.worker_id = "w1".into();

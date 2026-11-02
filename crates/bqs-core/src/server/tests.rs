@@ -428,8 +428,8 @@ fn report_match_result_gate_rejections() {
     assert!(r.message.contains("worker_mismatch"), "{}", r.message);
 
     let r = s.report_match_result(result("t1", "w1")).unwrap();
-    assert!(!r.accepted);
-    assert_eq!(r.message, "task_is_not_gating");
+    assert!(r.accepted, "非 gating 统计按登记表收讫");
+    assert_eq!(r.message, "non_gating_stats_ack");
 }
 
 #[test]
