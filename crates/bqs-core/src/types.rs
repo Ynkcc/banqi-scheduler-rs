@@ -68,6 +68,24 @@ pub struct Episode {
     pub black_wins: i64,
     pub draw_no_capture: i64,
     pub draw_truncation: i64,
+
+    pub seed_base: Option<i64>,
+
+    pub pairs_parallel: Option<bool>,
+
+    pub pair_seed_refresh: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EpisodeGameRow {
+    pub game_index: i64,
+    pub pair_index: i64,
+    pub pair_position: i64,
+    pub game_seed: Option<i64>,
+    pub a_is_red: bool,
+    pub seed_refreshed: bool,
+    pub winner: Option<i64>,
+    pub steps: i64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -88,6 +106,11 @@ pub struct EpisodeDraft {
     pub black_wins: i64,
     pub draw_no_capture: i64,
     pub draw_truncation: i64,
+    pub seed_base: Option<i64>,
+    pub pairs_parallel: Option<bool>,
+    pub pair_seed_refresh: Option<bool>,
+
+    pub games: Vec<EpisodeGameRow>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

@@ -3,13 +3,13 @@ use std::sync::Arc;
 use bqs_proto::{TaskKind, TaskRequest, TaskResponse};
 
 use crate::{
-    CoreResult,
     assembler::TaskAssembler,
     dispatch::{RunningTask, TaskDispatcher},
     featurepack::DeriveQueue,
+    CoreResult,
 };
 
-use super::{TaskSource, new_id};
+use super::{new_id, TaskSource};
 
 pub struct DeriveSource {
     pub derive: Arc<DeriveQueue>,

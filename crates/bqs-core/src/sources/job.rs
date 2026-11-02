@@ -292,6 +292,8 @@ impl JobSource {
         let task_id = new_id();
         let side_a_spec = side_a.to_proto();
         let side_b_spec = side_b.to_proto();
+
+        let seed = crate::sources::random_seed();
         let resp = self.asm.rating_task(
             &task_id,
             &variant,
@@ -300,6 +302,7 @@ impl JobSource {
             a_net.as_ref(),
             b_net.as_ref(),
             games,
+            seed,
             spec.start_fens.clone(),
             spec.scenario,
             req,

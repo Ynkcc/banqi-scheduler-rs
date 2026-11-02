@@ -1,8 +1,8 @@
-use bqs_core::CoreResult;
 use bqs_core::ports::{
     EpisodeDataStats, EpisodeRateEstimate, EpisodeStore, GenerationStats, KindStats,
 };
-use bqs_core::types::{Episode, EpisodeDraft};
+use bqs_core::types::{Episode, EpisodeDraft, EpisodeGameRow};
+use bqs_core::CoreResult;
 
 use std::collections::BTreeMap;
 
@@ -23,9 +23,11 @@ pub fn clamp_episode_page_limit(limit: i64) -> i64 {
     }
 }
 
-const EPISODE_COLUMNS: &str = "id, worker_id, task_id, network_sha, game_count, total_steps, winner, \
+const EPISODE_COLUMNS: &str =
+    "id, worker_id, task_id, network_sha, game_count, total_steps, winner, \
      object_key, created_at, kind, opponent_sha, opponent_spec, match_id, \
-     red_wins, black_wins, draw_no_capture, draw_truncation";
+     red_wins, black_wins, draw_no_capture, draw_truncation, \
+     seed_base, pairs_parallel, pair_seed_refresh";
 
 fn scan_episode_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Episode> {
     Ok(Episode {
@@ -46,6 +48,25 @@ fn scan_episode_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Episode> {
         black_wins: row.get(14)?,
         draw_no_capture: row.get(15)?,
         draw_truncation: row.get(16)?,
+        seed_base: row.get(17)?,
+        pairs_parallel: row.get::<_, Option<i64>>(18)?.map(|v| v != 0),
+        pair_seed_refresh: row.get::<_, Option<i64>>(19)?.map(|v| v != 0),
+    })
+}
+
+const GAME_COLUMNS: &str = "game_index, pair_index, pair_position, game_seed, \
+     a_is_red, seed_refreshed, winner, steps";
+
+fn scan_game_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EpisodeGameRow> {
+    Ok(EpisodeGameRow {
+        game_index: row.get(0)?,
+        pair_index: row.get(1)?,
+        pair_position: row.get(2)?,
+        game_seed: row.get(3)?,
+        a_is_red: row.get::<_, i64>(4)? != 0,
+        seed_refreshed: row.get::<_, i64>(5)? != 0,
+        winner: row.get(6)?,
+        steps: row.get(7)?,
     })
 }
 
@@ -67,8 +88,9 @@ impl EpisodeStore for Store {
             conn.execute(
                 "INSERT INTO episodes (worker_id, task_id, network_sha, game_count, total_steps, \
 					winner, object_key, created_at, kind, opponent_sha, opponent_spec, match_id, \
-					red_wins, black_wins, draw_no_capture, draw_truncation)
-				 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+					red_wins, black_wins, draw_no_capture, draw_truncation, \
+					seed_base, pairs_parallel, pair_seed_refresh)
+				 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 rusqlite::params![
                     draft.worker_id,
                     draft.task_id,
@@ -85,11 +107,36 @@ impl EpisodeStore for Store {
                     draft.red_wins,
                     draft.black_wins,
                     draft.draw_no_capture,
-                    draft.draw_truncation
+                    draft.draw_truncation,
+                    draft.seed_base,
+                    draft.pairs_parallel.map(|v| v as i64),
+                    draft.pair_seed_refresh.map(|v| v as i64),
                 ],
             )
             .map_err(StoreError::from)?;
-            Ok(conn.last_insert_rowid())
+            let episode_id = conn.last_insert_rowid();
+
+            for g in &draft.games {
+                conn.execute(
+                    "INSERT OR REPLACE INTO episode_games
+					 (episode_id, game_index, pair_index, pair_position, game_seed,
+					  a_is_red, seed_refreshed, winner, steps)
+					 VALUES (?,?,?,?,?,?,?,?,?)",
+                    rusqlite::params![
+                        episode_id,
+                        g.game_index,
+                        g.pair_index,
+                        g.pair_position,
+                        g.game_seed,
+                        g.a_is_red as i64,
+                        g.seed_refreshed as i64,
+                        g.winner,
+                        g.steps,
+                    ],
+                )
+                .map_err(StoreError::from)?;
+            }
+            Ok(episode_id)
         })
     }
 
@@ -174,6 +221,61 @@ impl EpisodeStore for Store {
             )
             .optional()
             .map_err(StoreError::from)
+        })
+    }
+
+    fn get_episode_games(&self, episode_id: i64) -> CoreResult<Vec<EpisodeGameRow>> {
+        self.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {GAME_COLUMNS} FROM episode_games
+					 WHERE episode_id = ? ORDER BY game_index ASC"
+                ))
+                .map_err(StoreError::from)?;
+            let rows = stmt
+                .query_map(rusqlite::params![episode_id], scan_game_row)
+                .map_err(StoreError::from)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
+        })
+    }
+
+    fn find_games_by_seed(&self, seed: u64) -> CoreResult<Vec<(Episode, EpisodeGameRow)>> {
+        let seed_i = seed as i64;
+        self.with_conn(|conn| {
+            let ep_cols = EPISODE_COLUMNS
+                .split(", ")
+                .map(|c| format!("e.{c}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {ep_cols}, eg.game_index, eg.pair_index, eg.pair_position,
+					        eg.game_seed, eg.a_is_red, eg.seed_refreshed, eg.winner, eg.steps
+					 FROM episode_games eg JOIN episodes e ON e.id = eg.episode_id
+					 WHERE eg.game_seed = ? ORDER BY eg.rowid DESC LIMIT 100"
+                ))
+                .map_err(StoreError::from)?;
+            let scan = |row: &rusqlite::Row<'_>| -> rusqlite::Result<(Episode, EpisodeGameRow)> {
+                let ep = scan_episode_row(row)?;
+
+                let game = EpisodeGameRow {
+                    game_index: row.get(20)?,
+                    pair_index: row.get(21)?,
+                    pair_position: row.get(22)?,
+                    game_seed: row.get(23)?,
+                    a_is_red: row.get::<_, i64>(24)? != 0,
+                    seed_refreshed: row.get::<_, i64>(25)? != 0,
+                    winner: row.get(26)?,
+                    steps: row.get(27)?,
+                };
+                Ok((ep, game))
+            };
+            let rows = stmt
+                .query_map(rusqlite::params![seed_i], scan)
+                .map_err(StoreError::from)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         })
     }
 
@@ -362,7 +464,66 @@ mod tests {
             black_wins: 2,
             draw_no_capture: 1,
             draw_truncation: 0,
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn episode_games_store_and_seed_lookup() {
+        use bqs_core::types::EpisodeGameRow;
+
+        let (_dir, s) = crate::testutil::open_temp_store();
+
+        let mut d = draft("t1", "episodes/n1/a.epb.gz", 0, 100);
+        d.seed_base = Some(9000);
+        d.pairs_parallel = Some(true);
+        d.pair_seed_refresh = Some(false);
+        d.games = vec![
+            EpisodeGameRow {
+                game_index: 0,
+                pair_index: 0,
+                pair_position: 0,
+                game_seed: Some(9000),
+                a_is_red: true,
+                seed_refreshed: false,
+                winner: Some(1),
+                steps: 42,
+            },
+            EpisodeGameRow {
+                game_index: 1,
+                pair_index: 0,
+                pair_position: 1,
+                game_seed: Some(9000),
+                a_is_red: false,
+                seed_refreshed: false,
+                winner: Some(-1),
+                steps: 36,
+            },
+            EpisodeGameRow {
+                game_index: 2,
+                pair_index: 1,
+                pair_position: 0,
+                game_seed: Some(9001),
+                a_is_red: true,
+                seed_refreshed: false,
+                winner: Some(0),
+                steps: 50,
+            },
+        ];
+        let ep_id = ES::insert_episode(&*s, d).unwrap();
+
+        let games = ES::get_episode_games(&*s, ep_id).unwrap();
+        assert_eq!(games.len(), 3);
+        assert_eq!(games[1].pair_position, 1);
+        assert!(!games[1].a_is_red, "对内第二局应换手（A 执黑）");
+
+        let hits = ES::find_games_by_seed(&*s, 9000).unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].0.id, ep_id);
+        assert_eq!(hits[0].0.seed_base, Some(9000));
+        assert_eq!(hits[0].0.pair_seed_refresh, Some(false));
+
+        assert!(ES::find_games_by_seed(&*s, 777).unwrap().is_empty());
     }
 
     #[test]

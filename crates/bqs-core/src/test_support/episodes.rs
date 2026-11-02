@@ -39,6 +39,9 @@ impl FakeEpisodes {
             black_wins: 0,
             draw_no_capture: 0,
             draw_truncation: 0,
+            seed_base: None,
+            pairs_parallel: None,
+            pair_seed_refresh: None,
         });
     }
 
@@ -100,6 +103,9 @@ impl EpisodeStore for FakeEpisodes {
             black_wins: draft.black_wins,
             draw_no_capture: draft.draw_no_capture,
             draw_truncation: draft.draw_truncation,
+            seed_base: draft.seed_base,
+            pairs_parallel: draft.pairs_parallel,
+            pair_seed_refresh: draft.pair_seed_refresh,
         });
         Ok(id)
     }

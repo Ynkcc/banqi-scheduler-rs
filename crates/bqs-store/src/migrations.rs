@@ -69,6 +69,11 @@ static MIGRATIONS: &[Migration] = &[
         name: "drop eval tables",
         up: migrate_drop_eval_tables,
     },
+    Migration {
+        version: 13,
+        name: "episode game identity index",
+        up: migrate_episode_games,
+    },
 ];
 
 fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, StoreError> {
@@ -368,6 +373,54 @@ fn migrate_episode_breakdown(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+fn migrate_episode_games(conn: &Connection) -> Result<(), StoreError> {
+    for (col, ddl) in [
+        (
+            "seed_base",
+            "ALTER TABLE episodes ADD COLUMN seed_base INTEGER",
+        ),
+        (
+            "pairs_parallel",
+            "ALTER TABLE episodes ADD COLUMN pairs_parallel INTEGER",
+        ),
+        (
+            "pair_seed_refresh",
+            "ALTER TABLE episodes ADD COLUMN pair_seed_refresh INTEGER",
+        ),
+    ] {
+        add_column_if_missing(conn, "episodes", col, ddl)?;
+    }
+
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS episode_games (
+			episode_id INTEGER NOT NULL,
+			game_index INTEGER NOT NULL,
+			pair_index INTEGER NOT NULL DEFAULT 0,
+			pair_position INTEGER NOT NULL DEFAULT 0,
+			game_seed INTEGER,
+			a_is_red INTEGER NOT NULL DEFAULT 0,
+			seed_refreshed INTEGER NOT NULL DEFAULT 0,
+			winner INTEGER,
+			steps INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (episode_id, game_index)
+		)",
+    )
+    .map_err(|e| StoreError::Migration {
+        version: 13,
+        name: "episode game identity index",
+        message: format!("create episode_games: {e}"),
+    })?;
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_episode_games_seed ON episode_games(game_seed)",
+    )
+    .map_err(|e| StoreError::Migration {
+        version: 13,
+        name: "episode game identity index",
+        message: format!("create idx_episode_games_seed: {e}"),
+    })?;
+    Ok(())
+}
+
 fn migrate_feature_packs(conn: &Connection) -> Result<(), StoreError> {
     let stmts: &[&str] = &[
         "CREATE TABLE IF NOT EXISTS feature_packs (
@@ -470,9 +523,7 @@ fn migrate_drop_eval_tables(conn: &Connection) -> Result<(), StoreError> {
         name: "drop eval tables",
         message: format!("drop eval schema: {e}"),
     })?;
-    tracing::info!(
-        "[store] eval 机制已移除：eval_results / eval_queue 表与 JOB_EVAL job 行已清理"
-    );
+    tracing::info!("[store] eval 机制已移除：eval_results / eval_queue 表与 JOB_EVAL job 行已清理");
     Ok(())
 }
 

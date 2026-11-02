@@ -282,6 +282,64 @@ pub struct EpisodeView {
     pub draw_truncation: i64,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
+
+    #[serde(rename = "seedBase")]
+    pub seed_base: Option<i64>,
+
+    #[serde(rename = "pairsParallel")]
+    pub pairs_parallel: Option<bool>,
+
+    #[serde(rename = "pairSeedRefresh")]
+    pub pair_seed_refresh: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EpisodeGameView {
+    #[serde(rename = "gameIndex")]
+    pub game_index: i64,
+    #[serde(rename = "pairIndex")]
+    pub pair_index: i64,
+    #[serde(rename = "pairPosition")]
+    pub pair_position: i64,
+    #[serde(rename = "gameSeed")]
+    pub game_seed: Option<i64>,
+    #[serde(rename = "aIsRed")]
+    pub a_is_red: bool,
+    #[serde(rename = "seedRefreshed")]
+    pub seed_refreshed: bool,
+    #[serde(rename = "winner")]
+    pub winner: Option<i64>,
+    #[serde(rename = "steps")]
+    pub steps: i64,
+}
+
+impl EpisodeGameView {
+    pub fn from_row(g: &bqs_core::types::EpisodeGameRow) -> Self {
+        EpisodeGameView {
+            game_index: g.game_index,
+            pair_index: g.pair_index,
+            pair_position: g.pair_position,
+            game_seed: g.game_seed,
+            a_is_red: g.a_is_red,
+            seed_refreshed: g.seed_refreshed,
+            winner: g.winner,
+            steps: g.steps,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct GameLookupItemView {
+    #[serde(rename = "episode")]
+    pub episode: EpisodeView,
+    #[serde(rename = "game")]
+    pub game: EpisodeGameView,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GameLookupPageView {
+    #[serde(rename = "items")]
+    pub items: Vec<GameLookupItemView>,
 }
 
 #[derive(Debug, Serialize)]

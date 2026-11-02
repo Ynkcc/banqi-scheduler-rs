@@ -76,6 +76,24 @@ impl Server {
             black_wins: meta.black_wins as i64,
             draw_no_capture: meta.draw_no_capture as i64,
             draw_truncation: meta.draw_truncation as i64,
+
+            seed_base: meta.seed_base.map(|s| s as i64),
+            pairs_parallel: meta.pairs_parallel,
+            pair_seed_refresh: meta.pair_seed_refresh,
+            games: meta
+                .games
+                .iter()
+                .map(|g| crate::types::EpisodeGameRow {
+                    game_index: g.game_index as i64,
+                    pair_index: g.pair_index as i64,
+                    pair_position: g.pair_position as i64,
+                    game_seed: g.game_seed.map(|s| s as i64),
+                    a_is_red: g.a_is_red,
+                    seed_refreshed: g.seed_refreshed,
+                    winner: g.winner.map(|w| w as i64),
+                    steps: g.steps as i64,
+                })
+                .collect(),
         };
         self.ports.episodes.insert_episode(draft)?;
         tracing::info!(

@@ -147,6 +147,10 @@ fn episode_meta(task_id: &str, worker: &str, sha: &str) -> EpisodeMeta {
         black_wins: 1,
         draw_no_capture: 1,
         draw_truncation: 0,
+        seed_base: Some(1234),
+        pairs_parallel: Some(true),
+        pair_seed_refresh: Some(true),
+        games: Vec::new(),
     }
 }
 

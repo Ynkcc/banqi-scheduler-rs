@@ -227,6 +227,9 @@ fn episode_views() {
         draw_no_capture: 0,
         draw_truncation: 0,
         created_at: 0,
+        seed_base: Some(42),
+        pairs_parallel: Some(true),
+        pair_seed_refresh: Some(false),
     };
     assert_keys(
         &keys(&ev),
@@ -248,6 +251,9 @@ fn episode_views() {
             "drawNoCapture",
             "drawTruncation",
             "createdAt",
+            "seedBase",
+            "pairsParallel",
+            "pairSeedRefresh",
         ],
     );
     let page = EpisodePageView {

@@ -91,6 +91,17 @@ message SelfPlayParams {
   reserved 2, 3, 4, 6;
 }
 
+message GameSummary {
+  uint32 game_index = 1;
+  uint32 pair_index = 2;
+  uint32 pair_position = 3;
+  optional uint64 game_seed = 4;
+  bool a_is_red = 5;
+  bool seed_refreshed = 6;
+  optional int32 winner = 7;
+  uint32 steps = 8;
+}
+
 message EpisodeMeta {
   string worker_id = 1;
   string task_id = 2;
@@ -106,6 +117,13 @@ message EpisodeMeta {
   int32 black_wins = 12;
   int32 draw_no_capture = 13;
   int32 draw_truncation = 14;
+  // 任务下发的基础种子（GenerationSpec.seed；未下发时缺省）
+  optional uint64 seed_base = 15;
+  // 与任务一致的配对语义快照（便于前端核对实际执行配置）
+  optional bool pairs_parallel = 16;
+  optional bool pair_seed_refresh = 17;
+  // 逐局标识摘要（对局反查的索引来源）
+  repeated GameSummary games = 18;
 }
 
 message EpisodeAck {
@@ -245,6 +263,18 @@ message GameRecord {
   bytes hidden_counts = 26;
   bytes chosen_value_gaps = 27;
   bytes expl_random = 28;
+
+  // —— 对局标识（对局反查 / 配对关联）——
+  // 任务内全局序号（0-based，与派发顺序一致）
+  optional uint32 game_index = 29;
+  // 对序号 = game_index / 2（收集器按两局一组执行）
+  optional uint32 pair_index = 30;
+  // 对内位置：0 = 第一局，1 = 第二局
+  optional uint32 pair_position = 31;
+  // 玩家 A（产数据方）是否执红：对内两局应互补（换手）
+  optional bool a_is_red = 32;
+  // 本局种子是否为对内刷新种子（pair_seed_refresh=true 时对内第二局为 true）
+  optional bool seed_refreshed = 33;
 }
 
 message NnueMeta {

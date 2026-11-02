@@ -1,11 +1,14 @@
-use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::Uri;
+use axum::Json;
 
 use bqs_core::types::Episode;
 
-use crate::views::{DataStatsView, EpisodePageView, EpisodeView, data_kind_name};
-use crate::{ApiError, ApiResult, AppState, int_query, read_endpoint};
+use crate::views::{
+    data_kind_name, DataStatsView, EpisodeGameView, EpisodePageView, EpisodeView,
+    GameLookupItemView, GameLookupPageView,
+};
+use crate::{int_query, read_endpoint, ApiError, ApiResult, AppState};
 
 use bqs_store::clamp_episode_page_limit;
 
@@ -28,7 +31,59 @@ fn to_episode_view(e: &Episode) -> EpisodeView {
         black_wins: e.black_wins,
         draw_no_capture: e.draw_no_capture,
         draw_truncation: e.draw_truncation,
+        seed_base: e.seed_base,
+        pairs_parallel: e.pairs_parallel,
+        pair_seed_refresh: e.pair_seed_refresh,
     }
+}
+
+fn u64_query(query: Option<&str>, key: &str) -> Option<u64> {
+    let q = query?;
+    for pair in q.split('&') {
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        if k == key {
+            return v.parse().ok();
+        }
+    }
+    None
+}
+
+pub async fn episode_games(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<EpisodeGameView>>> {
+    let id: i64 = id
+        .parse()
+        .map_err(|_| ApiError::bad_request("invalid episode id"))?;
+    read_endpoint(&st, move |st| -> Result<Vec<EpisodeGameView>, ApiError> {
+        if st.server.ports.episodes.get_episode(id)?.is_none() {
+            return Err(ApiError::not_found(format!("episode {id} 不存在")));
+        }
+        let rows = st.server.ports.episodes.get_episode_games(id)?;
+        Ok(rows.iter().map(EpisodeGameView::from_row).collect())
+    })
+    .await
+}
+
+pub async fn lookup_game(
+    State(st): State<AppState>,
+    uri: Uri,
+) -> ApiResult<Json<GameLookupPageView>> {
+    let Some(seed) = u64_query(uri.query(), "seed") else {
+        return Err(ApiError::bad_request("缺少 seed 查询参数"));
+    };
+    read_endpoint(&st, move |st| -> Result<GameLookupPageView, ApiError> {
+        let hits = st.server.ports.episodes.find_games_by_seed(seed)?;
+        let mut items = Vec::with_capacity(hits.len());
+        for (ep, game) in hits {
+            items.push(GameLookupItemView {
+                episode: to_episode_view(&ep),
+                game: EpisodeGameView::from_row(&game),
+            });
+        }
+        Ok(GameLookupPageView { items })
+    })
+    .await
 }
 
 pub async fn episodes(State(st): State<AppState>, uri: Uri) -> ApiResult<Json<EpisodePageView>> {

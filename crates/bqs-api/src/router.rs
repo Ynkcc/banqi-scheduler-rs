@@ -25,6 +25,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/workers/{id}/note", put(handlers_status::worker_note))
         .route("/api/episodes", get(handlers_episodes::episodes))
         .route(
+            "/api/episodes/lookup-game",
+            get(handlers_episodes::lookup_game),
+        )
+        .route(
+            "/api/episodes/{id}/games",
+            get(handlers_episodes::episode_games),
+        )
+        .route(
             "/api/episodes/{id}/replay",
             get(handlers_replay::episode_replay_list),
         )

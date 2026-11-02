@@ -45,10 +45,7 @@ impl TaskAssembler {
                 pair_seed_refresh: spec.pair_seed_refresh,
                 start_fens: spec.start_fens.clone(),
                 behavior: Some(bqs_proto::generation_spec::Behavior::Plays(
-                    bqs_proto::Plays {
-                        player_a,
-                        player_b,
-                    },
+                    bqs_proto::Plays { player_a, player_b },
                 )),
             }),
             ..Default::default()
@@ -71,6 +68,7 @@ impl TaskAssembler {
         Ok(resp)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn rating_task(
         &self,
         task_id: &str,
@@ -80,6 +78,7 @@ impl TaskAssembler {
         a_net: Option<&Network>,
         b_net: Option<&Network>,
         games: i64,
+        seed: u64,
         start_fens: Vec<String>,
         scenario: i32,
         req: &TaskRequest,
@@ -102,6 +101,11 @@ impl TaskAssembler {
                 scenario,
                 data_kind,
                 games: games as u64,
+
+                seed: Some(seed),
+
+                pairs_parallel: Some(true),
+                pair_seed_refresh: Some(false),
                 behavior: Some(bqs_proto::generation_spec::Behavior::Plays(
                     bqs_proto::Plays {
                         player_a: Some(self.player_with_search(side_a.clone())),

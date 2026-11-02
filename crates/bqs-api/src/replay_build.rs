@@ -495,6 +495,9 @@ mod tests {
             black_wins: 0,
             draw_no_capture: 0,
             draw_truncation: 0,
+            seed_base: None,
+            pairs_parallel: None,
+            pair_seed_refresh: None,
         }
     }
 

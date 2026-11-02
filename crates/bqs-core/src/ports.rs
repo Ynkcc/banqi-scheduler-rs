@@ -47,6 +47,19 @@ pub trait EpisodeStore: Send + Sync {
     fn get_episode_by_task(&self, task_id: &str) -> CoreResult<Option<Episode>>;
     fn insert_episode(&self, draft: EpisodeDraft) -> CoreResult<i64>;
 
+    fn get_episode_games(&self, episode_id: i64) -> CoreResult<Vec<crate::types::EpisodeGameRow>> {
+        let _ = episode_id;
+        Ok(Vec::new())
+    }
+
+    fn find_games_by_seed(
+        &self,
+        seed: u64,
+    ) -> CoreResult<Vec<(Episode, crate::types::EpisodeGameRow)>> {
+        let _ = seed;
+        Ok(Vec::new())
+    }
+
     fn list_episode_keys(
         &self,
         after_key: &str,
