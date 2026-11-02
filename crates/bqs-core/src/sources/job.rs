@@ -1,15 +1,13 @@
 use std::sync::Arc;
 
 use bqs_config::Config;
-use bqs_proto::{CollectSearchParams, TaskRequest, TaskResponse};
+use bqs_proto::{TaskRequest, TaskResponse};
 
 use crate::{
-    assembler::{games_for_threads, SelfplayMode, TaskAssembler},
-    control::Control,
+    assembler::{games_for_threads, TaskAssembler},
     dispatch::TaskDispatcher,
     jobs::{JobManager, JobSpecJson},
     ports::{JobRow, MatchStore, NetworkStore},
-    reanalysis::ReanaQueue,
     CoreResult,
 };
 
@@ -20,9 +18,7 @@ pub struct JobSource {
     pub matches: Arc<dyn MatchStore>,
     pub nets: Arc<dyn NetworkStore>,
     pub disp: Arc<TaskDispatcher>,
-    pub reana: Arc<ReanaQueue>,
     pub asm: Arc<TaskAssembler>,
-    pub ctl: Arc<Control>,
     pub cfg: Arc<Config>,
 }
 
@@ -33,7 +29,6 @@ impl TaskSource for JobSource {
         for kind in [
             bqs_proto::JobKind::JobRating,
             bqs_proto::JobKind::JobCollect,
-            bqs_proto::JobKind::JobSelfplay,
         ] {
             candidates.extend(self.jobs.dispatchable(kind)?);
         }
@@ -51,11 +46,6 @@ impl TaskSource for JobSource {
                 }
                 Ok(bqs_proto::JobKind::JobRating) => {
                     if let Some(resp) = self.dispatch_rating(&job, req)? {
-                        return Ok(Some(resp));
-                    }
-                }
-                Ok(bqs_proto::JobKind::JobSelfplay) => {
-                    if let Some(resp) = self.dispatch_selfplay(req)? {
                         return Ok(Some(resp));
                     }
                 }
@@ -338,168 +328,6 @@ impl JobSource {
             m.opponent,
             games
         );
-        Ok(Some(resp))
-    }
-
-    fn dispatch_selfplay(&self, req: &TaskRequest) -> CoreResult<Option<TaskResponse>> {
-        if self.ctl.manual_paused() {
-            return Ok(Some(TaskResponse {
-                message: "self_play_paused".into(),
-                ..Default::default()
-            }));
-        }
-        if self.ctl.auto_paused() {
-            return Ok(Some(TaskResponse {
-                message: format!("self_play_auto_paused: {}", self.ctl.auto_pause_reason()),
-                ..Default::default()
-            }));
-        }
-
-        let Some(job) = self
-            .jobs
-            .dispatchable(bqs_proto::JobKind::JobSelfplay)?
-            .into_iter()
-            .next()
-        else {
-            return Ok(None);
-        };
-        let spec = JobSpecJson::parse(&job.spec_json);
-        let search: Option<CollectSearchParams> = match &spec {
-            Some(JobSpecJson::SelfPlay(s)) => s.search.as_ref().and_then(|s| s.to_proto()),
-            _ => None,
-        };
-
-        let mut pm = self.matches.pending_match()?;
-        if let Some(m) = &pm {
-            if self.jobs.is_rating_match(m.id) {
-                pm = None;
-            }
-        }
-        let best = self.nets.get_best()?;
-
-        if pm.is_none()
-            && best.is_none()
-            && self.cfg.selfplay.best == crate::consts::RULE_SENTINEL_SHA
-        {
-            let task_id = new_id();
-            let games = self.asm.games_for(req.threads);
-            let resp = self.asm.sentinel_task(&task_id, req);
-            self.reana.note_selfplay_assigned();
-            self.jobs.note_dispatch(
-                &task_id,
-                &job.job_id,
-                games,
-                &req.worker_id,
-                bqs_proto::TaskKind::TaskSelfplay,
-                crate::consts::RULE_SENTINEL_SHA,
-                "",
-                "",
-                0,
-                None,
-            )?;
-            tracing::info!(
-                "[task] selfplay(rule-sentinel) assigned worker={} task={} job={} games={} data_kind=nnue",
-                req.worker_id,
-                task_id,
-                job.job_id,
-                games
-            );
-            return Ok(Some(resp));
-        }
-        let sel = self
-            .asm
-            .resolve_selfplay(best, pm, self.ctl.data_kind() as i32)?;
-        if sel.mode == SelfplayMode::None {
-            return Ok(Some(TaskResponse {
-                message: sel.none_message,
-                ..Default::default()
-            }));
-        }
-        let producer = sel
-            .producer
-            .as_ref()
-            .ok_or_else(|| crate::CoreError::Internal("selfplay producer missing".into()))?
-            .clone();
-        let task_id = new_id();
-        self.reana.note_selfplay_assigned();
-
-        let resp = match (&sel.mode, &sel.m) {
-            (SelfplayMode::Mix, Some(m)) => {
-                let opponent = self.nets.get_network(&m.opponent)?;
-                let Some(opponent) = opponent else {
-                    tracing::warn!(
-                        "[task] gatekeeper 对手网络登记记录缺失 sha={}，本批跳过（对手棋手无对象键必被 collector 拒绝）",
-                        m.opponent
-                    );
-                    return Ok(None);
-                };
-                let games = self.asm.games_for(req.threads);
-                let resp = self.asm.gatekeeper_task(
-                    &task_id,
-                    req,
-                    &producer,
-                    &m.opponent,
-                    Some(&opponent),
-                    games,
-                )?;
-                self.jobs.note_dispatch(
-                    &task_id,
-                    &job.job_id,
-                    games,
-                    &req.worker_id,
-                    bqs_proto::TaskKind::TaskSelfplay,
-                    &producer.sha,
-                    &m.opponent,
-                    "",
-                    m.id,
-                    None,
-                )?;
-                tracing::info!(
-                    "[task] gatekeeper assigned worker={} task={} job={} match={} candidate={} opponent={} games={}",
-                    req.worker_id,
-                    task_id,
-                    job.job_id,
-                    m.id,
-                    producer.sha,
-                    m.opponent,
-                    games
-                );
-                resp
-            }
-
-            _ => {
-                let games = self.asm.games_for(req.threads);
-                let resp = self.asm.selfplay_task(
-                    &task_id,
-                    req,
-                    &producer,
-                    &self.cfg.selfplay.train_match_opponent,
-                    search,
-                    games,
-                )?;
-                self.jobs.note_dispatch(
-                    &task_id,
-                    &job.job_id,
-                    games,
-                    &req.worker_id,
-                    bqs_proto::TaskKind::TaskSelfplay,
-                    &producer.sha,
-                    "",
-                    "",
-                    0,
-                    None,
-                )?;
-                tracing::info!(
-                    "[task] selfplay assigned worker={} task={} job={} network={} games={}",
-                    req.worker_id,
-                    task_id,
-                    job.job_id,
-                    producer.sha,
-                    games
-                );
-                resp
-            }
-        };
         Ok(Some(resp))
     }
 }

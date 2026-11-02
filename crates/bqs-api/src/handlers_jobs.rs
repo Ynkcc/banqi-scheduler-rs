@@ -4,12 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use bqs_core::data_kind;
 use bqs_core::jobs::{
-    CollectSpecJson, JobSpecJson, PlayerSpecJson, RatingSpecJson, SearchSpecJson, SeedStrategyJson,
-    SelfPlaySpecJson,
+    CollectSpecJson, JobSpecJson, PlayerSpecJson, RatingSpecJson, SeedStrategyJson,
 };
-use bqs_proto::{
-    CollectionJobSpec, JobKind, RatingJobSpec, SeedStrategy, SelfPlayJobSpec, SubmitJobRequest,
-};
+use bqs_proto::{CollectionJobSpec, JobKind, RatingJobSpec, SeedStrategy, SubmitJobRequest};
 
 use crate::{ApiError, ApiResult, AppState};
 
@@ -128,46 +125,6 @@ impl CollectBody {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct SelfPlayBody {
-    pub variant: String,
-
-    pub data_kind: String,
-    pub network_sha: String,
-    pub opponent_sha: String,
-    pub mix_ratio: f64,
-    pub search: Option<SearchSpecJson>,
-
-    pub total_games: u64,
-}
-
-impl SelfPlayBody {
-    fn to_proto(&self) -> Result<SelfPlayJobSpec, String> {
-        Ok(SelfPlayJobSpec {
-            variant: self.variant.clone(),
-            data_kind: data_kind::parse(&self.data_kind).map(data_kind::to_proto)?,
-            network_sha: self.network_sha.clone(),
-            opponent_sha: self.opponent_sha.clone(),
-            mix_ratio: self.mix_ratio,
-            search: self.search.as_ref().and_then(|s| s.to_proto()),
-            total_games: self.total_games,
-        })
-    }
-
-    fn from_json(s: &SelfPlaySpecJson) -> Self {
-        Self {
-            variant: s.variant.clone(),
-            data_kind: data_kind::display_name(s.data_kind as i64).into(),
-            network_sha: s.network_sha.clone(),
-            opponent_sha: s.opponent_sha.clone(),
-            mix_ratio: s.mix_ratio,
-            search: s.search.clone(),
-            total_games: s.total_games,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RatingStatsView {
@@ -266,7 +223,6 @@ pub struct SubmitJobBody {
     pub priority: u32,
     pub requester: String,
     pub collect: Option<CollectBody>,
-    pub selfplay: Option<SelfPlayBody>,
     pub rating: Option<RatingBody>,
 }
 
@@ -308,10 +264,12 @@ pub struct JobControlView {
 fn parse_job_kind(s: &str) -> Result<JobKind, ApiError> {
     match s.trim().to_ascii_lowercase().as_str() {
         "collect" => Ok(JobKind::JobCollect),
-        "selfplay" => Ok(JobKind::JobSelfplay),
         "rating" => Ok(JobKind::JobRating),
+        "selfplay" => Err(ApiError::bad_request(
+            "selfplay job 已下线（自对弈编排已移除，仅支持 collect / rating）",
+        )),
         other => Err(ApiError::bad_request(format!(
-            "未知 job kind {other:?}（可选 collect / selfplay / rating）"
+            "未知 job kind {other:?}（可选 collect / rating）"
         ))),
     }
 }
@@ -331,7 +289,6 @@ fn take_spec<T>(spec: Option<T>, kind: &str) -> Result<T, ApiError> {
 fn spec_echo(parsed: Option<&JobSpecJson>) -> serde_json::Value {
     match parsed {
         Some(JobSpecJson::Collect(c)) => serde_json::to_value(CollectBody::from_json(c)),
-        Some(JobSpecJson::SelfPlay(s)) => serde_json::to_value(SelfPlayBody::from_json(s)),
         Some(JobSpecJson::Rating(rt)) => serde_json::to_value(RatingBody::from_json(rt)),
         None => Ok(serde_json::Value::Null),
     }
@@ -357,14 +314,7 @@ pub async fn submit_job(
             ),
             _ => None,
         },
-        selfplay: match kind {
-            JobKind::JobSelfplay => Some(
-                take_spec(body.selfplay, "selfplay")?
-                    .to_proto()
-                    .map_err(ApiError::bad_request)?,
-            ),
-            _ => None,
-        },
+        selfplay: None,
         rating: match kind {
             JobKind::JobRating => Some(
                 take_spec(body.rating, "rating")?

@@ -11,13 +11,6 @@ pub struct OkView {
 
 pub use bqs_core::data_kind::display_name as data_kind_name;
 
-pub fn balance_mode_name(mode: bqs_config::BalanceMode) -> &'static str {
-    match mode {
-        bqs_config::BalanceMode::Warn => "warn",
-        bqs_config::BalanceMode::Pause => "pause",
-    }
-}
-
 #[derive(Debug, Serialize)]
 pub struct NetworkView {
     #[serde(rename = "sha")]
@@ -79,8 +72,6 @@ impl From<StoreCounts> for CountsView {
 pub struct StatusView {
     #[serde(rename = "variant")]
     pub variant: String,
-    #[serde(rename = "paused")]
-    pub paused: bool,
     #[serde(rename = "initialRevealed")]
     pub initial_revealed: i32,
     #[serde(rename = "dataKind")]
@@ -89,18 +80,12 @@ pub struct StatusView {
     pub min_client_version: String,
     #[serde(rename = "sprt")]
     pub sprt: SprtView,
-    #[serde(rename = "best")]
-    pub best: Option<NetworkView>,
     #[serde(rename = "counts")]
     pub counts: CountsView,
     #[serde(rename = "shouldStop")]
     pub should_stop: bool,
     #[serde(rename = "stopReason")]
     pub stop_reason: String,
-    #[serde(rename = "autoPaused")]
-    pub auto_paused: bool,
-    #[serde(rename = "autoPauseReason")]
-    pub auto_pause_reason: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -233,68 +218,6 @@ pub struct TaskView {
 
     #[serde(rename = "jobId")]
     pub job_id: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct BalanceConfigView {
-    #[serde(rename = "enabled")]
-    pub enabled: bool,
-    #[serde(rename = "mode")]
-    pub mode: String,
-    #[serde(rename = "trainerOnlineSeconds")]
-    pub trainer_online_seconds: i64,
-    #[serde(rename = "stalledSeconds")]
-    pub stalled_seconds: i64,
-    #[serde(rename = "backlogPauseBatches")]
-    pub backlog_pause_batches: i64,
-    #[serde(rename = "pauseReanalysis")]
-    pub pause_reanalysis: bool,
-}
-
-#[derive(Debug, Serialize)]
-pub struct TrainerView {
-    #[serde(rename = "id")]
-    pub id: String,
-    #[serde(rename = "lastSeen")]
-    pub last_seen: i64,
-    #[serde(rename = "online")]
-    pub online: bool,
-    #[serde(rename = "variant")]
-    pub variant: String,
-    #[serde(rename = "dataKind")]
-    pub data_kind: String,
-    #[serde(rename = "consumedKey")]
-    pub consumed_key: String,
-    #[serde(rename = "consumedId")]
-    pub consumed_id: i64,
-    #[serde(rename = "registeredMaxId")]
-    pub registered_max_id: i64,
-    #[serde(rename = "unconsumedBatches")]
-    pub unconsumed_batches: i64,
-    #[serde(rename = "samplesConsumed")]
-    pub samples_consumed: i64,
-    #[serde(rename = "backlog")]
-    pub backlog: i64,
-    #[serde(rename = "buffered")]
-    pub buffered: i64,
-    #[serde(rename = "healthStatus")]
-    pub health_status: String,
-    #[serde(rename = "lastError")]
-    pub last_error: String,
-    #[serde(rename = "progress")]
-    pub progress: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct TrainersView {
-    #[serde(rename = "config")]
-    pub config: BalanceConfigView,
-    #[serde(rename = "autoPaused")]
-    pub auto_paused: bool,
-    #[serde(rename = "autoPauseReason")]
-    pub auto_pause_reason: String,
-    #[serde(rename = "trainers")]
-    pub trainers: Vec<TrainerView>,
 }
 
 #[derive(Debug, Serialize)]

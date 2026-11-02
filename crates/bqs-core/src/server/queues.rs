@@ -1,73 +1,14 @@
 use bqs_proto::*;
 
 use crate::{
-    CoreResult,
     consts,
-    featurepack::{DEFAULT_FEATURE_PACK_VERSION, PendingDerive, feature_pack_key},
-    reanalysis::PendingReanalysis,
+    featurepack::{feature_pack_key, PendingDerive, DEFAULT_FEATURE_PACK_VERSION},
+    CoreResult,
 };
 
 use super::Server;
 
 impl Server {
-    pub fn submit_reanalysis(
-        &self,
-        req: SubmitReanalysisRequest,
-    ) -> CoreResult<SubmitReanalysisReply> {
-        let reply = |accepted: bool, message: String, queued: u64| SubmitReanalysisReply {
-            accepted,
-            message,
-            queued_positions: queued,
-        };
-        if !self.reana.enabled() {
-            return Ok(reply(
-                false,
-                "服务端未启用局面重搜（配置 reanalysis.interval_tasks = 0）".into(),
-                0,
-            ));
-        }
-        if req.variant != self.cfg.selfplay.variant {
-            return Ok(reply(
-                false,
-                format!(
-                    "变体不一致：请求 \"{}\"，服务端 \"{}\"（拒绝跨变体重搜）",
-                    req.variant, self.cfg.selfplay.variant
-                ),
-                0,
-            ));
-        }
-        if req.payload.is_empty() {
-            return Ok(reply(false, "重搜载荷为空".into(), 0));
-        }
-        let item = PendingReanalysis {
-            variant: req.variant,
-            mcts_sims: req.mcts_sims,
-            payload: req.payload,
-            positions: req.positions,
-            requester: req.requester.clone(),
-            created_at: self.clock.now(),
-        };
-        let (queued, ok) = self.reana.enqueue(item);
-        if !ok {
-            return Ok(reply(
-                false,
-                format!(
-                    "重搜队列已满（上限 {} 批），本次丢弃：请降低提交频率或提高配置 reanalysis.max_queue",
-                    self.cfg.reanalysis.max_queue
-                ),
-                queued,
-            ));
-        }
-        tracing::info!(
-            "[reanalysis] 入队 requester={} positions={} sims={} 队内待重搜位置={}",
-            req.requester,
-            req.positions,
-            req.mcts_sims,
-            queued
-        );
-        Ok(reply(true, String::new(), queued))
-    }
-
     pub fn report_feature_pack(&self, req: FeaturePackMeta) -> CoreResult<FeaturePackAck> {
         let ack = |accepted: bool, message: String| FeaturePackAck {
             accepted,

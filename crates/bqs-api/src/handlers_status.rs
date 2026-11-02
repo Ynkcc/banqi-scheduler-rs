@@ -68,13 +68,11 @@ fn worker_stats(
 pub async fn status(State(st): State<AppState>) -> ApiResult<Json<StatusView>> {
     read_endpoint(&st, |st| -> Result<StatusView, ApiError> {
         let server = &st.server;
-        let best = server.ports.networks.get_best()?;
         let counts: crate::views::CountsView = server.ports.stats.counts()?.into();
         let ctl = &server.ctl;
         let (should_stop, stop_reason) = ctl.should_stop();
         Ok(StatusView {
             variant: server.cfg.selfplay.variant.clone(),
-            paused: ctl.manual_paused(),
             initial_revealed: ctl.initial_revealed(),
             data_kind: ctl.data_kind().as_str().to_string(),
             min_client_version: server.cfg.server.min_client_version.clone(),
@@ -84,12 +82,9 @@ pub async fn status(State(st): State<AppState>) -> ApiResult<Json<StatusView>> {
                 alpha: server.cfg.sprt.alpha,
                 beta: server.cfg.sprt.beta,
             },
-            best: best.as_ref().map(to_network_view),
             counts,
             should_stop,
             stop_reason,
-            auto_paused: ctl.auto_paused(),
-            auto_pause_reason: ctl.auto_pause_reason(),
         })
     })
     .await
@@ -116,9 +111,6 @@ pub struct RegisterNetworkBody {
 
     #[serde(default)]
     pub format: String,
-
-    #[serde(default)]
-    pub skip_match: bool,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -142,7 +134,6 @@ pub async fn register_network(
     let parent_sha = body.parent_sha.trim().to_string();
     let notes = body.notes.trim().to_string();
     let format = body.format.trim().to_string();
-    let skip_match = body.skip_match;
     read_endpoint(&st, move |st| -> Result<RegisterNetworkView, ApiError> {
         let ack = st.server.register_network(RegisterNetworkRequest {
             sha,
@@ -150,12 +141,10 @@ pub async fn register_network(
             upload_url: String::new(),
             notes,
             format,
-            skip_match: skip_match.then_some(true),
         })?;
         tracing::info!(
-            "[webui] manual register network accepted={} skip_match={} message={}",
+            "[webui] manual register network accepted={} message={}",
             ack.accepted,
-            skip_match,
             ack.message
         );
         Ok(RegisterNetworkView {
@@ -167,23 +156,62 @@ pub async fn register_network(
     .await
 }
 
-pub async fn promote(
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignUploadBody {
+    pub sha: String,
+    pub format: String,
+    #[serde(default)]
+    pub content_length: i64,
+    #[serde(default)]
+    pub content_sha256: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignUploadView {
+    pub upload_url: String,
+    pub object_key: String,
+}
+
+pub async fn sign_upload(
     State(st): State<AppState>,
-    Path(sha): Path<String>,
-) -> ApiResult<Json<OkView>> {
-    read_endpoint(&st, move |st| -> Result<OkView, ApiError> {
-        let networks = &st.server.ports.networks;
-        let n = networks
-            .get_network(&sha)?
-            .ok_or_else(|| ApiError::not_found(format!("network not found: {sha}")))?;
-        if n.is_best {
-            return Err(ApiError::conflict(format!("already best: {sha}")));
-        }
-        networks.promote_best(&sha)?;
-        tracing::info!("[webui] manual promote sha={sha} status={}", n.status);
-        Ok(OkView { ok: true })
+    bytes: axum::body::Bytes,
+) -> ApiResult<Json<SignUploadView>> {
+    let body: SignUploadBody = crate::decode_body(&bytes, MAX_CONTROL_BODY)?;
+    let sha = body.sha.trim().to_string();
+    let format = body.format.trim().to_ascii_lowercase();
+    if sha.len() != 64 {
+        return Err(ApiError::bad_request(format!(
+            "invalid_sha_len={} (want 64 hex chars)",
+            sha.len()
+        )));
+    }
+    if !bqs_core::consts::WEIGHT_FORMATS.contains(&format.as_str()) {
+        return Err(ApiError::bad_request(format!(
+            "unsupported_format=\"{}\" (want onnx/pt/nnue)",
+            body.format.trim()
+        )));
+    }
+    let object_key = format!("networks/{sha}.{format}");
+    let object_key_inner = object_key.clone();
+    let upload_url = read_endpoint(&st, move |st| -> Result<String, ApiError> {
+        let url = st.server.signer.presign_put(
+            &object_key_inner,
+            bqs_core::consts::PRESIGN_TTL.as_secs() as i64,
+        )?;
+        tracing::info!(
+            "[webui] sign network upload key={} len={}",
+            object_key_inner,
+            body.content_length
+        );
+        Ok(url)
     })
-    .await
+    .await?;
+    Ok(Json(SignUploadView {
+        upload_url: upload_url.0,
+        object_key,
+    }))
 }
 
 pub async fn matches(State(st): State<AppState>) -> ApiResult<Json<Vec<MatchView>>> {

@@ -41,21 +41,4 @@ impl JobManager {
                 _ => None,
             }))
     }
-
-    pub fn is_rating_match(&self, match_id: i64) -> bool {
-        self.store
-            .list_jobs(&JobQuery {
-                kind: Some(JobKind::JobRating as i64),
-                ..JobQuery::all()
-            })
-            .map(|page| {
-                page.items.iter().any(|j| {
-                    matches!(
-                        JobSpecJson::parse(&j.spec_json),
-                        Some(JobSpecJson::Rating(r)) if r.match_id == match_id
-                    )
-                })
-            })
-            .unwrap_or(false)
-    }
 }

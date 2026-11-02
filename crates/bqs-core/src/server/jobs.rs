@@ -41,11 +41,9 @@ impl Server {
 
     fn job_status(&self, r: &JobRow) -> JobStatus {
         let kind = JobKind::try_from(r.kind as i32).unwrap_or(JobKind::JobCollect);
-        let (collect, selfplay, rating) = match JobSpecJson::parse(&r.spec_json) {
-            Some(JobSpecJson::Collect(c)) => (Some(c.to_proto()), None, None),
-            Some(JobSpecJson::SelfPlay(s)) => (None, Some(s.to_proto()), None),
-            Some(JobSpecJson::Rating(rt)) => (None, None, Some(rt.to_proto())),
-            None => (None, None, None),
+        let collect = match JobSpecJson::parse(&r.spec_json) {
+            Some(JobSpecJson::Collect(c)) => Some(c.to_proto()),
+            _ => None,
         };
         JobStatus {
             job_id: r.job_id.clone(),
@@ -58,8 +56,7 @@ impl Server {
             created_at: r.created_at,
             updated_at: r.updated_at,
             collect,
-            selfplay,
-            rating,
+            ..Default::default()
         }
     }
 }

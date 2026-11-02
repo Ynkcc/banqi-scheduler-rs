@@ -115,28 +115,13 @@ message EpisodeAck {
   string object_key = 4;
 }
 
-message NetworkRequest {
-  string sha = 1;
-}
-
-message NetworkInfo {
-  string sha = 1;
-  string download_url = 2;
-  int64 created_at = 3;
-  bool is_best = 4;
-  string game_data = 5;
-  string key = 6;
-}
-
 message RegisterNetworkRequest {
   string sha = 1;
   string parent_sha = 2;
   string upload_url = 3;
   string notes = 4;
   string format = 5;
-  // 单次上报覆盖：true = 本次仅登记网络，不创建 gatekeeper 对打任务
-  //（不设置时回退到调度器 [gatekeeper] auto_match 配置）
-  optional bool skip_match = 6;
+  reserved 6;
 }
 
 message RegisterNetworkAck {
@@ -197,52 +182,6 @@ message HeartbeatReply {
   repeated string cancel_task_ids = 6;
 }
 
-message SignNetworkUploadRequest {
-  string trainer_id = 1;
-  string sha = 2;
-  int64 content_length = 3;
-  string content_sha256 = 4;
-  string format = 5;
-}
-
-message SignNetworkUploadAck {
-  bool accepted = 1;
-  string message = 2;
-  string upload_url = 3;
-  string object_key = 4;
-}
-
-message ListEpisodesRequest {
-  int32 limit = 1;
-  string after_key = 2;
-  optional DataKind kind = 3;
-}
-
-message EpisodeObject {
-  string object_key = 1;
-  string download_url = 2;
-  int64 size = 3;
-}
-
-message ListEpisodesReply {
-  repeated EpisodeObject objects = 1;
-  bool has_more = 2;
-}
-
-message SubmitReanalysisRequest {
-  string requester = 1;
-  string variant = 2;
-  int32 mcts_sims = 3;
-  uint32 positions = 4;
-  bytes payload = 5;
-}
-
-message SubmitReanalysisReply {
-  bool accepted = 1;
-  string message = 2;
-  uint64 queued_positions = 3;
-}
-
 message GetInfoRequest {}
 
 message VariantMeta {
@@ -262,37 +201,6 @@ message GetInfoReply {
   VariantMeta variant_meta = 4;
   bool should_stop = 2;
   string stop_reason = 3;
-}
-
-message TrainerHeartbeatRequest {
-  string trainer_id = 1;
-  string variant = 2;
-  DataKind kind = 3;
-  string consumed_key = 4;
-  int64 samples_consumed = 5;
-  int32 backlog = 6;
-  int32 buffered = 7;
-  string health_status = 8;
-  string last_error = 9;
-  string progress_json = 10;
-}
-
-message TrainerHeartbeatReply {
-  bool pause_self_play = 1;
-  bool auto_paused = 2;
-  string auto_pause_reason = 3;
-  string message = 4;
-}
-
-message GetTrainConfigRequest {
-  string variant = 1;
-  string trainer_id = 2;
-}
-
-message GetTrainConfigReply {
-  bool accepted = 1;
-  string message = 2;
-  map<string, string> overrides = 3;
 }
 
 message EpisodeBatch {
@@ -574,15 +482,9 @@ service SchedulerService {
   rpc GetInfo (GetInfoRequest) returns (GetInfoReply);
   rpc GetTask (TaskRequest) returns (TaskResponse);
   rpc ReportEpisode (EpisodeMeta) returns (EpisodeAck);
-  rpc GetNetwork (NetworkRequest) returns (NetworkInfo);
   rpc RegisterNetwork (RegisterNetworkRequest) returns (RegisterNetworkAck);
   rpc ReportMatchResult (MatchResult) returns (MatchResultAck);
   rpc Heartbeat (HeartbeatRequest) returns (HeartbeatReply);
-  rpc SignNetworkUpload (SignNetworkUploadRequest) returns (SignNetworkUploadAck);
-  rpc ListEpisodes (ListEpisodesRequest) returns (ListEpisodesReply);
-  rpc SubmitReanalysis (SubmitReanalysisRequest) returns (SubmitReanalysisReply);
-  rpc GetTrainConfig (GetTrainConfigRequest) returns (GetTrainConfigReply);
-  rpc TrainerHeartbeat (TrainerHeartbeatRequest) returns (TrainerHeartbeatReply);
   rpc ReportFeaturePack (FeaturePackMeta) returns (FeaturePackAck);
   rpc RequestFeaturePack (FeaturePackRequest) returns (FeaturePackReply);
   rpc SubmitJob (SubmitJobRequest) returns (SubmitJobReply);

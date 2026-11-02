@@ -5,7 +5,6 @@ mod jobs;
 mod jobs_tests;
 mod matches;
 mod networks;
-mod trainers;
 mod workers;
 
 use std::sync::{Arc, Mutex};
@@ -108,10 +107,8 @@ const _: () = {
                 + ports::NetworkStore
                 + ports::MatchStore
                 + ports::StoreStats
-                + ports::TrainerStore
                 + ports::EpisodeStore
                 + ports::WorkerStore
-                + ports::TrainerRegistryStore
                 + ports::FeaturePackStore
                 + ports::JobStore,
         {

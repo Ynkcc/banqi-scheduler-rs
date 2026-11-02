@@ -10,7 +10,6 @@ use crate::{
 #[derive(Debug, Default)]
 struct NetworksInner {
     nets: HashMap<String, Network>,
-    best: Option<String>,
     next_created_at: i64,
 }
 
@@ -38,10 +37,6 @@ impl FakeNetworks {
         );
     }
 
-    pub fn best_sha(&self) -> Option<String> {
-        self.inner.lock().unwrap().best.clone()
-    }
-
     pub fn status_of(&self, sha: &str) -> Option<String> {
         self.inner
             .lock()
@@ -55,16 +50,8 @@ impl FakeNetworks {
         self.inner.lock().unwrap().nets.contains_key(sha)
     }
 
-    pub fn get_best(&self) -> CoreResult<Option<Network>> {
-        NetworkStore::get_best(self)
-    }
-
     pub fn get_network(&self, sha: &str) -> CoreResult<Option<Network>> {
         NetworkStore::get_network(self, sha)
-    }
-
-    pub fn promote_best(&self, sha: &str) -> CoreResult<()> {
-        NetworkStore::promote_best(self, sha)
     }
 
     pub fn update_network_status(&self, sha: &str, status: &str) -> CoreResult<()> {
@@ -83,32 +70,13 @@ impl FakeNetworks {
 }
 
 impl NetworkStore for FakeNetworks {
-    fn get_best(&self) -> CoreResult<Option<Network>> {
-        let g = self.inner.lock().unwrap();
-        Ok(g.best.as_ref().and_then(|s| g.nets.get(s).cloned()))
-    }
-
     fn get_network(&self, sha: &str) -> CoreResult<Option<Network>> {
         Ok(self.inner.lock().unwrap().nets.get(sha).cloned())
     }
 
-    fn latest_network_by_format(&self, format: &str) -> CoreResult<Option<Network>> {
-        let g = self.inner.lock().unwrap();
-        Ok(g.nets
-            .values()
-            .filter(|n| n.format == format)
-            .max_by_key(|n| n.created_at)
-            .cloned())
-    }
-
     fn list_networks(&self) -> CoreResult<Vec<Network>> {
-        let g = self.inner.lock().unwrap();
-        let mut out: Vec<Network> = g.nets.values().cloned().collect();
-        out.sort_by(|a, b| {
-            b.is_best
-                .cmp(&a.is_best)
-                .then_with(|| a.created_at.cmp(&b.created_at))
-        });
+        let mut out: Vec<Network> = self.inner.lock().unwrap().nets.values().cloned().collect();
+        out.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         Ok(out)
     }
 
@@ -140,31 +108,11 @@ impl NetworkStore for FakeNetworks {
         Ok(true)
     }
 
-    fn promote_best(&self, sha: &str) -> CoreResult<()> {
-        let mut g = self.inner.lock().unwrap();
-        if !g.nets.contains_key(sha) {
-            return Err(CoreError::Store(format!("promote: network {sha} 不存在")));
-        }
-        if let Some(old) = g.best.take() {
-            if let Some(n) = g.nets.get_mut(&old) {
-                n.is_best = false;
-                n.status = network_status::ARCHIVED.to_string();
-            }
-        }
-        if let Some(n) = g.nets.get_mut(sha) {
-            n.is_best = true;
-            n.status = network_status::BEST.to_string();
-        }
-        g.best = Some(sha.to_string());
-        Ok(())
-    }
-
     fn update_network_status(&self, sha: &str, status: &str) -> CoreResult<()> {
         let mut g = self.inner.lock().unwrap();
         match g.nets.get_mut(sha) {
             Some(n) => {
                 n.status = status.to_string();
-                n.is_best = false;
                 Ok(())
             }
             None => Err(CoreError::Store(format!("network {sha} 不存在"))),

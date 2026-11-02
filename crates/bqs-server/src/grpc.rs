@@ -51,14 +51,6 @@ impl SchedulerService for SchedulerSvc {
         Ok(tonic::Response::new(reply))
     }
 
-    async fn get_network(
-        &self,
-        request: tonic::Request<NetworkRequest>,
-    ) -> Result<tonic::Response<NetworkInfo>, tonic::Status> {
-        let reply = forward!(self.0, request.into_inner(), get_network)?;
-        Ok(tonic::Response::new(reply))
-    }
-
     async fn register_network(
         &self,
         request: tonic::Request<RegisterNetworkRequest>,
@@ -80,46 +72,6 @@ impl SchedulerService for SchedulerSvc {
         request: tonic::Request<HeartbeatRequest>,
     ) -> Result<tonic::Response<HeartbeatReply>, tonic::Status> {
         let reply = forward!(self.0, request.into_inner(), heartbeat)?;
-        Ok(tonic::Response::new(reply))
-    }
-
-    async fn sign_network_upload(
-        &self,
-        request: tonic::Request<SignNetworkUploadRequest>,
-    ) -> Result<tonic::Response<SignNetworkUploadAck>, tonic::Status> {
-        let reply = forward!(self.0, request.into_inner(), sign_network_upload)?;
-        Ok(tonic::Response::new(reply))
-    }
-
-    async fn list_episodes(
-        &self,
-        request: tonic::Request<ListEpisodesRequest>,
-    ) -> Result<tonic::Response<ListEpisodesReply>, tonic::Status> {
-        let reply = forward!(self.0, request.into_inner(), list_episodes)?;
-        Ok(tonic::Response::new(reply))
-    }
-
-    async fn submit_reanalysis(
-        &self,
-        request: tonic::Request<SubmitReanalysisRequest>,
-    ) -> Result<tonic::Response<SubmitReanalysisReply>, tonic::Status> {
-        let reply = forward!(self.0, request.into_inner(), submit_reanalysis)?;
-        Ok(tonic::Response::new(reply))
-    }
-
-    async fn get_train_config(
-        &self,
-        request: tonic::Request<GetTrainConfigRequest>,
-    ) -> Result<tonic::Response<GetTrainConfigReply>, tonic::Status> {
-        let reply = forward!(self.0, request.into_inner(), get_train_config)?;
-        Ok(tonic::Response::new(reply))
-    }
-
-    async fn trainer_heartbeat(
-        &self,
-        request: tonic::Request<TrainerHeartbeatRequest>,
-    ) -> Result<tonic::Response<TrainerHeartbeatReply>, tonic::Status> {
-        let reply = forward!(self.0, request.into_inner(), trainer_heartbeat)?;
         Ok(tonic::Response::new(reply))
     }
 

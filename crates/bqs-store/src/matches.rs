@@ -49,18 +49,6 @@ impl MatchStore for Store {
         })
     }
 
-    fn pending_match(&self) -> CoreResult<Option<Match>> {
-        self.with_conn(|conn| {
-            conn.query_row(
-                &format!("SELECT {MATCH_COLUMNS} FROM matches WHERE status=? ORDER BY id LIMIT 1"),
-                rusqlite::params![match_status::RUNNING],
-                scan_match_row,
-            )
-            .optional()
-            .map_err(StoreError::from)
-        })
-    }
-
     fn get_match(&self, id: i64) -> CoreResult<Option<Match>> {
         self.with_conn(|conn| {
             conn.query_row(
@@ -173,9 +161,7 @@ mod tests {
         assert!(m.running());
 
         let id2 = MS::create_match(&*s, "c1", "o1", 50).unwrap();
-        assert_eq!(MS::pending_match(&*s).unwrap().unwrap().id, id);
         MS::conclude_match(&*s, id).unwrap();
-        assert_eq!(MS::pending_match(&*s).unwrap().unwrap().id, id2);
 
         let list = MS::list_matches(&*s).unwrap();
         assert_eq!(list[0].id, id2);

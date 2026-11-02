@@ -5,7 +5,6 @@ use bqs_proto::{
 
 use super::*;
 use crate::consts;
-use crate::ports::JobQuery;
 use crate::ports::JobRow;
 use crate::test_support::Fakes;
 use std::sync::Arc;
@@ -20,14 +19,12 @@ fn env(config_extra: &str) -> Env {
     let f = Fakes::new();
     let cfg = Arc::new(Config::parse(config_extra, "test").unwrap());
     let ports = f.ports();
-    let ctl = Arc::new(Control::new(&ports, cfg.clone()));
     let disp = Arc::new(TaskDispatcher::new(&ports, cfg.clone(), f.clock.clone()));
     let jobs = JobManager::new(
         ports.jobs.clone(),
         disp.clone(),
         ports.networks.clone(),
         ports.matches.clone(),
-        ctl,
         cfg,
         f.clock.clone(),
     );
@@ -522,64 +519,6 @@ fn cancelled_late_report_still_counts() {
 }
 
 #[test]
-fn selfplay_bootstrap_is_idempotent() {
-    let e = env("[selfplay]\ndata_kind = \"nnue\"\n");
-    e.jobs.ensure_selfplay_job().unwrap();
-    let rows = e
-        .jobs
-        .list(&JobQuery {
-            kind: Some(JobKind::JobSelfplay as i64),
-            ..JobQuery::all()
-        })
-        .unwrap()
-        .items;
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].state, "running");
-    assert_eq!(rows[0].total_games, 0, "引导的是持续型 job");
-    assert_eq!(rows[0].priority, 0);
-
-    e.jobs.ensure_selfplay_job().unwrap();
-    assert_eq!(
-        e.jobs
-            .list(&JobQuery {
-                kind: Some(JobKind::JobSelfplay as i64),
-                ..JobQuery::all()
-            })
-            .unwrap()
-            .items
-            .len(),
-        1
-    );
-
-    let other = env("");
-    other.jobs.ensure_selfplay_job().unwrap();
-    let id = other
-        .jobs
-        .list(&JobQuery {
-            kind: Some(JobKind::JobSelfplay as i64),
-            ..JobQuery::all()
-        })
-        .unwrap()
-        .items[0]
-        .job_id
-        .clone();
-    other.jobs.control(&id, "pause").unwrap();
-    other.jobs.ensure_selfplay_job().unwrap();
-    assert_eq!(
-        other
-            .jobs
-            .list(&JobQuery {
-                kind: Some(JobKind::JobSelfplay as i64),
-                ..JobQuery::all()
-            })
-            .unwrap()
-            .items
-            .len(),
-        1
-    );
-}
-
-#[test]
 fn dispatchable_filters_state_and_completion() {
     let e = env("");
     let running = seed_collect_job(&e, 50, 100, "running");
@@ -713,15 +652,19 @@ fn seed_rating_job(e: &Env, match_id: i64, total: u64, state: &str) -> String {
 fn rating_submit_validates_and_creates_match() {
     let e = env("");
 
-    let (ok, msg, _) = e.jobs.submit(&rating_req(20, "ghost", "")).unwrap();
+    let (ok, msg, _) = e.jobs.submit(&rating_req(20, "ghost", "best")).unwrap();
     assert!(!ok);
     assert!(msg.contains("network_not_registered"), "{msg}");
+
     e.f.networks.seed_network("best", None, "onnx");
-    e.f.networks.promote_best("best").unwrap();
     e.f.networks.seed_network("cand", None, "onnx");
 
+    let (ok, msg, _) = e.jobs.submit(&rating_req(20, "cand", "")).unwrap();
+    assert!(!ok, "best 语义已移除，对手必须显式指定");
+    assert!(msg.contains("opponent_sha"), "{msg}");
+
     for total in [1u64, 3] {
-        let (ok, msg, _) = e.jobs.submit(&rating_req(total, "cand", "")).unwrap();
+        let (ok, msg, _) = e.jobs.submit(&rating_req(total, "cand", "best")).unwrap();
         assert!(!ok, "total={total} 应拒绝");
         assert!(msg.contains("total_games"), "{msg}");
     }
@@ -730,7 +673,7 @@ fn rating_submit_validates_and_creates_match() {
     assert!(!ok);
     assert!(msg.contains("network_not_registered"), "{msg}");
 
-    let (ok, msg, id) = e.jobs.submit(&rating_req(20, "cand", "")).unwrap();
+    let (ok, msg, id) = e.jobs.submit(&rating_req(20, "cand", "best")).unwrap();
     assert!(ok, "{msg}");
     let row = e.jobs.get(&id).unwrap().unwrap();
     assert_eq!(row.priority, 80, "rating 默认优先级");
@@ -741,28 +684,18 @@ fn rating_submit_validates_and_creates_match() {
     assert!(spec.match_id != 0, "提交即建对发行");
     let m = e.f.matches.get_match(spec.match_id).unwrap().unwrap();
     assert_eq!(m.candidate, "cand");
-    assert_eq!(m.opponent, "best", "对手空解析为当前 best");
+    assert_eq!(m.opponent, "best");
     assert_eq!(m.target_games, 10, "对打目标（对数）= 局数上限一半");
 
-    let mut bad = rating_req(20, "cand", "");
+    let mut bad = rating_req(20, "cand", "best");
     bad.rating.as_mut().unwrap().variant = "9x9".into();
     let (ok, msg, _) = e.jobs.submit(&bad).unwrap();
     assert!(!ok);
     assert!(msg.contains("invalid_variant"), "{msg}");
 
-    let e2 = env("");
-    e2.f.networks.seed_network("cand", None, "onnx");
-    let (ok, msg, _) = e2.jobs.submit(&rating_req(20, "cand", "")).unwrap();
-    assert!(!ok);
-    assert!(msg.contains("no_best_network"), "{msg}");
-
-    let e3 = env("");
-    e3.f.networks.seed_network("best", None, "onnx");
-    e3.f.networks.promote_best("best").unwrap();
-    e3.f.networks.seed_network("cand", None, "onnx");
-    let mut bad = rating_req(20, "cand", "");
+    let mut bad = rating_req(20, "cand", "best");
     bad.rating.as_mut().unwrap().sprt_alpha = 1.5;
-    let (ok, msg, _) = e3.jobs.submit(&bad).unwrap();
+    let (ok, msg, _) = e.jobs.submit(&bad).unwrap();
     assert!(!ok);
     assert!(msg.contains("sprt_alpha"), "{msg}");
 }
@@ -771,9 +704,8 @@ fn rating_submit_validates_and_creates_match() {
 fn rating_cancel_stops_match_and_in_flight() {
     let e = env("");
     e.f.networks.seed_network("best", None, "onnx");
-    e.f.networks.promote_best("best").unwrap();
     e.f.networks.seed_network("cand", None, "onnx");
-    let (_, _, id) = e.jobs.submit(&rating_req(20, "cand", "")).unwrap();
+    let (_, _, id) = e.jobs.submit(&rating_req(20, "cand", "best")).unwrap();
     let row = e.jobs.get(&id).unwrap().unwrap();
     let JobSpecJson::Rating(spec) = JobSpecJson::parse(&row.spec_json).unwrap() else {
         panic!("rating spec json");
@@ -883,14 +815,13 @@ fn nnue_side(sha: &str) -> CollectPlayerSpec {
 fn rating_sides_submit_normalizes_and_freezes() {
     let e = env("");
     e.f.networks.seed_network("best", None, "onnx");
-    e.f.networks.promote_best("best").unwrap();
     e.f.networks.seed_network("cand", None, "onnx");
 
     let req = sides_rating_req(
         Some((
             CollectPlayerSpec {
                 kind: "expectimax_nnue".into(),
-                network_sha: String::new(),
+                network_sha: "best".into(),
                 search: Some(bqs_proto::CollectSearchParams {
                     expectimax_node_budget: 4000,
                     labeler_mode: "best".into(),
@@ -916,10 +847,7 @@ fn rating_sides_submit_normalizes_and_freezes() {
     };
 
     assert_eq!(spec.side_a.kind, "expectimax_nnue");
-    assert_eq!(
-        spec.side_a.network_sha, "best",
-        "模型类空 sha 冻结为当前 best"
-    );
+    assert_eq!(spec.side_a.network_sha, "best", "模型类 sha 必须显式指定");
     assert_eq!(spec.side_b.kind, "expectimax_rule");
     assert_eq!(spec.side_b.network_sha, "", "非网络类 sha 为空");
 
@@ -941,8 +869,6 @@ fn rating_sides_submit_normalizes_and_freezes() {
 #[test]
 fn rating_sides_validation_rejects() {
     let e = env("");
-    e.f.networks.seed_network("best", None, "onnx");
-    e.f.networks.promote_best("best").unwrap();
     e.f.networks.seed_network("cand", None, "onnx");
 
     let mut req = sides_rating_req(None, 20);
@@ -981,14 +907,15 @@ fn rating_sides_validation_rejects() {
     assert!(!ok);
     assert!(msg.contains("network_sha 必须为空"), "{msg}");
 
-    let e2 = env("");
-    e2.f.networks.seed_network("cand", None, "onnx");
-    let (ok, msg, _) = e2
+    let (ok, msg, _) = e
         .jobs
         .submit(&sides_rating_req(Some((nnue_side(""), nnue_side(""))), 20))
         .unwrap();
     assert!(!ok);
-    assert!(msg.contains("no_best_network"), "{msg}");
+    assert!(
+        msg.contains("network_sha 必填"),
+        "模型类空 sha 不再回退 best: {msg}"
+    );
 
     let (ok, msg, _) = e
         .jobs
@@ -999,17 +926,6 @@ fn rating_sides_validation_rejects() {
         .unwrap();
     assert!(!ok);
     assert!(msg.contains("total_games"), "{msg}");
-}
-
-#[test]
-fn is_rating_match_filters_pending_match() {
-    let e = env("");
-    let gate_id = e.f.matches.seed_match("cand", "best", 10);
-    let rating_id = e.f.matches.seed_match("rcand", "best", 10);
-    let _job = seed_rating_job(&e, rating_id, 0, "running");
-    assert!(e.jobs.is_rating_match(rating_id));
-    assert!(!e.jobs.is_rating_match(gate_id));
-    assert!(!e.jobs.is_rating_match(999));
 }
 
 #[test]
@@ -1131,11 +1047,10 @@ fn collect_start_fens_validation() {
 fn rating_start_fens_validation() {
     let e = env("");
     e.f.networks.seed_network("best", None, "onnx");
-    e.f.networks.promote_best("best").unwrap();
     e.f.networks.seed_network("cand", None, "onnx");
 
     let good = valid_fen(bq_env::Variant::DarkChess4x8);
-    let mut req = rating_req(20, "cand", "");
+    let mut req = rating_req(20, "cand", "best");
     req.rating.as_mut().unwrap().start_fens = vec![good.clone()];
     let (ok, msg, id) = e.jobs.submit(&req).unwrap();
     assert!(ok, "{msg}");
@@ -1145,7 +1060,7 @@ fn rating_start_fens_validation() {
     };
     assert_eq!(spec.start_fens, vec![good.clone()]);
 
-    let mut req = rating_req(20, "cand", "");
+    let mut req = rating_req(20, "cand", "best");
     req.rating.as_mut().unwrap().variant = "4x2".into();
     req.rating.as_mut().unwrap().start_fens = vec![good.clone()];
     let (ok, msg, _) = e.jobs.submit(&req).unwrap();
@@ -1155,9 +1070,8 @@ fn rating_start_fens_validation() {
     let bad = valid_fen(bq_env::Variant::DarkChess4x2);
     let e2 = env("");
     e2.f.networks.seed_network("best", None, "onnx");
-    e2.f.networks.promote_best("best").unwrap();
     e2.f.networks.seed_network("cand", None, "onnx");
-    let mut req = rating_req(20, "cand", "");
+    let mut req = rating_req(20, "cand", "best");
     req.rating.as_mut().unwrap().start_fens = vec![bad];
     let (ok, msg, _) = e2.jobs.submit(&req).unwrap();
     assert!(!ok, "rating variant 空时按 cfg.selfplay.variant 回落校验");
@@ -1168,10 +1082,9 @@ fn rating_start_fens_validation() {
 fn rating_scenario_validation() {
     let e = env("");
     e.f.networks.seed_network("best", None, "onnx");
-    e.f.networks.promote_best("best").unwrap();
     e.f.networks.seed_network("cand", None, "onnx");
 
-    let mut req = rating_req(20, "cand", "");
+    let mut req = rating_req(20, "cand", "best");
     req.rating.as_mut().unwrap().scenario =
         bqs_proto::OpeningScenario::ScenarioAllRevealed as i32;
     let (ok, msg, id) = e.jobs.submit(&req).unwrap();
@@ -1186,7 +1099,7 @@ fn rating_scenario_validation() {
         "scenario 须落库并在查询时回显"
     );
 
-    let mut req = rating_req(20, "cand", "");
+    let mut req = rating_req(20, "cand", "best");
     req.rating.as_mut().unwrap().scenario = 99;
     let (ok, msg, _) = e.jobs.submit(&req).unwrap();
     assert!(!ok, "rating 非法 scenario 应拒绝");

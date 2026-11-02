@@ -2,7 +2,6 @@ mod episodes;
 mod jobs;
 mod networks;
 mod queues;
-mod trainer;
 mod worker;
 
 #[cfg(test)]
@@ -14,14 +13,11 @@ use bqs_config::Config;
 
 use crate::{
     assembler::TaskAssembler,
-    balance::BalanceMonitor,
     control::Control,
     dispatch::TaskDispatcher,
     featurepack::DeriveQueue,
-    gatekeeper::Gatekeeper,
     jobs::JobManager,
     ports::{Clock, ObjectSigner, Ports},
-    reanalysis::ReanaQueue,
     reports::ReportRouter,
     sources::Sources,
 };
@@ -34,9 +30,6 @@ pub struct Server {
     pub clock: Arc<dyn Clock>,
 
     pub disp: Arc<TaskDispatcher>,
-    pub gate: Arc<Gatekeeper>,
-    pub balance: Arc<BalanceMonitor>,
-    pub reana: Arc<ReanaQueue>,
     pub derive: Arc<DeriveQueue>,
     pub jobs: Arc<JobManager>,
     pub ctl: Arc<Control>,
@@ -64,54 +57,32 @@ impl Server {
 
         let disp = Arc::new(TaskDispatcher::new(&ports, cfg.clone(), clock.clone()));
         let ctl = Arc::new(Control::new(&ports, cfg.clone()));
-        let gate = Arc::new(Gatekeeper::new(&ports, cfg.clone()));
-        let balance = Arc::new(BalanceMonitor::new(
-            &ports,
-            cfg.clone(),
-            clock.clone(),
-            ctl.clone(),
-        ));
-        let reana = Arc::new(ReanaQueue::new(&ports, cfg.clone(), clock.clone()));
         let derive = Arc::new(DeriveQueue::new(&ports, cfg.clone(), clock.clone()));
         let jobs = Arc::new(JobManager::new(
             ports.jobs.clone(),
             disp.clone(),
             ports.networks.clone(),
             ports.matches.clone(),
-            ctl.clone(),
             cfg.clone(),
             clock.clone(),
         ));
 
-        let asm = Arc::new(TaskAssembler::new(
-            ports.networks.clone(),
-            signer.clone(),
-            cfg.clone(),
-            ctl.clone(),
-        ));
+        let asm = Arc::new(TaskAssembler::new(signer.clone(), cfg.clone(), ctl.clone()));
         let router = Arc::new(ReportRouter::new(
-            gate.clone(),
             disp.clone(),
             jobs.clone(),
             ports.matches.clone(),
-            ports.networks.clone(),
             cfg.clone(),
         ));
         let sources = Sources::assemble(
             jobs.clone(),
-            reana.clone(),
             derive.clone(),
             ports.matches.clone(),
             ports.networks.clone(),
             disp.clone(),
             asm.clone(),
-            ctl.clone(),
             cfg.clone(),
         );
-
-        if let Err(e) = jobs.ensure_selfplay_job() {
-            panic!("[jobs] selfplay job 引导失败，拒绝启动: {e}");
-        }
 
         Arc::new(Self {
             cfg,
@@ -119,9 +90,6 @@ impl Server {
             signer,
             clock,
             disp,
-            gate,
-            balance,
-            reana,
             derive,
             jobs,
             ctl,

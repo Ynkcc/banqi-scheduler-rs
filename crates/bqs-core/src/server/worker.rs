@@ -53,16 +53,10 @@ impl Server {
             );
         }
 
-        self.balance.evaluate(self.clock.now());
-
         for src in &self.sources {
             if let Some(resp) = src.try_task(&req)? {
                 return Ok(resp);
             }
-        }
-
-        if self.ctl.manual_paused() {
-            return Ok(none("self_play_paused"));
         }
 
         Ok(none("no_task_available"))
@@ -90,16 +84,8 @@ impl Server {
                 }
             }
         }
-        let best = self.ports.networks.get_best()?;
 
-        let mut reply = HeartbeatReply {
-            pause_self_play: self.ctl.effective_paused(),
-            ..Default::default()
-        };
-        if let Some(best) = best {
-            reply.best_network = best.sha;
-        }
-
+        let mut reply = HeartbeatReply::default();
         reply.cancel_task_ids = self.jobs.cancel_task_ids_for_worker(&req.worker_id);
         if !reply.cancel_task_ids.is_empty() {
             tracing::info!(

@@ -1,7 +1,5 @@
 use std::time::Duration;
 
-pub const RULE_SENTINEL_SHA: &str = "rule";
-
 pub const WEIGHT_FORMATS: [&str; 3] = ["onnx", "pt", "nnue"];
 
 pub const DONE_TASK_RETENTION: Duration = Duration::from_secs(30 * 60);
@@ -9,8 +7,6 @@ pub const DONE_TASK_RETENTION: Duration = Duration::from_secs(30 * 60);
 pub const TASK_MAX_RETENTION: Duration = Duration::from_secs(24 * 3600);
 
 pub const PRUNE_INTERVAL: Duration = Duration::from_secs(60);
-
-pub const BALANCE_EVAL_INTERVAL: Duration = Duration::from_secs(10);
 
 pub const COLLECT_TASK_DEADLINE: Duration = Duration::from_secs(30 * 60);
 

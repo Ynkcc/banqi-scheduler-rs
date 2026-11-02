@@ -19,14 +19,10 @@ pub fn router(state: AppState) -> Router {
             "/api/networks",
             get(handlers_status::networks).post(handlers_status::register_network),
         )
-        .route(
-            "/api/networks/{sha}/promote",
-            post(handlers_status::promote),
-        )
+        .route("/api/networks/upload", post(handlers_status::sign_upload))
         .route("/api/matches", get(handlers_status::matches))
         .route("/api/workers", get(handlers_status::workers))
         .route("/api/workers/{id}/note", put(handlers_status::worker_note))
-        .route("/api/trainers", get(handlers_trainers::trainers))
         .route("/api/episodes", get(handlers_episodes::episodes))
         .route(
             "/api/episodes/{id}/replay",

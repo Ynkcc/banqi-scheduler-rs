@@ -1,4 +1,4 @@
-use bqs_proto::{CollectPlayerSpec, CollectionJobSpec, RatingJobSpec, SelfPlayJobSpec};
+use bqs_proto::{CollectPlayerSpec, CollectionJobSpec, RatingJobSpec};
 
 use super::JobManager;
 use super::spec::{PlayerSpecJson, valid_scenario};
@@ -112,20 +112,6 @@ impl JobManager {
         Ok(())
     }
 
-    pub(super) fn validate_selfplay(&self, s: &SelfPlayJobSpec) -> Result<(), String> {
-        validate_variant(&s.variant)?;
-        if s.data_kind != bqs_proto::DataKind::DataResnet as i32
-            && s.data_kind != bqs_proto::DataKind::DataNnue as i32
-        {
-            return Err("selfplay.data_kind 必须为 DATA_RESNET / DATA_NNUE".into());
-        }
-
-        for sha in [&s.network_sha, &s.opponent_sha] {
-            require_registered_sha(self.nets.as_ref(), sha, "")?;
-        }
-        Ok(())
-    }
-
     pub(super) fn validate_and_resolve_rating(
         &self,
         r: &RatingJobSpec,
@@ -187,33 +173,22 @@ impl JobManager {
             "（rating 候选网络必须已登记）",
         )?;
 
-        let opponent_sha = if r.opponent_sha.is_empty() {
-            match self
-                .nets
-                .get_best()
-                .map_err(|e| format!("查询 best 网络失败: {e}"))?
-            {
-                Some(b) => b.sha,
-                None => {
-                    return Err(
-                        "no_best_network_registered（对手空 = 当前 best，但尚无 best 网络）".into(),
-                    );
-                }
-            }
-        } else {
-            require_registered_sha(
-                self.nets.as_ref(),
-                &r.opponent_sha,
-                "（rating 对手网络必须已登记）",
-            )?;
-            r.opponent_sha.clone()
-        };
+        if r.opponent_sha.is_empty() {
+            return Err(
+                "rating.opponent_sha required（best 语义已移除，对手网络必须显式指定）".into(),
+            );
+        }
+        require_registered_sha(
+            self.nets.as_ref(),
+            &r.opponent_sha,
+            "（rating 对手网络必须已登记）",
+        )?;
         let mk = |sha: &str| PlayerSpecJson {
             kind: "expectimax_nnue".into(),
             network_sha: sha.to_string(),
             search: None,
         };
-        Ok((mk(&r.candidate_sha), mk(&opponent_sha)))
+        Ok((mk(&r.candidate_sha), mk(&r.opponent_sha)))
     }
 
     fn normalize_rating_side(
@@ -232,25 +207,15 @@ impl JobManager {
         out.kind = kind.to_string();
         if bq_policy::player_kind::requires_model(kind) {
             if out.network_sha.is_empty() {
-                match self
-                    .nets
-                    .get_best()
-                    .map_err(|e| format!("查询 best 网络失败: {e}"))?
-                {
-                    Some(b) => out.network_sha = b.sha,
-                    None => {
-                        return Err(format!(
-                            "no_best_network_registered（rating.{label} 模型类 sha 空 = 当前 best，但尚无 best 网络）"
-                        ));
-                    }
-                }
-            } else {
-                require_registered_sha(
-                    self.nets.as_ref(),
-                    &out.network_sha,
-                    &format!("（rating.{label} 模型类网络必须已登记）"),
-                )?;
+                return Err(format!(
+                    "rating.{label} 模型类棋手 network_sha 必填（best 语义已移除，不再按 best 回退）"
+                ));
             }
+            require_registered_sha(
+                self.nets.as_ref(),
+                &out.network_sha,
+                &format!("（rating.{label} 模型类网络必须已登记）"),
+            )?;
         } else {
             check_model_sha(
                 &out.network_sha,

@@ -1,6 +1,6 @@
 use bqs_proto::{
     CollectPlayerSpec, CollectSearchParams, CollectionJobSpec, OpeningScenario, RatingJobSpec,
-    SeedStrategy, SeedStrategyKind, SelfPlayJobSpec,
+    SeedStrategy, SeedStrategyKind,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -271,49 +271,6 @@ impl CollectSpecJson {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct SelfPlaySpecJson {
-    pub variant: String,
-    #[serde(alias = "data_kind")]
-    pub data_kind: i32,
-    #[serde(alias = "network_sha")]
-    pub network_sha: String,
-    #[serde(alias = "opponent_sha")]
-    pub opponent_sha: String,
-    #[serde(alias = "mix_ratio")]
-    pub mix_ratio: f64,
-    pub search: Option<SearchSpecJson>,
-    #[serde(alias = "total_games")]
-    pub total_games: u64,
-}
-
-impl SelfPlaySpecJson {
-    pub(super) fn from_proto(s: SelfPlayJobSpec) -> Self {
-        Self {
-            variant: s.variant,
-            data_kind: s.data_kind,
-            network_sha: s.network_sha,
-            opponent_sha: s.opponent_sha,
-            mix_ratio: s.mix_ratio,
-            search: s.search.map(|x| SearchSpecJson::from_proto(Some(x))),
-            total_games: s.total_games,
-        }
-    }
-
-    pub fn to_proto(&self) -> SelfPlayJobSpec {
-        SelfPlayJobSpec {
-            variant: self.variant.clone(),
-            data_kind: self.data_kind,
-            network_sha: self.network_sha.clone(),
-            opponent_sha: self.opponent_sha.clone(),
-            mix_ratio: self.mix_ratio,
-            search: self.search.as_ref().and_then(|s| s.to_proto()),
-            total_games: self.total_games,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, rename_all = "camelCase")]
 pub struct RatingSpecJson {
     pub variant: String,
     #[serde(alias = "candidate_sha")]
@@ -414,7 +371,6 @@ impl RatingSpecJson {
 #[serde(rename_all = "snake_case")]
 pub enum JobSpecJson {
     Collect(CollectSpecJson),
-    SelfPlay(SelfPlaySpecJson),
     Rating(RatingSpecJson),
 }
 
@@ -457,7 +413,6 @@ fn splitmix64(mut x: u64) -> u64 {
 pub(super) fn spec_total(spec: &JobSpecJson) -> u64 {
     match spec {
         JobSpecJson::Collect(c) => c.total_games,
-        JobSpecJson::SelfPlay(s) => s.total_games,
         JobSpecJson::Rating(r) => r.total_games,
     }
 }

@@ -4,9 +4,7 @@ mod tasks;
 #[cfg(test)]
 mod tests;
 
-pub use producer::{
-    episode_key, games_for_threads, network_key, select_producer, ProducerSelect, SelfplayMode,
-};
+pub use producer::{episode_key, games_for_threads, network_key};
 
 pub use crate::data_kind::{
     proto_for_format as data_kind_for_format,
@@ -19,15 +17,9 @@ use std::sync::Arc;
 use bqs_config::Config;
 use bqs_proto::{CollectPlayerSpec, CollectSearchParams};
 
-use crate::{
-    consts,
-    control::Control,
-    ports::{NetworkStore, ObjectSigner},
-    CoreResult,
-};
+use crate::{consts, control::Control, ports::ObjectSigner, CoreResult};
 
 pub struct TaskAssembler {
-    nets: Arc<dyn NetworkStore>,
     signer: Arc<dyn ObjectSigner>,
     cfg: Arc<Config>,
     ctl: Arc<Control>,
@@ -35,17 +27,11 @@ pub struct TaskAssembler {
 
 impl TaskAssembler {
     pub fn new(
-        nets: Arc<dyn NetworkStore>,
         signer: Arc<dyn ObjectSigner>,
         cfg: Arc<Config>,
         ctl: Arc<Control>,
     ) -> Self {
-        Self {
-            nets,
-            signer,
-            cfg,
-            ctl,
-        }
+        Self { signer, cfg, ctl }
     }
 
     fn ttl_secs(&self) -> i64 {
@@ -93,32 +79,11 @@ impl TaskAssembler {
         if revealed < 0 {
             revealed = 0;
         }
-        let mut mix = self.cfg.selfplay.mix_ratio;
-        if mix <= 0.0 || mix > 1.0 {
-            mix = 0.0;
-        }
-        if revealed == 0 && mix == 0.0 {
+        if revealed == 0 {
             return String::new();
         }
-        let mut obj = serde_json::Map::new();
-        if revealed != 0 {
-            obj.insert(
-                "initial_revealed_pieces".into(),
-                serde_json::json!(revealed),
-            );
-        }
-        if mix != 0.0 {
-            obj.insert("mix_ratio".into(), serde_json::json!(mix));
-        }
-        serde_json::Value::Object(obj).to_string()
-    }
-
-    pub fn games_for(&self, threads: i32) -> i64 {
-        games_for_threads(
-            self.cfg.selfplay.threads_baseline,
-            self.cfg.selfplay.games_per_task as i64,
-            threads,
-        )
+        let obj = serde_json::json!({ "initial_revealed_pieces": revealed });
+        obj.to_string()
     }
 
     fn with_network_download(

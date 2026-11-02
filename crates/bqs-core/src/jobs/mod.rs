@@ -9,7 +9,7 @@ mod tests;
 
 pub use spec::{
     CollectSpecJson, JobSpecJson, PlayerSpecJson, RatingSpecJson, SearchSpecJson, SeedStrategyJson,
-    SelfPlaySpecJson, resolve_seed, valid_scenario,
+    resolve_seed, valid_scenario,
 };
 
 use std::collections::HashMap;
@@ -19,7 +19,6 @@ use bqs_config::Config;
 use bqs_proto::JobKind;
 
 use crate::{
-    control::Control,
     dispatch::TaskDispatcher,
     ports::{Clock, JobStore, MatchStore, NetworkStore},
 };
@@ -36,7 +35,6 @@ pub struct JobManager {
     disp: Arc<TaskDispatcher>,
     nets: Arc<dyn NetworkStore>,
     matches: Arc<dyn MatchStore>,
-    ctl: Arc<Control>,
     cfg: Arc<Config>,
     clock: Arc<dyn Clock>,
     inner: Mutex<Inner>,
@@ -48,7 +46,6 @@ impl JobManager {
         disp: Arc<TaskDispatcher>,
         nets: Arc<dyn NetworkStore>,
         matches: Arc<dyn MatchStore>,
-        ctl: Arc<Control>,
         cfg: Arc<Config>,
         clock: Arc<dyn Clock>,
     ) -> Self {
@@ -57,7 +54,6 @@ impl JobManager {
             disp,
             nets,
             matches,
-            ctl,
             cfg,
             clock,
             inner: Mutex::new(Inner::default()),
@@ -70,7 +66,7 @@ impl JobManager {
 
     pub(super) fn default_priority(&self, kind: JobKind) -> i64 {
         match kind {
-            JobKind::JobSelfplay => self.cfg.jobs.priority_selfplay,
+            JobKind::JobSelfplay => crate::consts::JOB_PRIORITY_SELFPLAY,
             JobKind::JobCollect => self.cfg.jobs.priority_collect,
             JobKind::JobRating => self.cfg.jobs.priority_rating,
         }

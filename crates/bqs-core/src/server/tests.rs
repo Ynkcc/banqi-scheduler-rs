@@ -39,195 +39,6 @@ fn resp_behavior(resp: &TaskResponse) -> generation_spec::Behavior {
 }
 
 #[test]
-fn get_network_absent_returns_empty_url() {
-    let (s, _) = default_server();
-    let reply = s
-        .get_network(NetworkRequest { sha: "nope".into() })
-        .unwrap();
-    assert_eq!(reply.sha, "nope");
-    assert_eq!(reply.download_url, "");
-    assert!(!reply.is_best);
-
-    let reply = s
-        .get_network(NetworkRequest { sha: String::new() })
-        .unwrap();
-    assert_eq!(reply.download_url, "");
-}
-
-#[test]
-fn get_network_by_sha_and_best() {
-    let (s, f) = default_server();
-    f.networks.seed_network("abc", Some("parent"), "onnx");
-    f.networks.promote_best("abc").unwrap();
-
-    let by_sha = s.get_network(NetworkRequest { sha: "abc".into() }).unwrap();
-    assert_eq!(by_sha.key, "networks/abc.onnx");
-    assert_eq!(by_sha.download_url, "get:networks/abc.onnx");
-    assert!(by_sha.is_best);
-    assert_eq!(by_sha.created_at, 1);
-    assert_eq!(by_sha.game_data, r#"{"parent_sha":"parent"}"#);
-
-    let by_best = s
-        .get_network(NetworkRequest { sha: String::new() })
-        .unwrap();
-    assert_eq!(by_best.sha, "abc");
-}
-
-#[test]
-fn sign_network_upload_rejects_bad_sha_and_format() {
-    let (s, _) = default_server();
-    let req = |sha: &str, format: &str| SignNetworkUploadRequest {
-        trainer_id: "t".into(),
-        sha: sha.into(),
-        content_length: 1,
-        content_sha256: String::new(),
-        format: format.into(),
-    };
-    let short = s.sign_network_upload(req("abc", "onnx")).unwrap();
-    assert!(!short.accepted);
-    assert!(short.message.contains("invalid_sha_len=3"));
-
-    let bad_format = s
-        .sign_network_upload(req(&"a".repeat(64), "safetensors"))
-        .unwrap();
-    assert!(!bad_format.accepted);
-    assert!(bad_format.message.contains("unsupported_format"));
-
-    let ok = s
-        .sign_network_upload(req(&"a".repeat(64), "  NNUE "))
-        .unwrap();
-    assert!(ok.accepted);
-    assert_eq!(
-        ok.object_key,
-        "networks/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.nnue"
-    );
-    assert_eq!(
-        ok.upload_url,
-        format!("put:{}", ok.object_key),
-        "上传走预签名 PUT"
-    );
-}
-
-#[test]
-fn list_episodes_paging_and_kind_filter() {
-    let (s, f) = default_server();
-    f.episodes.seed_episode(1, "episodes/sha/a.epb.gz", 0);
-    f.episodes.seed_episode(2, "episodes/sha/b.epb.gz", 1);
-    f.episodes.seed_episode(3, "episodes/sha/c.epb.gz", 2);
-    f.episodes.seed_episode(4, "episodes/sha/d.epb.gz", 0);
-
-    let all = s
-        .list_episodes(ListEpisodesRequest {
-            limit: 10,
-            after_key: String::new(),
-            kind: None,
-        })
-        .unwrap();
-    assert_eq!(all.objects.len(), 3);
-    assert!(!all.has_more);
-
-    assert_eq!(all.objects[0].object_key, "episodes/sha/a.epb.gz");
-    assert_eq!(all.objects[2].object_key, "episodes/sha/d.epb.gz");
-    assert!(all.objects[0].download_url.starts_with("get:"));
-
-    let page2 = s
-        .list_episodes(ListEpisodesRequest {
-            limit: 10,
-            after_key: "episodes/sha/b.epb.gz".into(),
-            kind: None,
-        })
-        .unwrap();
-    assert_eq!(page2.objects.len(), 1);
-    assert_eq!(page2.objects[0].object_key, "episodes/sha/d.epb.gz");
-
-    let resnet = s
-        .list_episodes(ListEpisodesRequest {
-            limit: 10,
-            after_key: "episodes/sha/b.epb.gz".into(),
-            kind: Some(0),
-        })
-        .unwrap();
-    assert_eq!(resnet.objects.len(), 1);
-    assert_eq!(resnet.objects[0].object_key, "episodes/sha/d.epb.gz");
-
-    let more = s
-        .list_episodes(ListEpisodesRequest {
-            limit: 1,
-            after_key: String::new(),
-            kind: None,
-        })
-        .unwrap();
-    assert_eq!(more.objects.len(), 1);
-    assert!(more.has_more);
-    let none = s
-        .list_episodes(ListEpisodesRequest {
-            limit: 0,
-            after_key: String::new(),
-            kind: None,
-        })
-        .unwrap();
-    assert_eq!(none.objects.len(), 3);
-    assert!(!none.has_more);
-}
-
-#[test]
-fn submit_reanalysis_rejection_paths() {
-    let (s, _) = default_server();
-    let req = SubmitReanalysisRequest {
-        requester: "trainer".into(),
-        variant: "4x8".into(),
-        mcts_sims: 0,
-        positions: 5,
-        payload: vec![1, 2, 3],
-    };
-    let r = s.submit_reanalysis(req.clone()).unwrap();
-    assert!(!r.accepted);
-    assert!(r.message.contains("未启用局面重搜"), "{}", r.message);
-
-    let (s, _) = server_with("[reanalysis]\ninterval_tasks = 2\nmax_queue = 10\n");
-    let r = s
-        .submit_reanalysis(SubmitReanalysisRequest {
-            variant: "4x4".into(),
-            ..req.clone()
-        })
-        .unwrap();
-    assert!(!r.accepted);
-    assert!(r.message.contains("变体不一致"), "{}", r.message);
-
-    let r = s
-        .submit_reanalysis(SubmitReanalysisRequest {
-            payload: vec![],
-            ..req.clone()
-        })
-        .unwrap();
-    assert!(!r.accepted);
-    assert!(r.message.contains("载荷为空"), "{}", r.message);
-
-    let r = s.submit_reanalysis(req).unwrap();
-    assert!(r.accepted);
-    assert_eq!(r.queued_positions, 5);
-    assert_eq!(s.reana.pending(), (5, 1));
-}
-
-#[test]
-fn submit_reanalysis_queue_full_rejects_without_dropping() {
-    let (s, _) = server_with("[reanalysis]\ninterval_tasks = 1\nmax_queue = 1\n");
-    let req = |p: u32| SubmitReanalysisRequest {
-        requester: "trainer".into(),
-        variant: "4x8".into(),
-        mcts_sims: 0,
-        positions: p,
-        payload: vec![1],
-    };
-    assert!(s.submit_reanalysis(req(1)).unwrap().accepted);
-    let r = s.submit_reanalysis(req(2)).unwrap();
-    assert!(!r.accepted);
-    assert!(r.message.contains("队列已满"), "{}", r.message);
-
-    assert_eq!(s.reana.pending(), (1, 1));
-}
-
-#[test]
 fn request_feature_pack_get_or_enqueue() {
     let (s, f) = default_server();
     let req = |key: &str| FeaturePackRequest {
@@ -308,7 +119,7 @@ fn report_feature_pack_idempotent_and_signs_put() {
     assert_eq!(bad.message, "missing_episode_object_key");
 }
 
-fn register_selfplay_task(s: &Server, task_id: &str, worker: &str, sha: &str) {
+fn register_task(s: &Server, task_id: &str, worker: &str, sha: &str) {
     s.disp.register(
         task_id,
         RunningTask {
@@ -347,7 +158,7 @@ fn report_episode_rejections() {
     assert!(!r.accepted);
     assert_eq!(r.message, "unknown_task_id:nope");
 
-    register_selfplay_task(&s, "t1", "w1", "sha");
+    register_task(&s, "t1", "w1", "sha");
     let r = s.report_episode(episode_meta("t1", "w2", "sha")).unwrap();
     assert!(!r.accepted);
     assert!(r.message.contains("worker_mismatch"), "{}", r.message);
@@ -392,7 +203,7 @@ fn report_episode_registers_and_signs_put() {
 #[test]
 fn report_episode_idempotent_duplicate_replays_key() {
     let (s, _) = default_server();
-    register_selfplay_task(&s, "t1", "w1", "sha-a");
+    register_task(&s, "t1", "w1", "sha-a");
     let first = s.report_episode(episode_meta("t1", "w1", "sha-a")).unwrap();
     let second = s.report_episode(episode_meta("t1", "w1", "sha-a")).unwrap();
     assert!(second.accepted);
@@ -402,7 +213,7 @@ fn report_episode_idempotent_duplicate_replays_key() {
 }
 
 #[test]
-fn report_match_result_gate_rejections() {
+fn report_match_result_rejections_and_stats_ack() {
     let (s, _) = default_server();
     let result = |task_id: &str, worker: &str| MatchResult {
         worker_id: worker.into(),
@@ -458,69 +269,6 @@ fn report_match_result_completed_short_circuit() {
 }
 
 #[test]
-fn report_match_result_routes_to_gatekeeper() {
-    let (s, f) = default_server();
-
-    let match_id = f.matches.seed_match("cand", "best0", 10);
-    s.disp.register(
-        "t1",
-        RunningTask {
-            worker_id: "w1".into(),
-            match_id,
-            gating: true,
-            ..RunningTask::new(bqs_proto::TaskKind::TaskSelfplay)
-        },
-    );
-
-    let r = s
-        .report_match_result(MatchResult {
-            worker_id: "w1".into(),
-            task_id: "t1".into(),
-            games: 10,
-            pair_dd: 5,
-            ..Default::default()
-        })
-        .unwrap();
-    assert!(r.accepted);
-    assert!(!r.match_concluded);
-    assert_eq!(
-        f.matches.get_match(match_id).unwrap().unwrap().num_games,
-        10
-    );
-
-    assert_eq!(s.disp.lookup("t1").unwrap().state, TaskState::Completed);
-}
-
-#[test]
-fn report_match_result_match_not_running_is_business_rejection() {
-    let (s, f) = default_server();
-
-    let match_id = f.matches.seed_match("cand", "best0", 10);
-    f.matches.force_conclude(match_id);
-    s.disp.register(
-        "t1",
-        RunningTask {
-            worker_id: "w1".into(),
-            match_id,
-            gating: true,
-            ..RunningTask::new(bqs_proto::TaskKind::TaskRating)
-        },
-    );
-    let r = s
-        .report_match_result(MatchResult {
-            worker_id: "w1".into(),
-            task_id: "t1".into(),
-            games: 2,
-            pair_ll: 1,
-            ..Default::default()
-        })
-        .unwrap();
-    assert!(!r.accepted);
-    assert!(r.message.contains("not_running"), "{}", r.message);
-    assert_eq!(s.disp.lookup("t1").unwrap().state, TaskState::Completed);
-}
-
-#[test]
 fn register_network_validations() {
     let (s, _) = default_server();
     let r = s
@@ -535,55 +283,9 @@ fn register_network_validations() {
 }
 
 #[test]
-fn register_network_creates_match_against_best_snapshot() {
+fn register_network_registers_without_best_or_match() {
     let (s, f) = default_server();
-    f.networks.seed_network("best-1", None, "onnx");
-    f.networks.promote_best("best-1").unwrap();
 
-    let r = s
-        .register_network(RegisterNetworkRequest {
-            sha: "best-1".into(),
-            format: "onnx".into(),
-            ..Default::default()
-        })
-        .unwrap();
-    assert!(!r.accepted);
-    assert_eq!(r.message, "sha_equals_current_best");
-
-    f.networks.seed_network("cand-1", None, "onnx");
-    let r = s
-        .register_network(RegisterNetworkRequest {
-            sha: "cand-1".into(),
-            format: "onnx".into(),
-            ..Default::default()
-        })
-        .unwrap();
-    assert!(!r.accepted);
-    assert_eq!(r.message, "duplicate_sha:cand-1");
-
-    let r = s
-        .register_network(RegisterNetworkRequest {
-            sha: "cand-2".into(),
-            format: "onnx".into(),
-            ..Default::default()
-        })
-        .unwrap();
-    assert!(r.accepted);
-    assert!(
-        r.match_task_hint.contains("gatekeeper match"),
-        "{}",
-        r.match_task_hint
-    );
-    let matches = f.matches.list_matches().unwrap();
-    assert_eq!(matches.len(), 1);
-    assert_eq!(matches[0].candidate, "cand-2");
-    assert_eq!(matches[0].opponent, "best-1");
-    assert_eq!(matches[0].target_games, 400);
-}
-
-#[test]
-fn register_network_first_promotes() {
-    let (s, f) = server_with("");
     let r = s
         .register_network(RegisterNetworkRequest {
             sha: "first".into(),
@@ -592,14 +294,24 @@ fn register_network_first_promotes() {
         })
         .unwrap();
     assert!(r.accepted);
-    assert_eq!(r.message, "first_network_promoted");
-    assert_eq!(f.networks.best_sha().as_deref(), Some("first"));
+    assert_eq!(r.message, "network_registered", "只登记，不晋级 best");
+    assert!(r.match_task_hint.is_empty(), "不再创建 gatekeeper 对打");
+    assert!(f.matches.list_matches().unwrap().is_empty());
+
+    let dup = s
+        .register_network(RegisterNetworkRequest {
+            sha: "first".into(),
+            format: "onnx".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(!dup.accepted);
+    assert_eq!(dup.message, "duplicate_sha:first");
 }
 
 #[test]
-fn get_task_returns_none_when_paused() {
+fn get_task_no_sources_means_no_task_available() {
     let (s, _) = default_server();
-    s.ctl.set_manual_paused(true).unwrap();
     let resp = s
         .get_task(TaskRequest {
             worker_id: "w1".into(),
@@ -609,64 +321,7 @@ fn get_task_returns_none_when_paused() {
         })
         .unwrap();
     assert!(resp.generation.is_none(), "无任务不应携带 generation");
-    assert_eq!(resp.message, "self_play_paused");
-}
-
-#[test]
-fn get_task_auto_paused_stops_selfplay_but_not_reanalysis() {
-    let (s, f) = server_with("[reanalysis]\ninterval_tasks = 1\nmax_queue = 10\n");
-    f.networks.seed_network("best", None, "onnx");
-    f.networks.promote_best("best").unwrap();
-    s.ctl.set_auto_paused(true, "test");
-    s.submit_reanalysis(SubmitReanalysisRequest {
-        requester: "t".into(),
-        variant: "4x8".into(),
-        positions: 1,
-        payload: vec![1],
-        ..Default::default()
-    })
-    .unwrap();
-
-    s.reana.note_selfplay_assigned();
-
-    let resp = s
-        .get_task(TaskRequest {
-            worker_id: "w".into(),
-            ..Default::default()
-        })
-        .unwrap();
-    assert!(matches!(
-        resp_behavior(&resp),
-        generation_spec::Behavior::Reanalysis(_)
-    ));
-
-    let (s2, f2) = server_with(
-        "[reanalysis]\ninterval_tasks = 1\nmax_queue = 10\n[balance]\nenabled = false\npause_reanalysis = true\n",
-    );
-    f2.networks.seed_network("best", None, "onnx");
-    f2.networks.promote_best("best").unwrap();
-    s2.ctl.set_auto_paused(true, "test");
-    s2.reana.note_selfplay_assigned();
-    s2.submit_reanalysis(SubmitReanalysisRequest {
-        requester: "t".into(),
-        variant: "4x8".into(),
-        positions: 1,
-        payload: vec![1],
-        ..Default::default()
-    })
-    .unwrap();
-    let resp = s2
-        .get_task(TaskRequest {
-            worker_id: "w".into(),
-            ..Default::default()
-        })
-        .unwrap();
-    assert!(resp.generation.is_none());
-    assert!(
-        resp.message.contains("self_play_auto_paused"),
-        "{}",
-        resp.message
-    );
+    assert_eq!(resp.message, "no_task_available");
 }
 
 #[test]
@@ -702,52 +357,49 @@ fn get_task_client_version_gate() {
 }
 
 #[test]
-fn get_task_priority_chain() {
-    let (s, f) = server_with("[reanalysis]\ninterval_tasks = 1\nmax_queue = 10\n");
+fn get_task_serves_collect_then_derive_chain() {
+    let (s, f) = server_with("[jobs]\ncollect_overdispatch_games = -1\n");
+    f.networks.seed_network("n1", None, "onnx");
+    let reply = s
+        .submit_job(SubmitJobRequest {
+            requester: "t".into(),
+            kind: JobKind::JobCollect as i32,
+            priority: 0,
+            collect: Some(CollectionJobSpec {
+                variant: "4x8".into(),
+                total_games: 8,
+                player_a: Some(CollectPlayerSpec {
+                    kind: "mcts_resnet".into(),
+                    network_sha: "n1".into(),
+                    ..Default::default()
+                }),
+                player_b: Some(CollectPlayerSpec {
+                    kind: "random".into(),
+                    ..Default::default()
+                }),
+                data_kind: DataKind::DataResnet as i32,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(reply.accepted, "{}", reply.message);
+
     let req = TaskRequest {
         worker_id: "w1".into(),
-        client_version: "1.0.0".into(),
         threads: 4,
-        current_network: "best".into(),
         ..Default::default()
     };
-
-    let none = s.get_task(req.clone()).unwrap();
-    assert!(none.generation.is_none());
-    assert_eq!(none.message, "no_best_network_registered");
-
-    f.networks.seed_network("best", None, "onnx");
-    f.networks.promote_best("best").unwrap();
-    s.submit_reanalysis(SubmitReanalysisRequest {
-        requester: "t".into(),
-        variant: "4x8".into(),
-        positions: 9,
-        payload: vec![1],
-        ..Default::default()
-    })
-    .unwrap();
     let resp = s.get_task(req.clone()).unwrap();
     assert!(
         matches!(resp_behavior(&resp), generation_spec::Behavior::Plays(_)),
-        "节流未满足：先 selfplay"
+        "collect job 优先派发"
     );
-    assert_eq!(resp.network_sha, "best");
-    assert_eq!(resp.network_key, "networks/best.onnx");
-    assert_eq!(resp.network_url, "", "current_network == best 不签下载 URL");
-
-    let resp = s.get_task(req.clone()).unwrap();
-    assert!(matches!(
-        resp_behavior(&resp),
-        generation_spec::Behavior::Reanalysis(_)
-    ));
-    assert_eq!(resp_generation(&resp).games, 9, "games = 位置条数");
-    assert_eq!(s.reana.pending().1, 0);
-
-    assert!(s.disp.lookup(&resp.task_id).is_some());
+    assert_eq!(resp.network_sha, "n1");
 
     s.request_feature_pack(FeaturePackRequest {
         requester: "t".into(),
-        episode_object_key: "episodes/best/x.epb.gz".into(),
+        episode_object_key: "episodes/n1/x.epb.gz".into(),
         pack_version: 1,
     })
     .unwrap();
@@ -756,22 +408,18 @@ fn get_task_priority_chain() {
         resp_behavior(&resp),
         generation_spec::Behavior::Derive(_)
     ));
-    if let generation_spec::Behavior::Derive(d) = resp_behavior(&resp) {
-        assert_eq!(d.episode_object_key, "episodes/best/x.epb.gz");
-    }
 
     let resp = s.get_task(req).unwrap();
-    assert!(matches!(
-        resp_behavior(&resp),
-        generation_spec::Behavior::Plays(_)
-    ));
+    assert!(
+        resp.generation.is_none(),
+        "collect 余量耗尽 + 队列空 → 无任务"
+    );
 }
 
 #[test]
-fn get_task_rating_job_has_priority_over_selfplay() {
+fn get_task_rating_job_dispatches() {
     let (s, f) = server_with("[sprt]\nelo0 = 0.0\nelo1 = 15.0\nalpha = 0.05\nbeta = 0.05\n");
     f.networks.seed_network("best", None, "onnx");
-    f.networks.promote_best("best").unwrap();
     f.networks.seed_network("cand", None, "onnx");
     let reply = s
         .submit_job(SubmitJobRequest {
@@ -780,6 +428,7 @@ fn get_task_rating_job_has_priority_over_selfplay() {
             priority: 0,
             rating: Some(RatingJobSpec {
                 candidate_sha: "cand".into(),
+                opponent_sha: "best".into(),
                 total_games: 8,
                 ..Default::default()
             }),
@@ -796,16 +445,33 @@ fn get_task_rating_job_has_priority_over_selfplay() {
         .unwrap();
     assert!(
         matches!(resp_behavior(&resp), generation_spec::Behavior::Plays(_)),
-        "rating job 先于 selfplay 派发"
+        "rating job 派发对打任务"
     );
     assert_eq!(resp.network_sha, "cand");
 }
 
 #[test]
-fn heartbeat_touches_worker_and_returns_best() {
+fn submit_job_rejects_selfplay_kind() {
+    let (s, _) = default_server();
+    let reply = s
+        .submit_job(SubmitJobRequest {
+            requester: "t".into(),
+            kind: JobKind::JobSelfplay as i32,
+            selfplay: Some(SelfPlayJobSpec::default()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(!reply.accepted);
+    assert!(
+        reply.message.contains("selfplay_removed"),
+        "{}",
+        reply.message
+    );
+}
+
+#[test]
+fn heartbeat_touches_worker() {
     let (s, f) = default_server();
-    f.networks.seed_network("best", None, "onnx");
-    f.networks.promote_best("best").unwrap();
     let reply = s
         .heartbeat(HeartbeatRequest {
             worker_id: "w1".into(),
@@ -816,20 +482,15 @@ fn heartbeat_touches_worker_and_returns_best() {
             ..Default::default()
         })
         .unwrap();
-    assert_eq!(reply.best_network, "best");
+    assert!(
+        !reply.pause_self_play,
+        "暂停语义已移除，恒为 false"
+    );
+    assert!(reply.best_network.is_empty(), "best 语义已移除");
     let w = f.workers.get("w1").unwrap();
     assert_eq!(w.threads, 8);
     assert_eq!(w.completed_games, 42);
     assert_eq!(w.client_version, "1.2.3");
-
-    s.ctl.set_manual_paused(true).unwrap();
-    let reply = s
-        .heartbeat(HeartbeatRequest {
-            worker_id: "w1".into(),
-            ..Default::default()
-        })
-        .unwrap();
-    assert!(reply.pause_self_play);
 }
 
 #[test]
@@ -846,94 +507,6 @@ fn get_info_returns_variant_meta_and_stop_signal() {
     let reply = s.get_info(GetInfoRequest {}).unwrap();
     assert!(reply.should_stop);
     assert!(reply.stop_reason.contains("test_stop_reason"));
-}
-
-#[test]
-fn get_train_config_variant_gate() {
-    let (s, _) = default_server();
-    let r = s
-        .get_train_config(GetTrainConfigRequest {
-            variant: "4x4".into(),
-            trainer_id: "t".into(),
-        })
-        .unwrap();
-    assert!(!r.accepted);
-    assert!(r.message.contains("变体不符"), "{}", r.message);
-    let r = s
-        .get_train_config(GetTrainConfigRequest {
-            variant: "4x8".into(),
-            trainer_id: "t".into(),
-        })
-        .unwrap();
-    assert!(r.accepted);
-    assert!(r.overrides.is_empty(), "无覆盖时下发空集");
-
-    let mut m = std::collections::BTreeMap::new();
-    m.insert("LEARNING_RATE".to_string(), "0.001".to_string());
-    s.ctl.set_train_config_overrides(m).unwrap();
-    let r = s
-        .get_train_config(GetTrainConfigRequest {
-            variant: "4x8".into(),
-            trainer_id: "t".into(),
-        })
-        .unwrap();
-    assert_eq!(
-        r.overrides.get("LEARNING_RATE").map(|s| s.as_str()),
-        Some("0.001")
-    );
-}
-
-#[test]
-fn trainer_heartbeat_registers_and_replies_pause() {
-    let (s, f) = default_server();
-    let r = s
-        .trainer_heartbeat(TrainerHeartbeatRequest {
-            trainer_id: "tr1".into(),
-            variant: "4x8".into(),
-            kind: 0,
-            consumed_key: String::new(),
-            samples_consumed: 10,
-            backlog: 2,
-            buffered: 3,
-            health_status: "ok".into(),
-            last_error: String::new(),
-            progress_json: String::new(),
-        })
-        .unwrap();
-    assert_eq!(r.message, "");
-    let t = f.registry.get_trainer("tr1").unwrap().unwrap();
-    assert_eq!(t.samples_consumed, 10);
-    assert_eq!(t.backlog, 2);
-
-    let r = s
-        .trainer_heartbeat(TrainerHeartbeatRequest {
-            variant: "4x4".into(),
-            ..Default::default()
-        })
-        .unwrap();
-    assert!(r.message.contains("variant_mismatch"), "{}", r.message);
-    assert!(f.registry.get_trainer("tr2").unwrap().is_none());
-}
-
-#[test]
-fn trainer_heartbeat_watermark_mapping() {
-    let (s, f) = default_server();
-    f.episodes.seed_episode(7, "episodes/n/7.epb.gz", 0);
-    let r = s
-        .trainer_heartbeat(TrainerHeartbeatRequest {
-            trainer_id: "tr1".into(),
-            variant: "4x8".into(),
-            kind: 0,
-            consumed_key: "episodes/n/7.epb.gz".into(),
-            samples_consumed: 20,
-            ..Default::default()
-        })
-        .unwrap();
-    assert_eq!(r.message, "");
-    assert_eq!(
-        f.registry.get_trainer("tr1").unwrap().unwrap().consumed_id,
-        7
-    );
 }
 
 #[test]

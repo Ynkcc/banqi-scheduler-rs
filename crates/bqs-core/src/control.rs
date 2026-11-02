@@ -9,7 +9,6 @@ use crate::{
     trainconfig::{SETTING_TRAIN_CONFIG, TrainConfig},
 };
 
-const SETTING_PAUSE_SELF_PLAY: &str = "pause_self_play";
 const SETTING_INITIAL_REVEALED: &str = "initial_revealed";
 const SETTING_DATA_KIND: &str = "data_kind";
 
@@ -24,64 +23,6 @@ fn parse_data_kind(s: &str) -> Result<DataKind, String> {
 
 fn validation_error(msg: impl Into<String>) -> CoreError {
     CoreError::Internal(msg.into())
-}
-
-struct PauseInner {
-    paused: bool,
-    auto_paused: bool,
-    auto_pause_reason: String,
-}
-
-pub struct PauseState {
-    mu: Mutex<PauseInner>,
-    store: Arc<dyn SettingsStore>,
-}
-
-impl PauseState {
-    fn new(store: Arc<dyn SettingsStore>, paused: bool) -> Self {
-        Self {
-            mu: Mutex::new(PauseInner {
-                paused,
-                auto_paused: false,
-                auto_pause_reason: String::new(),
-            }),
-            store,
-        }
-    }
-
-    fn paused(&self) -> bool {
-        self.mu.lock().unwrap().paused
-    }
-
-    fn auto_paused(&self) -> bool {
-        self.mu.lock().unwrap().auto_paused
-    }
-
-    fn auto_pause_reason(&self) -> String {
-        self.mu.lock().unwrap().auto_pause_reason.clone()
-    }
-
-    fn effective_paused(&self) -> bool {
-        let g = self.mu.lock().unwrap();
-        g.paused || g.auto_paused
-    }
-
-    fn set_auto_paused(&self, paused: bool, reason: &str) {
-        let mut g = self.mu.lock().unwrap();
-        g.auto_paused = paused;
-        g.auto_pause_reason = if paused {
-            reason.to_string()
-        } else {
-            String::new()
-        };
-    }
-
-    fn set_manual_paused(&self, paused: bool) -> CoreResult<()> {
-        let value = if paused { "1" } else { "0" };
-        self.store.set_setting(SETTING_PAUSE_SELF_PLAY, value)?;
-        self.mu.lock().unwrap().paused = paused;
-        Ok(())
-    }
 }
 
 struct StopInner {
@@ -242,7 +183,6 @@ impl HotConfig {
 
 #[derive(Default)]
 pub struct Control {
-    pause: Option<PauseState>,
     stop: Option<StopSignal>,
     hot: Option<HotConfig>,
 }
@@ -263,14 +203,6 @@ impl Control {
 
     pub fn try_new(ports: &Ports, cfg: Arc<Config>) -> Result<Self, String> {
         let store = ports.settings.clone();
-        let paused = matches!(
-            store
-                .get_setting(SETTING_PAUSE_SELF_PLAY)
-                .map_err(|e| e.to_string())?
-                .as_deref(),
-            Some("1")
-        );
-        let pause = PauseState::new(store.clone(), paused);
         let stopped = matches!(
             store
                 .get_setting(SETTING_SHOULD_STOP)
@@ -289,14 +221,9 @@ impl Control {
             cfg.selfplay.data_kind,
         )?;
         Ok(Self {
-            pause: Some(pause),
             stop: Some(stop),
             hot: Some(hot),
         })
-    }
-
-    fn pause(&self) -> &PauseState {
-        self.pause.as_ref().expect("Control 已引导")
     }
 
     fn stop(&self) -> &StopSignal {
@@ -305,30 +232,6 @@ impl Control {
 
     fn hot(&self) -> &HotConfig {
         self.hot.as_ref().expect("Control 已引导")
-    }
-
-    pub fn effective_paused(&self) -> bool {
-        self.pause().effective_paused()
-    }
-
-    pub fn manual_paused(&self) -> bool {
-        self.pause().paused()
-    }
-
-    pub fn auto_paused(&self) -> bool {
-        self.pause().auto_paused()
-    }
-
-    pub fn auto_pause_reason(&self) -> String {
-        self.pause().auto_pause_reason()
-    }
-
-    pub fn set_manual_paused(&self, paused: bool) -> CoreResult<()> {
-        self.pause().set_manual_paused(paused)
-    }
-
-    pub fn set_auto_paused(&self, paused: bool, reason: &str) {
-        self.pause().set_auto_paused(paused, reason);
     }
 
     pub fn should_stop(&self) -> (bool, String) {
@@ -371,7 +274,7 @@ impl Control {
     }
 
     pub fn settings(&self) -> Arc<dyn SettingsStore> {
-        self.pause().store.clone()
+        self.hot().store.clone()
     }
 }
 
@@ -420,31 +323,6 @@ mod tests {
         let c = control(&f, cfg);
         assert_eq!(c.initial_revealed(), 2);
         assert_eq!(c.data_kind(), DataKind::Resnet);
-    }
-
-    #[test]
-    fn pause_manual_and_auto_strictly_separated() {
-        let f = Fakes::new();
-        let c = control(&f, cfg());
-        assert!(!c.effective_paused());
-
-        c.set_manual_paused(true).unwrap();
-        assert!(c.effective_paused() && c.manual_paused() && !c.auto_paused());
-
-        c.set_auto_paused(true, "trainer_stalled");
-        assert!(c.effective_paused() && c.auto_paused());
-        assert_eq!(c.auto_pause_reason(), "trainer_stalled");
-
-        c.set_manual_paused(false).unwrap();
-        assert!(c.effective_paused() && c.auto_paused() && !c.manual_paused());
-
-        c.set_manual_paused(true).unwrap();
-        c.set_auto_paused(false, "");
-        assert!(c.effective_paused() && c.manual_paused() && !c.auto_paused());
-        assert_eq!(c.auto_pause_reason(), "");
-
-        let c2 = Control::try_new(&f.ports(), cfg()).unwrap();
-        assert!(c2.manual_paused());
     }
 
     #[test]

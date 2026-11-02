@@ -1,10 +1,7 @@
 use bqs_proto::{JobKind, SubmitJobRequest};
 
 use super::JobManager;
-use super::spec::{
-    CollectSpecJson, JobSpecJson, RatingSpecJson, SelfPlaySpecJson, spec_total,
-};
-use crate::ports::JobQuery;
+use super::spec::{CollectSpecJson, JobSpecJson, RatingSpecJson, spec_total};
 use crate::CoreResult;
 
 impl JobManager {
@@ -61,17 +58,11 @@ impl JobManager {
                 }
             }
             JobKind::JobSelfplay => {
-                let Some(s) = &req.selfplay else {
-                    return Ok((
-                        false,
-                        "selfplay spec required for JOB_SELFPLAY".into(),
-                        String::new(),
-                    ));
-                };
-                match self.validate_selfplay(s) {
-                    Ok(()) => JobSpecJson::SelfPlay(SelfPlaySpecJson::from_proto(s.clone())),
-                    Err(m) => return Ok((false, m, String::new())),
-                }
+                return Ok((
+                    false,
+                    "selfplay_removed：自对弈编排已移除，仅支持 collect/rating job".into(),
+                    String::new(),
+                ));
             }
             JobKind::JobRating => {
                 let Some(r) = &req.rating else {
@@ -121,38 +112,5 @@ impl JobManager {
 
         self.preemption_sweep(true);
         Ok((true, String::new(), job_id))
-    }
-
-    pub fn ensure_selfplay_job(&self) -> CoreResult<()> {
-        let existing = self
-            .store
-            .list_jobs(&JobQuery {
-                kind: Some(JobKind::JobSelfplay as i64),
-                ..JobQuery::all()
-            })?
-            .items;
-        if existing
-            .iter()
-            .any(|j| j.state == "running" || j.state == "paused")
-        {
-            return Ok(());
-        }
-        let spec = SelfPlaySpecJson {
-            variant: self.cfg.selfplay.variant.clone(),
-            data_kind: crate::data_kind::to_proto(self.ctl.data_kind()),
-            network_sha: String::new(),
-            opponent_sha: String::new(),
-            mix_ratio: 0.0,
-            search: None,
-            total_games: 0,
-        };
-        let job_id = self.insert_new_job(
-            JobKind::JobSelfplay,
-            self.default_priority(JobKind::JobSelfplay),
-            0,
-            &JobSpecJson::SelfPlay(spec),
-        )?;
-        tracing::info!("[job] bootstrapped persistent selfplay job id={job_id}");
-        Ok(())
     }
 }

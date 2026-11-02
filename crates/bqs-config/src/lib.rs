@@ -34,15 +34,6 @@ impl DataKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum BalanceMode {
-    #[default]
-    Warn,
-
-    Pause,
-}
-
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct Config {
@@ -51,10 +42,7 @@ pub struct Config {
 
     pub storage: Option<StorageSection>,
     pub selfplay: SelfplaySection,
-    pub gatekeeper: GatekeeperSection,
     pub sprt: SprtSection,
-    pub reanalysis: ReanalysisSection,
-    pub balance: BalanceSection,
 
     pub jobs: JobsSection,
 }
@@ -112,14 +100,6 @@ pub struct SelfplaySection {
 
     pub games_per_task: i32,
 
-    pub gatekeeper_games: i32,
-
-    pub mix_ratio: f64,
-
-    pub best: String,
-
-    pub train_match_opponent: String,
-
     pub threads_baseline: i32,
 
     pub initial_revealed: i32,
@@ -134,10 +114,6 @@ impl Default for SelfplaySection {
         Self {
             variant: "4x8".into(),
             games_per_task: 16,
-            gatekeeper_games: 400,
-            mix_ratio: 0.25,
-            best: String::new(),
-            train_match_opponent: String::new(),
             threads_baseline: 4,
             initial_revealed: 0,
             data_kind: DataKind::Resnet,
@@ -202,23 +178,6 @@ impl Default for SearchDefaults {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, default)]
-pub struct GatekeeperSection {
-    pub pairs: i32,
-
-    pub auto_match: bool,
-}
-
-impl Default for GatekeeperSection {
-    fn default() -> Self {
-        Self {
-            pairs: 400,
-            auto_match: true,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct SprtSection {
@@ -227,42 +186,6 @@ pub struct SprtSection {
     pub elo1: f64,
     pub alpha: f64,
     pub beta: f64,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(deny_unknown_fields, default)]
-pub struct ReanalysisSection {
-    pub interval_tasks: i64,
-
-    pub max_queue: i64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, default)]
-pub struct BalanceSection {
-    pub enabled: bool,
-    pub mode: BalanceMode,
-
-    pub trainer_online_seconds: i64,
-
-    pub stalled_seconds: i64,
-
-    pub backlog_pause_batches: i64,
-
-    pub pause_reanalysis: bool,
-}
-
-impl Default for BalanceSection {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            mode: BalanceMode::Warn,
-            trainer_online_seconds: 120,
-            stalled_seconds: 600,
-            backlog_pause_batches: 0,
-            pause_reanalysis: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -276,7 +199,6 @@ pub struct JobsSection {
 
     pub collect_overdispatch_games: i64,
 
-    pub priority_selfplay: i64,
     pub priority_collect: i64,
 
     pub priority_rating: i64,
@@ -289,7 +211,6 @@ impl Default for JobsSection {
             collect_deadline_seconds: 1800,
             collect_max_inflight_per_worker: 1,
             collect_overdispatch_games: 0,
-            priority_selfplay: 0,
             priority_collect: 50,
             priority_rating: 80,
         }
@@ -313,12 +234,6 @@ impl Config {
         let s = &self.selfplay;
         if s.variant.is_empty() {
             return Err(ConfigError::Invalid("selfplay.variant 不能为空".into()));
-        }
-        if !(0.0..=1.0).contains(&s.mix_ratio) {
-            return Err(ConfigError::Invalid(format!(
-                "selfplay.mix_ratio 必须在 [0,1]，当前 {}",
-                s.mix_ratio
-            )));
         }
         if s.games_per_task <= 0 {
             return Err(ConfigError::Invalid(
@@ -369,13 +284,6 @@ mod tests {
         assert_eq!(cfg.server.listen, ":50051");
         assert_eq!(cfg.selfplay.variant, "4x8");
         assert!(cfg.storage.is_none());
-        assert!(cfg.gatekeeper.auto_match, "默认自动创建对打任务");
-    }
-
-    #[test]
-    fn auto_match_can_disable() {
-        let cfg = Config::parse("[gatekeeper]\nauto_match = false\n", "test").unwrap();
-        assert!(!cfg.gatekeeper.auto_match);
     }
 
     #[test]
@@ -395,14 +303,6 @@ mod tests {
         let raw = include_str!("../../../configs/config.example.conf");
         let cfg = Config::parse(raw, "example").unwrap();
         cfg.validate().unwrap();
-        assert_eq!(cfg.selfplay.mix_ratio, 0.25);
-        assert_eq!(cfg.balance.mode, BalanceMode::Warn);
-    }
-
-    #[test]
-    fn mix_ratio_out_of_range_rejected() {
-        let cfg = Config::parse("[selfplay]\nmix_ratio = 1.5\n", "test").unwrap();
-        assert!(cfg.validate().is_err());
     }
 
     #[test]

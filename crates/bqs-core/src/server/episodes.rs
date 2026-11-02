@@ -1,6 +1,8 @@
 use bqs_proto::*;
 
-use crate::{CoreResult, assembler::episode_key, reports::lookup_report_task, types::EpisodeDraft};
+use crate::{
+    assembler::episode_key, reports::lookup_report_task, types::EpisodeDraft, CoreResult,
+};
 
 use super::Server;
 
@@ -107,25 +109,5 @@ impl Server {
 
     pub fn report_match_result(&self, r: MatchResult) -> CoreResult<MatchResultAck> {
         self.router.route(&r)
-    }
-
-    pub fn list_episodes(&self, req: ListEpisodesRequest) -> CoreResult<ListEpisodesReply> {
-        let kind = req.kind.map(|k| k as i64);
-        let keys = self
-            .ports
-            .episodes
-            .list_episode_keys(&req.after_key, req.limit as i64, kind)?;
-        let mut objects = Vec::with_capacity(keys.len());
-        for k in &keys {
-            let url = self.signer.presign_get(k, self.ttl_secs())?;
-            objects.push(EpisodeObject {
-                object_key: k.clone(),
-                download_url: url,
-                size: 0,
-            });
-        }
-
-        let has_more = !keys.is_empty() && keys.len() as i32 == req.limit && req.limit > 0;
-        Ok(ListEpisodesReply { objects, has_more })
     }
 }

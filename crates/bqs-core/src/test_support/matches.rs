@@ -75,10 +75,6 @@ impl FakeMatches {
         MatchStore::list_matches(self)
     }
 
-    pub fn pending_match(&self) -> CoreResult<Option<Match>> {
-        MatchStore::pending_match(self)
-    }
-
     pub fn conclude_match(&self, id: i64) -> CoreResult<bool> {
         MatchStore::conclude_match(self, id)
     }
@@ -91,15 +87,6 @@ impl FakeMatches {
 impl MatchStore for FakeMatches {
     fn create_match(&self, candidate: &str, opponent: &str, target_games: i64) -> CoreResult<i64> {
         Ok(self.seed_match(candidate, opponent, target_games))
-    }
-
-    fn pending_match(&self) -> CoreResult<Option<Match>> {
-        let g = self.inner.lock().unwrap();
-        Ok(g.matches
-            .values()
-            .filter(|m| m.running())
-            .max_by_key(|m| m.id)
-            .cloned())
     }
 
     fn get_match(&self, id: i64) -> CoreResult<Option<Match>> {

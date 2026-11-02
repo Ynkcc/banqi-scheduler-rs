@@ -11,7 +11,7 @@ use clap::Parser;
 use bqs_config::Config;
 use bqs_core::ports::{
     EpisodeStore, FeaturePackStore, JobStore, MatchStore, NetworkStore, SettingsStore, StoreStats,
-    SystemClock, TrainerRegistryStore, TrainerStore, WorkerStore,
+    SystemClock, WorkerStore,
 };
 use bqs_core::server::{Server, ServerDeps};
 
@@ -117,10 +117,8 @@ async fn run(args: Args) -> Result<()> {
         networks: Arc::clone(&store) as Arc<dyn NetworkStore>,
         matches: Arc::clone(&store) as Arc<dyn MatchStore>,
         stats: Arc::clone(&store) as Arc<dyn StoreStats>,
-        trainers: Arc::clone(&store) as Arc<dyn TrainerStore>,
         episodes: Arc::clone(&store) as Arc<dyn EpisodeStore>,
         workers: Arc::clone(&store) as Arc<dyn WorkerStore>,
-        trainer_registry: Arc::clone(&store) as Arc<dyn TrainerRegistryStore>,
         feature_packs: Arc::clone(&store) as Arc<dyn FeaturePackStore>,
         jobs: Arc::clone(&store) as Arc<dyn JobStore>,
     };

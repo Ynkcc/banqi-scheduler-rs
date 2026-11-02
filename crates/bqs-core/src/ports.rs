@@ -14,10 +14,7 @@ pub trait SettingsStore: Send + Sync {
 }
 
 pub trait NetworkStore: Send + Sync {
-    fn get_best(&self) -> CoreResult<Option<Network>>;
     fn get_network(&self, sha: &str) -> CoreResult<Option<Network>>;
-
-    fn latest_network_by_format(&self, format: &str) -> CoreResult<Option<Network>>;
 
     fn list_networks(&self) -> CoreResult<Vec<Network>>;
 
@@ -29,14 +26,12 @@ pub trait NetworkStore: Send + Sync {
         format: &str,
     ) -> CoreResult<bool>;
 
-    fn promote_best(&self, sha: &str) -> CoreResult<()>;
     fn update_network_status(&self, sha: &str, status: &str) -> CoreResult<()>;
 }
 
 pub trait MatchStore: Send + Sync {
     fn create_match(&self, candidate: &str, opponent: &str, target_games: i64) -> CoreResult<i64>;
 
-    fn pending_match(&self) -> CoreResult<Option<Match>>;
     fn get_match(&self, id: i64) -> CoreResult<Option<Match>>;
 
     fn list_matches(&self) -> CoreResult<Vec<Match>>;
@@ -46,12 +41,6 @@ pub trait MatchStore: Send + Sync {
     fn conclude_match(&self, id: i64) -> CoreResult<bool>;
 
     fn cancel_match(&self, id: i64) -> CoreResult<bool>;
-}
-
-pub trait TrainerStore: Send + Sync {
-    fn list_trainers(&self) -> CoreResult<Vec<Trainer>>;
-
-    fn kind_watermark(&self, kind: i64, after_id: i64) -> CoreResult<(i64, i64)>;
 }
 
 pub trait EpisodeStore: Send + Sync {
@@ -125,12 +114,6 @@ pub trait WorkerStore: Send + Sync {
     fn list_workers(&self) -> CoreResult<Vec<Worker>>;
 
     fn set_worker_note(&self, id: &str, note: &str) -> CoreResult<()>;
-}
-
-pub trait TrainerRegistryStore: Send + Sync {
-    fn get_trainer(&self, id: &str) -> CoreResult<Option<Trainer>>;
-
-    fn touch_trainer(&self, t: Trainer) -> CoreResult<()>;
 }
 
 pub trait FeaturePackStore: Send + Sync {
@@ -260,10 +243,8 @@ pub struct Ports {
     pub networks: Arc<dyn NetworkStore>,
     pub matches: Arc<dyn MatchStore>,
     pub stats: Arc<dyn StoreStats>,
-    pub trainers: Arc<dyn TrainerStore>,
     pub episodes: Arc<dyn EpisodeStore>,
     pub workers: Arc<dyn WorkerStore>,
-    pub trainer_registry: Arc<dyn TrainerRegistryStore>,
     pub feature_packs: Arc<dyn FeaturePackStore>,
     pub jobs: Arc<dyn JobStore>,
 }

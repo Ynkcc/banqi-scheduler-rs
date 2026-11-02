@@ -25,31 +25,25 @@ fn env_with_jobs(jobs_toml: &str) -> Env {
     )
     .unwrap());
     let ports = f.ports();
-    let ctl = Arc::new(crate::control::Control::new(&ports, cfg.clone()));
     let disp = Arc::new(TaskDispatcher::new(&ports, cfg.clone(), f.clock.clone()));
     let jobs = Arc::new(JobManager::new(
         ports.jobs.clone(),
         disp.clone(),
         ports.networks.clone(),
         ports.matches.clone(),
-        ctl.clone(),
         cfg.clone(),
         f.clock.clone(),
     ));
-    let asm = Arc::new(TaskAssembler::new(
-        ports.networks.clone(),
-        f.signer.clone(),
-        cfg.clone(),
-        ctl.clone(),
-    ));
+    let asm = Arc::new(TaskAssembler::new(f.signer.clone(), cfg.clone(), {
+        let ports = f.ports();
+        Arc::new(crate::control::Control::new(&ports, cfg.clone()))
+    }));
     let src = JobSource {
         jobs: jobs.clone(),
         matches: ports.matches.clone(),
         nets: ports.networks.clone(),
         disp,
-        reana: Arc::new(ReanaQueue::new(&ports, cfg.clone(), f.clock.clone())),
         asm,
-        ctl,
         cfg,
     };
     Env { f, jobs, src }
@@ -57,7 +51,6 @@ fn env_with_jobs(jobs_toml: &str) -> Env {
 
 fn submit_rating(env: &Env, total: u64, opponent: &str) -> (String, i64) {
     env.f.networks.seed_network("best", None, "onnx");
-    env.f.networks.promote_best("best").unwrap();
     env.f.networks.seed_network("cand", None, "onnx");
     env.f.networks.seed_network("fixed", None, "onnx");
     let (ok, msg, id) = env
@@ -98,7 +91,7 @@ fn req_as(worker: &str, threads: i32) -> TaskRequest {
 #[test]
 fn rating_dispatch_builds_task_and_books_job() {
     let e = env();
-    let (job_id, match_id) = submit_rating(&e, 20, "");
+    let (job_id, match_id) = submit_rating(&e, 20, "best");
     let resp = e
         .src
         .dispatch_rating(
@@ -114,7 +107,7 @@ fn rating_dispatch_builds_task_and_books_job() {
     };
     assert_eq!(p.player_a.unwrap().network_sha, "cand");
     assert_eq!(resp.network_sha, "cand");
-    assert_eq!(resp.opponent_sha, "best", "对手空解析为当前 best");
+    assert_eq!(resp.opponent_sha, "best");
     assert_eq!(g.games, 8, "games_per_task=8 缩放（threads=4/baseline=4）");
     assert_eq!(resp.network_key, "networks/cand.onnx");
     assert_eq!(
@@ -134,7 +127,7 @@ fn rating_dispatch_builds_task_and_books_job() {
 #[test]
 fn rating_dispatch_clamps_to_remaining_games() {
     let e = env();
-    let (job_id, _) = submit_rating(&e, 10, "");
+    let (job_id, _) = submit_rating(&e, 10, "best");
 
     let resp = e
         .src
@@ -171,7 +164,7 @@ fn rating_dispatch_clamps_to_remaining_games() {
 #[test]
 fn rating_dispatch_skips_concluded_match() {
     let e = env();
-    let (job_id, match_id) = submit_rating(&e, 0, "");
+    let (job_id, match_id) = submit_rating(&e, 0, "best");
     e.f.matches.conclude_match(match_id).unwrap();
     let out = e
         .src
@@ -187,8 +180,6 @@ fn rating_dispatch_skips_concluded_match() {
 #[test]
 fn rating_dispatch_with_sides_and_non_network_opponent() {
     let e = env();
-    e.f.networks.seed_network("best", None, "onnx");
-    e.f.networks.promote_best("best").unwrap();
     e.f.networks.seed_network("cand", None, "onnx");
     let (ok, msg, _id) = e
         .jobs
@@ -251,18 +242,6 @@ fn rating_dispatch_with_sides_and_non_network_opponent() {
 
     let t = e.src.disp.lookup(&resp.task_id).unwrap();
     assert_eq!(t.opponent_sha, "");
-}
-
-#[test]
-fn selfplay_mix_skips_rating_match() {
-    let e = env();
-    let (_, rating_match) = submit_rating(&e, 0, "");
-    assert!(e.f.matches.pending_match().unwrap().is_some());
-    assert!(e.jobs.is_rating_match(rating_match));
-
-    let pm = e.f.matches.pending_match().unwrap();
-    let filtered = pm.filter(|m| !e.jobs.is_rating_match(m.id));
-    assert!(filtered.is_none(), "rating match 应被过滤出混入查询");
 }
 
 fn plays_of(resp: &bqs_proto::TaskResponse) -> bqs_proto::Plays {
@@ -498,96 +477,9 @@ fn collect_dispatch_overdispatch_fills_idle_workers() {
 }
 
 #[test]
-fn selfplay_pure_dispatch_generation_snapshot() {
-    let e = env();
-    e.f.networks.seed_network("best", None, "onnx");
-    e.f.networks.promote_best("best").unwrap();
-    let (ok, msg, _) = e
-        .jobs
-        .submit(&SubmitJobRequest {
-            requester: "test".into(),
-            kind: JobKind::JobSelfplay as i32,
-            priority: 0,
-            selfplay: Some(bqs_proto::SelfPlayJobSpec {
-                variant: "4x8".into(),
-                data_kind: bqs_proto::DataKind::DataResnet as i32,
-                search: Some(bqs_proto::CollectSearchParams {
-                    mcts_sims: 512,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            ..Default::default()
-        })
-        .unwrap();
-    assert!(ok, "{msg}");
-
-    let resp = e.src.try_task(&req(4)).unwrap().expect("selfplay task");
-    let g = resp.generation.clone().expect("generation");
-    assert_eq!(g.variant, "4x8");
-    assert_eq!(g.data_kind, bqs_proto::DataKind::DataResnet as i32);
-    assert_eq!(g.games, 8);
-    assert_eq!(g.deadline_unix, 0, "非 collect 任务无超期");
-    let p = plays_of(&resp);
-    let pa = p.player_a.unwrap();
-    let pb = p.player_b.unwrap();
-    assert_eq!(pa.kind, "mcts_resnet");
-    assert_eq!(pa.network_sha, "best");
-    assert_eq!(pb.network_sha, "best", "纯自对弈双方同规格");
-    assert_eq!(
-        pa.search.as_ref().unwrap().mcts_sims,
-        512,
-        "job 规格的 mcts_sims 覆盖写入 per-player search"
-    );
-
-    let t = e.src.disp.lookup(&resp.task_id).unwrap();
-    assert!(!t.gating, "纯自对弈不进 gating 通道");
-}
-
-#[test]
-fn selfplay_gatekeeper_is_independent_plays_task() {
-    let e = env();
-    e.f.networks.seed_network("best", None, "nnue");
-    e.f.networks.promote_best("best").unwrap();
-    e.f.networks.seed_network("cand", None, "nnue");
-    let (ok, msg, job_id) = e
-        .jobs
-        .submit(&SubmitJobRequest {
-            requester: "test".into(),
-            kind: JobKind::JobSelfplay as i32,
-            priority: 0,
-            selfplay: Some(bqs_proto::SelfPlayJobSpec {
-                variant: "4x8".into(),
-                data_kind: bqs_proto::DataKind::DataNnue as i32,
-                ..Default::default()
-            }),
-            ..Default::default()
-        })
-        .unwrap();
-    assert!(ok, "{msg}");
-
-    e.f.matches.seed_match("cand", "best", 400);
-    let resp = e.src.try_task(&req(4)).unwrap();
-    let resp = match resp {
-        Some(r) => r,
-        None => panic!("应派发 gatekeeper 任务"),
-    };
-    let p = plays_of(&resp);
-    let pa = p.player_a.unwrap();
-    let pb = p.player_b.unwrap();
-    assert_eq!(pa.network_sha, "cand", "player_a = 候选");
-    assert_eq!(pb.network_sha, "best", "player_b = 对手（best）");
-
-    let t = e.src.disp.lookup(&resp.task_id).unwrap();
-    assert!(t.gating, "gatekeeper 对打经登记表预计算进 gating 通道");
-    assert_ne!(t.match_id, 0, "对发行关联记入登记表");
-    let _ = job_id;
-}
-
-#[test]
 fn rating_dispatch_boundary_remaining_three_games() {
     let e = env();
-    let (job_id, _) = submit_rating(&e, 10, "");
+    let (job_id, _) = submit_rating(&e, 10, "best");
 
     e.jobs
         .note_dispatch(

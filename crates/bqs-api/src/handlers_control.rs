@@ -8,7 +8,6 @@ use crate::{ApiError, ApiResult, AppState, MAX_CONTROL_BODY, write_endpoint};
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ControlRequest {
-    paused: Option<bool>,
     initial_revealed: Option<i32>,
 
     data_kind: Option<String>,
@@ -26,11 +25,6 @@ pub async fn control(
         MAX_CONTROL_BODY,
         |st, req: ControlRequest| -> Result<OkView, ApiError> {
             let ctl = &st.server.ctl;
-            if let Some(paused) = req.paused {
-                ctl.set_manual_paused(paused)
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-                tracing::info!("[webui] pause_self_play={paused}");
-            }
             if let Some(n) = req.initial_revealed {
                 ctl.set_initial_revealed(n)
                     .map_err(|e| ApiError::bad_request(e.to_string()))?;

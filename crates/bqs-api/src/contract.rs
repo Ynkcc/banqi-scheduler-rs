@@ -27,7 +27,6 @@ fn assert_keys(got: &[String], want: &[&str]) {
 fn status_top_level() {
     let v = StatusView {
         variant: "4x8".into(),
-        paused: false,
         initial_revealed: 0,
         data_kind: "resnet".into(),
         min_client_version: String::new(),
@@ -37,7 +36,6 @@ fn status_top_level() {
             alpha: 0.05,
             beta: 0.05,
         },
-        best: None,
         counts: CountsView {
             networks: 0,
             candidates: 0,
@@ -48,24 +46,18 @@ fn status_top_level() {
         },
         should_stop: false,
         stop_reason: String::new(),
-        auto_paused: false,
-        auto_pause_reason: String::new(),
     };
     assert_keys(
         &keys(&v),
         &[
             "variant",
-            "paused",
             "initialRevealed",
             "dataKind",
             "minClientVersion",
             "sprt",
-            "best",
             "counts",
             "shouldStop",
             "stopReason",
-            "autoPaused",
-            "autoPauseReason",
         ],
     );
     assert_keys(&keys(&v.sprt), &["elo0", "elo1", "alpha", "beta"]);
@@ -88,8 +80,8 @@ fn network_view() {
         sha: "abc".into(),
         parent_sha: String::new(),
         created_at: 1,
-        is_best: true,
-        status: "best".into(),
+        is_best: false,
+        status: "candidate".into(),
         notes: String::new(),
     };
     assert_keys(
@@ -177,75 +169,6 @@ fn worker_view() {
             "estGamesPerHour",
             "estPerThreadHour",
             "estSamples",
-        ],
-    );
-}
-
-#[test]
-fn trainers_view() {
-    let tv = TrainerView {
-        id: "tr-1".into(),
-        last_seen: 0,
-        online: true,
-        variant: "4x8".into(),
-        data_kind: "resnet".into(),
-        consumed_key: String::new(),
-        consumed_id: 0,
-        registered_max_id: 0,
-        unconsumed_batches: 0,
-        samples_consumed: 0,
-        backlog: 0,
-        buffered: 0,
-        health_status: "ok".into(),
-        last_error: String::new(),
-        progress: String::new(),
-    };
-    let v = TrainersView {
-        config: BalanceConfigView {
-            enabled: true,
-            mode: "pause".into(),
-            trainer_online_seconds: 120,
-            stalled_seconds: 600,
-            backlog_pause_batches: 0,
-            pause_reanalysis: false,
-        },
-        auto_paused: false,
-        auto_pause_reason: String::new(),
-        trainers: vec![tv],
-    };
-    assert_keys(
-        &keys(&v),
-        &["config", "autoPaused", "autoPauseReason", "trainers"],
-    );
-    assert_keys(
-        &keys(&v.config),
-        &[
-            "enabled",
-            "mode",
-            "trainerOnlineSeconds",
-            "stalledSeconds",
-            "backlogPauseBatches",
-            "pauseReanalysis",
-        ],
-    );
-    assert_keys(
-        &keys(&v.trainers[0]),
-        &[
-            "id",
-            "lastSeen",
-            "online",
-            "variant",
-            "dataKind",
-            "consumedKey",
-            "consumedId",
-            "registeredMaxId",
-            "unconsumedBatches",
-            "samplesConsumed",
-            "backlog",
-            "buffered",
-            "healthStatus",
-            "lastError",
-            "progress",
         ],
     );
 }
