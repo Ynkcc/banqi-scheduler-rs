@@ -39,6 +39,68 @@ fn resp_behavior(resp: &TaskResponse) -> generation_spec::Behavior {
 }
 
 #[test]
+fn list_episodes_paging_and_kind_filter() {
+    let (s, f) = default_server();
+    f.episodes.seed_episode(1, "episodes/sha/a.epb.gz", 0);
+    f.episodes.seed_episode(2, "episodes/sha/b.epb.gz", 1);
+    f.episodes.seed_episode(3, "episodes/sha/c.epb.gz", 2);
+    f.episodes.seed_episode(4, "episodes/sha/d.epb.gz", 0);
+
+    let all = s
+        .list_episodes(ListEpisodesRequest {
+            limit: 10,
+            after_key: String::new(),
+            kind: None,
+        })
+        .unwrap();
+    assert_eq!(all.objects.len(), 3);
+    assert!(!all.has_more);
+
+    assert_eq!(all.objects[0].object_key, "episodes/sha/a.epb.gz");
+    assert_eq!(all.objects[2].object_key, "episodes/sha/d.epb.gz");
+    assert!(all.objects[0].download_url.starts_with("get:"));
+
+    let page2 = s
+        .list_episodes(ListEpisodesRequest {
+            limit: 10,
+            after_key: "episodes/sha/b.epb.gz".into(),
+            kind: None,
+        })
+        .unwrap();
+    assert_eq!(page2.objects.len(), 1);
+    assert_eq!(page2.objects[0].object_key, "episodes/sha/d.epb.gz");
+
+    let resnet = s
+        .list_episodes(ListEpisodesRequest {
+            limit: 10,
+            after_key: "episodes/sha/b.epb.gz".into(),
+            kind: Some(0),
+        })
+        .unwrap();
+    assert_eq!(resnet.objects.len(), 1);
+    assert_eq!(resnet.objects[0].object_key, "episodes/sha/d.epb.gz");
+
+    let more = s
+        .list_episodes(ListEpisodesRequest {
+            limit: 1,
+            after_key: String::new(),
+            kind: None,
+        })
+        .unwrap();
+    assert_eq!(more.objects.len(), 1);
+    assert!(more.has_more);
+    let none = s
+        .list_episodes(ListEpisodesRequest {
+            limit: 0,
+            after_key: String::new(),
+            kind: None,
+        })
+        .unwrap();
+    assert_eq!(none.objects.len(), 3);
+    assert!(!none.has_more);
+}
+
+#[test]
 fn request_feature_pack_get_or_enqueue() {
     let (s, f) = default_server();
     let req = |key: &str| FeaturePackRequest {

@@ -133,6 +133,24 @@ message EpisodeAck {
   string object_key = 4;
 }
 
+// 离线训练数据浏览（外部脚本/Python 离线训练消费）
+message ListEpisodesRequest {
+  int32 limit = 1;
+  string after_key = 2;
+  optional DataKind kind = 3;
+}
+
+message EpisodeObject {
+  string object_key = 1;
+  string download_url = 2;
+  int64 size = 3;
+}
+
+message ListEpisodesReply {
+  repeated EpisodeObject objects = 1;
+  bool has_more = 2;
+}
+
 message RegisterNetworkRequest {
   string sha = 1;
   string parent_sha = 2;
@@ -512,6 +530,7 @@ service SchedulerService {
   rpc GetInfo (GetInfoRequest) returns (GetInfoReply);
   rpc GetTask (TaskRequest) returns (TaskResponse);
   rpc ReportEpisode (EpisodeMeta) returns (EpisodeAck);
+  rpc ListEpisodes (ListEpisodesRequest) returns (ListEpisodesReply);
   rpc RegisterNetwork (RegisterNetworkRequest) returns (RegisterNetworkAck);
   rpc ReportMatchResult (MatchResult) returns (MatchResultAck);
   rpc Heartbeat (HeartbeatRequest) returns (HeartbeatReply);

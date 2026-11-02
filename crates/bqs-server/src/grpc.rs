@@ -51,6 +51,14 @@ impl SchedulerService for SchedulerSvc {
         Ok(tonic::Response::new(reply))
     }
 
+    async fn list_episodes(
+        &self,
+        request: tonic::Request<ListEpisodesRequest>,
+    ) -> Result<tonic::Response<ListEpisodesReply>, tonic::Status> {
+        let reply = forward!(self.0, request.into_inner(), list_episodes)?;
+        Ok(tonic::Response::new(reply))
+    }
+
     async fn register_network(
         &self,
         request: tonic::Request<RegisterNetworkRequest>,
