@@ -320,6 +320,7 @@ pub fn build_game(
             move_counter: move_counter as i64,
             scores: [scores[0] as i64, scores[1] as i64],
             board: board.clone(),
+            fen: snaps[ply].to_fen(),
             revealed_at: revealed_at.clone(),
             hidden_bag: HiddenBagView {
                 red: hidden_bag.red.map(i64::from),

@@ -499,6 +499,9 @@ pub struct ReplayStepView {
     pub scores: [i64; 2],
     #[serde(rename = "board")]
     pub board: Vec<String>,
+
+    #[serde(rename = "fen")]
+    pub fen: String,
     #[serde(rename = "revealedAt")]
     pub revealed_at: Vec<bool>,
     #[serde(rename = "hiddenBag")]
