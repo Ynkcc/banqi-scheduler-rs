@@ -1,6 +1,8 @@
+use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::Uri;
 use axum::Json;
+use serde::{Deserialize, Serialize};
 
 use bqs_core::types::Episode;
 
@@ -8,7 +10,69 @@ use crate::views::{
     data_kind_name, DataStatsView, EpisodeGameView, EpisodePageView, EpisodeView,
     GameLookupItemView, GameLookupPageView,
 };
-use crate::{int_query, read_endpoint, ApiError, ApiResult, AppState};
+use crate::{int_query, read_endpoint, ApiError, ApiResult, AppState, MAX_CONTROL_BODY};
+
+#[derive(Debug, Deserialize)]
+pub struct ImportEpisodeBody {
+    #[serde(default)]
+    pub network_sha: String,
+
+    #[serde(default = "default_import_kind")]
+    pub kind: i64,
+    pub game_count: i64,
+    #[serde(default)]
+    pub total_steps: i64,
+
+    #[serde(default)]
+    pub winner: i64,
+    #[serde(default)]
+    pub match_id: i64,
+    #[serde(default)]
+    pub opponent_sha: String,
+    #[serde(default)]
+    pub opponent_spec: String,
+    #[serde(default)]
+    pub note: String,
+}
+
+fn default_import_kind() -> i64 {
+    1
+}
+
+#[derive(Debug, Serialize)]
+pub struct ImportEpisodeView {
+    pub id: i64,
+    pub object_key: String,
+    pub upload_url: String,
+    pub replay_url: String,
+}
+
+pub async fn import_episode(
+    State(st): State<AppState>,
+    bytes: Bytes,
+) -> ApiResult<Json<ImportEpisodeView>> {
+    let body: ImportEpisodeBody = crate::decode_body(&bytes, MAX_CONTROL_BODY)?;
+    let ack = st
+        .server
+        .import_episode(
+            body.network_sha.trim(),
+            body.kind,
+            body.game_count,
+            body.total_steps,
+            body.winner,
+            body.match_id,
+            body.opponent_sha.trim(),
+            body.opponent_spec.trim(),
+            body.note.trim(),
+        )
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    Ok(Json(ImportEpisodeView {
+        id: ack.id,
+        object_key: ack.object_key,
+        upload_url: ack.upload_url,
+        replay_url: format!("/scheduler.html#/replay?episode={}", ack.id),
+    }))
+}
 
 use bqs_store::clamp_episode_page_limit;
 

@@ -161,18 +161,17 @@ pub fn build_game(
     }
     let players_i8 = |i: usize| rec.players[i] as i8;
 
-    let final_snapshot: Option<Vec<u8>> = if steps > 0 && snaps[steps - 1].true_board.is_some() {
-
-
+    let final_snap: Option<PositionSnapshot> = if steps > 0 && snaps[steps - 1].true_board.is_some() {
         let last_pre = &snaps[steps - 1];
-        let stepped = bq_env::for_variant_env!(variant, E => {
+        bq_env::for_variant_env!(variant, E => {
             <E as SnapshotEnv>::from_snapshot(last_pre)
                 .and_then(|mut env| env.step_with_reveal(actions[steps - 1] as usize, None).map(|_| env.to_snapshot()))
-        });
-        stepped.ok().map(|s| s.encode())
+        })
+        .ok()
     } else {
         None
     };
+    let final_snapshot: Option<Vec<u8>> = final_snap.as_ref().map(|s| s.encode());
 
     let mut moves = Vec::with_capacity(steps);
     for (ply, &action) in actions.iter().enumerate() {
@@ -359,6 +358,8 @@ pub fn build_game(
         side_b: crate::handlers_replay::describe_side(&ep.opponent_sha, &ep.opponent_spec),
         red_is_a,
         a_side_only: false,
+        initial_fen: snaps.first().map(|s| s.to_fen()),
+        final_fen: final_snap.map(|s| s.to_fen()),
         initial_board: game.initial_board,
         initial_shown: game.initial_shown,
         initial_bag: HiddenBagView {

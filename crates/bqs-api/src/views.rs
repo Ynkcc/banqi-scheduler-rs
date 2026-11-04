@@ -558,6 +558,12 @@ pub struct ReplayGameView {
     pub red_is_a: bool,
     #[serde(rename = "aSideOnly")]
     pub a_side_only: bool,
+
+    #[serde(rename = "initialFen")]
+    pub initial_fen: Option<String>,
+
+    #[serde(rename = "finalFen")]
+    pub final_fen: Option<String>,
     #[serde(rename = "initialBoard")]
     pub initial_board: Vec<String>,
     #[serde(rename = "initialShown")]

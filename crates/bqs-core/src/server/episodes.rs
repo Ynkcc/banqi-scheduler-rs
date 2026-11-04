@@ -123,6 +123,63 @@ impl Server {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn import_episode(
+        &self,
+        network_sha: &str,
+        kind: i64,
+        game_count: i64,
+        total_steps: i64,
+        winner: i64,
+        match_id: i64,
+        opponent_sha: &str,
+        opponent_spec: &str,
+        note: &str,
+    ) -> CoreResult<crate::types::ImportEpisodeAck> {
+        if game_count <= 0 {
+            return Err(crate::CoreError::Internal("game_count 必须 > 0".into()));
+        }
+        if !(0..=1).contains(&kind) {
+            return Err(crate::CoreError::Internal(format!(
+                "kind={kind} 非法（0=NONE 1=NNUE）"
+            )));
+        }
+        let obj_id = crate::sources::new_id();
+        let sha_for_key = if network_sha.is_empty() {
+            "offline".to_string()
+        } else {
+            network_sha.to_string()
+        };
+        let key = episode_key(&sha_for_key, &obj_id);
+        let url = self.signer.presign_put(&key, self.ttl_secs())?;
+        let draft = EpisodeDraft {
+            worker_id: "offline".into(),
+            task_id: format!("offline-{obj_id}"),
+            network_sha: network_sha.to_string(),
+            game_count,
+            total_steps,
+            winner,
+            object_key: key.clone(),
+            created_at: self.clock.now(),
+            kind,
+            opponent_sha: opponent_sha.to_string(),
+            opponent_spec: opponent_spec.to_string(),
+            match_id,
+            ..Default::default()
+        };
+        let id = self.ports.episodes.insert_episode(draft)?;
+        if note.is_empty() {
+            tracing::info!("[episode] 离线导入 id={id} key={key} games={game_count}");
+        } else {
+            tracing::info!("[episode] 离线导入 id={id} key={key} games={game_count} note={note}");
+        }
+        Ok(crate::types::ImportEpisodeAck {
+            id,
+            object_key: key,
+            upload_url: url,
+        })
+    }
+
     pub fn report_match_result(&self, r: MatchResult) -> CoreResult<MatchResultAck> {
         self.router.route(&r)
     }

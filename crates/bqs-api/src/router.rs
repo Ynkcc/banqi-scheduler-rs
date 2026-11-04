@@ -40,6 +40,10 @@ pub fn router(state: AppState) -> Router {
             "/api/episodes/{id}/replay/{index}",
             get(handlers_replay::episode_replay_game),
         )
+        .route(
+            "/api/episodes/import",
+            post(handlers_episodes::import_episode),
+        )
         .route("/api/data-stats", get(handlers_episodes::data_stats))
         .route("/api/tasks", get(handlers_status::tasks))
         .route("/api/task-stats", get(handlers_status::task_stats))

@@ -113,6 +113,13 @@ pub struct EpisodeDraft {
     pub games: Vec<EpisodeGameRow>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ImportEpisodeAck {
+    pub id: i64,
+    pub object_key: String,
+    pub upload_url: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Worker {
     pub id: String,
