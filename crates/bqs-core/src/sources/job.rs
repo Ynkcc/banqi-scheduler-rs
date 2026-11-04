@@ -293,6 +293,12 @@ impl JobSource {
         let side_a_spec = side_a.to_proto();
         let side_b_spec = side_b.to_proto();
 
+        let (record_opp_sha, record_opp_spec) = if b_model {
+            (m.opponent.clone(), String::new())
+        } else {
+            (String::new(), side_b.kind.clone())
+        };
+
         let seed = crate::sources::random_seed();
         let resp = self.asm.rating_task(
             &task_id,
@@ -314,8 +320,8 @@ impl JobSource {
             &req.worker_id,
             bqs_proto::TaskKind::TaskRating,
             &m.candidate,
-            &m.opponent,
-            "",
+            &record_opp_sha,
+            &record_opp_spec,
             m.id,
             None,
         )?;
