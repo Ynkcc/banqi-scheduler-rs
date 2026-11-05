@@ -224,6 +224,29 @@ impl EpisodeStore for Store {
         })
     }
 
+    fn list_episodes_by_match(&self, match_id: i64, before_id: i64, limit: i64) -> CoreResult<Vec<Episode>> {
+        let limit = clamp_episode_page_limit(limit);
+        self.with_conn(|conn| {
+            let mut query = format!("SELECT {EPISODE_COLUMNS} FROM episodes WHERE match_id = ?");
+            let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(match_id)];
+            if before_id > 0 {
+                query.push_str(" AND id < ?");
+                args.push(Box::new(before_id));
+            }
+            query.push_str(" ORDER BY id DESC LIMIT ?");
+            args.push(Box::new(limit));
+            let mut stmt = conn.prepare(&query).map_err(StoreError::from)?;
+            let rows = stmt
+                .query_map(
+                    rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())),
+                    scan_episode_row,
+                )
+                .map_err(StoreError::from)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
+        })
+    }
+
     fn get_episode_games(&self, episode_id: i64) -> CoreResult<Vec<EpisodeGameRow>> {
         self.with_conn(|conn| {
             let mut stmt = conn

@@ -71,6 +71,18 @@ pub trait EpisodeStore: Send + Sync {
 
     fn list_episodes_page(&self, before_id: i64, limit: i64) -> CoreResult<Vec<Episode>>;
 
+    fn list_episodes_by_match(
+        &self,
+        match_id: i64,
+        before_id: i64,
+        limit: i64,
+    ) -> CoreResult<Vec<Episode>> {
+        let _ = (match_id, before_id, limit);
+        Err(CoreError::Internal(
+            "list_episodes_by_match 仅 bqs-store::Store 实现（match 对局反查需求）".into(),
+        ))
+    }
+
     fn get_episode(&self, id: i64) -> CoreResult<Option<Episode>> {
         let _ = id;
         Err(CoreError::Internal(

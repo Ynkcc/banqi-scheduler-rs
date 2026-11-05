@@ -8,7 +8,8 @@ use bqs_core::types::Episode;
 
 use crate::views::{
     data_kind_name, DataStatsView, EpisodeGameView, EpisodePageView, EpisodeView,
-    GameLookupItemView, GameLookupPageView,
+    GameLookupItemView, GameLookupPageView, MatchPairCategoryView, MatchPairItemView,
+    MatchPairsView,
 };
 use crate::{int_query, read_endpoint, ApiError, ApiResult, AppState, MAX_CONTROL_BODY};
 
@@ -153,13 +154,113 @@ pub async fn lookup_game(
 pub async fn episodes(State(st): State<AppState>, uri: Uri) -> ApiResult<Json<EpisodePageView>> {
     let before = int_query(uri.query(), "before");
     let limit = clamp_episode_page_limit(int_query(uri.query(), "limit"));
+    let match_id = int_query(uri.query(), "match");
     read_endpoint(&st, move |st| -> Result<EpisodePageView, ApiError> {
-        let items = st.server.ports.episodes.list_episodes_page(before, limit)?;
+        let items = if match_id > 0 {
+            st.server
+                .ports
+                .episodes
+                .list_episodes_by_match(match_id, before, limit)?
+        } else {
+            st.server.ports.episodes.list_episodes_page(before, limit)?
+        };
         let next = items.last().map(|e| e.id).unwrap_or(before);
         Ok(EpisodePageView {
             items: items.iter().map(to_episode_view).collect(),
             next_before: next,
             has_more: items.len() as i64 == limit,
+        })
+    })
+    .await
+}
+
+fn candidate_result_char(g: &bqs_core::types::EpisodeGameRow) -> char {
+    let w = g.winner.unwrap_or(0);
+    if w == 0 {
+        return 'D';
+    }
+    let a_wins = if g.a_is_red { w > 0 } else { w < 0 };
+    if a_wins {
+        'W'
+    } else {
+        'L'
+    }
+}
+
+fn pair_category(results: &str) -> &'static str {
+    let b = results.as_bytes();
+    match (b[0], b[1]) {
+        (b'L', b'L') => "LL",
+        (b'L', b'D') | (b'D', b'L') => "LD",
+        (b'D', b'D') => "DD",
+        (b'W', b'L') | (b'L', b'W') => "WL",
+        (b'D', b'W') | (b'W', b'D') => "DW",
+        (b'W', b'W') => "WW",
+        _ => "--",
+    }
+}
+
+pub async fn match_pairs(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<MatchPairsView>> {
+    read_endpoint(&st, move |st| -> Result<MatchPairsView, ApiError> {
+        if id <= 0 {
+            return Err(ApiError::bad_request("match id 无效"));
+        }
+        let eps = st
+            .server
+            .ports
+            .episodes
+            .list_episodes_by_match(id, 0, 100_000)?;
+
+        const ORDER: [&str; 6] = ["LL", "LD", "DD", "WL", "DW", "WW"];
+        let mut buckets: std::collections::BTreeMap<&'static str, Vec<MatchPairItemView>> =
+            std::collections::BTreeMap::new();
+        for ep in &eps {
+            let games = st.server.ports.episodes.get_episode_games(ep.id)?;
+            let mut by_pair: std::collections::BTreeMap<
+                i64,
+                Vec<&bqs_core::types::EpisodeGameRow>,
+            > = std::collections::BTreeMap::new();
+            for g in &games {
+                by_pair.entry(g.pair_index).or_default().push(g);
+            }
+            for (pair_index, mut gs) in by_pair {
+                gs.sort_by_key(|g| g.pair_position);
+                if gs.len() != 2 {
+                    continue;
+                }
+                let results = format!(
+                    "{}{}",
+                    candidate_result_char(gs[0]),
+                    candidate_result_char(gs[1])
+                );
+                let category = pair_category(&results);
+                buckets
+                    .entry(category)
+                    .or_default()
+                    .push(MatchPairItemView {
+                        episode_id: ep.id,
+                        pair_index,
+                        game_indexes: vec![gs[0].game_index, gs[1].game_index],
+                        results,
+                    });
+            }
+        }
+        Ok(MatchPairsView {
+            match_id: id,
+            pairs: ORDER
+                .iter()
+                .map(|c| {
+                    let items = buckets.remove(*c).unwrap_or_default();
+                    MatchPairCategoryView {
+                        category: (*c).to_string(),
+                        count: items.len() as i64,
+                        items,
+                    }
+                })
+                .collect(),
         })
     })
     .await

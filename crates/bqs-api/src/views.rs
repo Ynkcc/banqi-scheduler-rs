@@ -356,6 +356,35 @@ pub struct EpisodePageView {
 }
 
 #[derive(Debug, Serialize)]
+pub struct MatchPairItemView {
+    #[serde(rename = "episodeId")]
+    pub episode_id: i64,
+
+    #[serde(rename = "pairIndex")]
+    pub pair_index: i64,
+
+    #[serde(rename = "gameIndexes")]
+    pub game_indexes: Vec<i64>,
+
+    #[serde(rename = "results")]
+    pub results: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MatchPairCategoryView {
+    pub category: String,
+    pub count: i64,
+    pub items: Vec<MatchPairItemView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MatchPairsView {
+    #[serde(rename = "matchId")]
+    pub match_id: i64,
+    pub pairs: Vec<MatchPairCategoryView>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct DataStatsView {
     #[serde(rename = "total")]
     pub total: std::collections::BTreeMap<String, KindStatsView>,
