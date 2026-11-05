@@ -14,6 +14,14 @@ use crate::views::{
 };
 use crate::{read_endpoint, write_endpoint, ApiError, ApiResult, AppState, MAX_CONTROL_BODY};
 
+fn finite_or(x: f64, fallback: f64) -> f64 {
+    if x.is_finite() {
+        x
+    } else {
+        fallback
+    }
+}
+
 pub fn to_network_view(n: &Network) -> NetworkView {
     NetworkView {
         sha: n.sha.clone(),
@@ -256,7 +264,13 @@ pub async fn matches(State(st): State<AppState>) -> ApiResult<Json<Vec<MatchView
 
             let sprt_params = sprt_by_match.get(&m.id).copied();
             let bounds = sprt_params
-                .map(|(_, _, alpha, beta)| new_bounds(alpha, beta))
+                .map(|(_, _, alpha, beta)| {
+                    let b = new_bounds(alpha, beta);
+                    bqs_judgment::Bounds {
+                        lower: finite_or(b.lower, 0.0),
+                        upper: finite_or(b.upper, 0.0),
+                    }
+                })
                 .unwrap_or(bqs_judgment::Bounds {
                     lower: 0.0,
                     upper: 0.0,
@@ -276,7 +290,7 @@ pub async fn matches(State(st): State<AppState>) -> ApiResult<Json<Vec<MatchView
                 verdict: bqs_judgment::Verdict::Continue.as_str().into(),
                 conclusion: m.conclusion.as_ref().map(|c| MatchConclusionView {
                     verdict: c.verdict.clone(),
-                    llr: c.llr,
+                    llr: finite_or(c.llr, 0.0),
                     sprt_elo0: c.sprt_elo0,
                     sprt_elo1: c.sprt_elo1,
                     sprt_alpha: c.sprt_alpha,
@@ -287,9 +301,9 @@ pub async fn matches(State(st): State<AppState>) -> ApiResult<Json<Vec<MatchView
                 if m.pairs.total() > 0 {
                     match llr(m.pairs, elo0, elo1) {
                         Ok(l) => {
-                            mv.llr = l;
+                            mv.llr = finite_or(l, 0.0);
                             if let Ok((score, _)) = m.pairs.stats() {
-                                mv.score = Some(score);
+                                mv.score = Some(finite_or(score, 0.0));
                             }
                         }
                         Err(e) => tracing::warn!("[webui] llr match={}：{e}", m.id),

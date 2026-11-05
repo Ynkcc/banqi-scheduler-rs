@@ -77,7 +77,7 @@ pub fn llr(p: Hexanomial, elo0: f64, elo1: f64) -> Result<f64, LlrError> {
     let s0 = score_from_elo(elo0);
     let s1 = score_from_elo(elo1);
 
-    let variance = if variance <= 0.0 { 0.1 } else { variance };
+    let variance = if !(variance > 0.0) { 0.1 } else { variance };
     let n = p.total() as f64;
     Ok(n * (s - (s0 + s1) / 2.0) * (s1 - s0) / variance)
 }
@@ -194,5 +194,12 @@ mod tests {
     fn zero_variance_floored() {
         let p = Hexanomial([0, 0, 0, 0, 0, 1]);
         assert!(llr(p, 0.0, 15.0).is_ok());
+    }
+
+    #[test]
+    fn single_pair_nan_variance_floored() {
+        let p = Hexanomial([0, 0, 0, 1, 0, 0]);
+        let l = llr(p, 0.0, 15.0).unwrap();
+        assert!(l.is_finite(), "llr = {l}");
     }
 }
