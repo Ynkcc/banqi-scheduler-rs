@@ -45,7 +45,7 @@ pub trait MatchStore: Send + Sync {
         id: i64,
         conclusion: crate::types::MatchConclusion,
     ) -> CoreResult<bool> {
-        let _ = conclusion;
+        let _ = (id, conclusion);
         Err(CoreError::Internal(
             "conclude_match_with_stats 仅 bqs-store::Store 实现（判停结果持久化需求）".into(),
         ))

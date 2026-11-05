@@ -10,7 +10,7 @@ use bqs_proto::RegisterNetworkRequest;
 
 use crate::views::{
     EpisodeRateEstimateView, KindStatsView, MatchConclusionView, MatchView, NetworkView, OkView,
-    SprtView, StatusView, TaskView, WorkerView,
+    StatusView, TaskView, WorkerView,
 };
 use crate::{read_endpoint, write_endpoint, ApiError, ApiResult, AppState, MAX_CONTROL_BODY};
 
@@ -76,12 +76,6 @@ pub async fn status(State(st): State<AppState>) -> ApiResult<Json<StatusView>> {
             initial_revealed: ctl.initial_revealed(),
             data_kind: ctl.data_kind().as_str().to_string(),
             min_client_version: server.cfg.server.min_client_version.clone(),
-            sprt: SprtView {
-                elo0: server.cfg.sprt.elo0,
-                elo1: server.cfg.sprt.elo1,
-                alpha: server.cfg.sprt.alpha,
-                beta: server.cfg.sprt.beta,
-            },
             counts,
             should_stop,
             stop_reason,
@@ -217,11 +211,11 @@ pub async fn sign_upload(
 pub async fn matches(State(st): State<AppState>) -> ApiResult<Json<Vec<MatchView>>> {
     read_endpoint(&st, |st| -> Result<Vec<MatchView>, ApiError> {
         let server = &st.server;
-        let sprt = &server.cfg.sprt;
-        let bounds = new_bounds(sprt.alpha, sprt.beta);
         let items = server.ports.matches.list_matches()?;
 
         let mut side_kinds: BTreeMap<i64, (String, String)> = BTreeMap::new();
+
+        let mut sprt_by_match: BTreeMap<i64, (f64, f64, f64, f64)> = BTreeMap::new();
         for j in server
             .jobs
             .list(&bqs_core::ports::JobQuery {
@@ -237,6 +231,15 @@ pub async fn matches(State(st): State<AppState>) -> ApiResult<Json<Vec<MatchView
                 if spec.match_id != 0 {
                     let (a, b) = spec.resolved_sides();
                     side_kinds.insert(spec.match_id, (a.kind.clone(), b.kind.clone()));
+                    sprt_by_match.insert(
+                        spec.match_id,
+                        (
+                            spec.sprt_elo0,
+                            spec.sprt_elo1,
+                            spec.sprt_alpha,
+                            spec.sprt_beta,
+                        ),
+                    );
                 }
             }
         }
@@ -250,6 +253,14 @@ pub async fn matches(State(st): State<AppState>) -> ApiResult<Json<Vec<MatchView
                     sha.to_string()
                 }
             };
+
+            let sprt_params = sprt_by_match.get(&m.id).copied();
+            let bounds = sprt_params
+                .map(|(_, _, alpha, beta)| new_bounds(alpha, beta))
+                .unwrap_or(bqs_judgment::Bounds {
+                    lower: 0.0,
+                    upper: 0.0,
+                });
             let mut mv = MatchView {
                 id: m.id,
                 candidate: display(&m.candidate, kinds.map(|k| &k.0)),
@@ -272,18 +283,20 @@ pub async fn matches(State(st): State<AppState>) -> ApiResult<Json<Vec<MatchView
                     sprt_beta: c.sprt_beta,
                 }),
             };
-            if m.pairs.total() > 0 {
-                match llr(m.pairs, sprt.elo0, sprt.elo1) {
-                    Ok(l) => {
-                        mv.llr = l;
-                        if let Ok((score, _)) = m.pairs.stats() {
-                            mv.score = Some(score);
+            if let Some((elo0, elo1, _, _)) = sprt_params {
+                if m.pairs.total() > 0 {
+                    match llr(m.pairs, elo0, elo1) {
+                        Ok(l) => {
+                            mv.llr = l;
+                            if let Ok((score, _)) = m.pairs.stats() {
+                                mv.score = Some(score);
+                            }
                         }
+                        Err(e) => tracing::warn!("[webui] llr match={}：{e}", m.id),
                     }
-                    Err(e) => tracing::warn!("[webui] llr match={}：{e}", m.id),
-                }
-                if let Ok((verdict, _)) = judge(m.pairs, sprt.elo0, sprt.elo1, bounds) {
-                    mv.verdict = verdict.as_str().into();
+                    if let Ok((verdict, _)) = judge(m.pairs, elo0, elo1, bounds) {
+                        mv.verdict = verdict.as_str().into();
+                    }
                 }
             }
             out.push(mv);

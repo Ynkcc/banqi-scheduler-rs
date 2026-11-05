@@ -30,12 +30,6 @@ fn status_top_level() {
         initial_revealed: 0,
         data_kind: "resnet".into(),
         min_client_version: String::new(),
-        sprt: SprtView {
-            elo0: 0.0,
-            elo1: 15.0,
-            alpha: 0.05,
-            beta: 0.05,
-        },
         counts: CountsView {
             networks: 0,
             candidates: 0,
@@ -54,13 +48,11 @@ fn status_top_level() {
             "initialRevealed",
             "dataKind",
             "minClientVersion",
-            "sprt",
             "counts",
             "shouldStop",
             "stopReason",
         ],
     );
-    assert_keys(&keys(&v.sprt), &["elo0", "elo1", "alpha", "beta"]);
     assert_keys(
         &keys(&v.counts),
         &[

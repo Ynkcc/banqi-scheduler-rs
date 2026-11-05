@@ -19,7 +19,7 @@ fn env_with_jobs(jobs_toml: &str) -> Env {
     let f = Fakes::new();
     let cfg = Arc::new(Config::parse(
         &format!(
-            "[selfplay]\ngames_per_task = 8\n[sprt]\nelo0 = 0.0\nelo1 = 15.0\nalpha = 0.05\nbeta = 0.05\n{jobs_toml}"
+            "[selfplay]\ngames_per_task = 8\n{jobs_toml}"
         ),
         "test",
     )
@@ -63,6 +63,10 @@ fn submit_rating(env: &Env, total: u64, opponent: &str) -> (String, i64) {
                 candidate_sha: "cand".into(),
                 opponent_sha: opponent.into(),
                 total_games: total,
+                sprt_elo0: 0.0,
+                sprt_elo1: 15.0,
+                sprt_alpha: 0.05,
+                sprt_beta: 0.05,
                 ..Default::default()
             }),
             ..Default::default()
@@ -206,6 +210,10 @@ fn rating_dispatch_with_sides_and_non_network_opponent() {
                     }),
                 }),
                 total_games: 20,
+                sprt_elo0: 0.0,
+                sprt_elo1: 15.0,
+                sprt_alpha: 0.05,
+                sprt_beta: 0.05,
                 ..Default::default()
             }),
             ..Default::default()

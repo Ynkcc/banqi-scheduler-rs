@@ -168,17 +168,13 @@ async fn run(args: Args) -> Result<()> {
 
     let sp = &cfg.selfplay;
     tracing::info!(
-        "[scheduler] listening on {} db={} bucket={} sprt(elo0={},elo1={},alpha={},beta={})",
+        "[scheduler] listening on {} db={} bucket={}",
         cfg.server.listen,
         cfg.db.path,
         cfg.storage
             .as_ref()
             .map(|s| s.bucket.as_str())
             .unwrap_or(""),
-        cfg.sprt.elo0,
-        cfg.sprt.elo1,
-        cfg.sprt.alpha,
-        cfg.sprt.beta,
     );
     tracing::info!(
         "[scheduler] variant={} initial_revealed={} data_kind={} min_client_version={:?}",

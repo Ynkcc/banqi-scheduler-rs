@@ -42,7 +42,6 @@ pub struct Config {
 
     pub storage: Option<StorageSection>,
     pub selfplay: SelfplaySection,
-    pub sprt: SprtSection,
 
     pub jobs: JobsSection,
 }
@@ -182,16 +181,6 @@ impl Default for SearchDefaults {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(deny_unknown_fields, default)]
-pub struct SprtSection {
-    pub elo0: f64,
-
-    pub elo1: f64,
-    pub alpha: f64,
-    pub beta: f64,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct JobsSection {
@@ -260,20 +249,7 @@ impl Config {
                 "selfplay.search.mcts_eta 必须 >= 2".into(),
             ));
         }
-        let sp = &self.sprt;
-        for (name, v) in [("alpha", sp.alpha), ("beta", sp.beta)] {
-            if !(0.0 < v && v < 1.0) {
-                return Err(ConfigError::Invalid(format!(
-                    "sprt.{name} 必须在 (0,1)，当前 {v}"
-                )));
-            }
-        }
-        if sp.elo1 <= sp.elo0 {
-            return Err(ConfigError::Invalid(format!(
-                "sprt.elo1 ({}) 必须大于 sprt.elo0 ({})",
-                sp.elo1, sp.elo0
-            )));
-        }
+
         Ok(())
     }
 }

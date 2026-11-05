@@ -28,18 +28,6 @@ pub struct NetworkView {
 }
 
 #[derive(Debug, Serialize)]
-pub struct SprtView {
-    #[serde(rename = "elo0")]
-    pub elo0: f64,
-    #[serde(rename = "elo1")]
-    pub elo1: f64,
-    #[serde(rename = "alpha")]
-    pub alpha: f64,
-    #[serde(rename = "beta")]
-    pub beta: f64,
-}
-
-#[derive(Debug, Serialize)]
 pub struct CountsView {
     #[serde(rename = "networks")]
     pub networks: i64,
@@ -78,8 +66,6 @@ pub struct StatusView {
     pub data_kind: String,
     #[serde(rename = "minClientVersion")]
     pub min_client_version: String,
-    #[serde(rename = "sprt")]
-    pub sprt: SprtView,
     #[serde(rename = "counts")]
     pub counts: CountsView,
     #[serde(rename = "shouldStop")]

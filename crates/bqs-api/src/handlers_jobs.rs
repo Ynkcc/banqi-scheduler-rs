@@ -152,10 +152,10 @@ pub struct RatingBody {
 
     pub total_games: u64,
 
-    pub sprt_elo0: f64,
-    pub sprt_elo1: f64,
-    pub sprt_alpha: f64,
-    pub sprt_beta: f64,
+    pub sprt_elo0: Option<f64>,
+    pub sprt_elo1: Option<f64>,
+    pub sprt_alpha: Option<f64>,
+    pub sprt_beta: Option<f64>,
 
     pub side_a: Option<PlayerSpecJson>,
 
@@ -177,15 +177,27 @@ impl RatingBody {
                 ));
             }
         };
+        let sprt_elo0 = self
+            .sprt_elo0
+            .ok_or("rating.sprtElo0 必填（后端不再提供 SPRT 默认值/回退）")?;
+        let sprt_elo1 = self
+            .sprt_elo1
+            .ok_or("rating.sprtElo1 必填（后端不再提供 SPRT 默认值/回退）")?;
+        let sprt_alpha = self
+            .sprt_alpha
+            .ok_or("rating.sprtAlpha 必填（后端不再提供 SPRT 默认值/回退）")?;
+        let sprt_beta = self
+            .sprt_beta
+            .ok_or("rating.sprtBeta 必填（后端不再提供 SPRT 默认值/回退）")?;
         Ok(RatingJobSpec {
             variant: self.variant.clone(),
             candidate_sha: self.candidate_sha.clone(),
             opponent_sha: self.opponent_sha.clone(),
             total_games: self.total_games,
-            sprt_elo0: self.sprt_elo0,
-            sprt_elo1: self.sprt_elo1,
-            sprt_alpha: self.sprt_alpha,
-            sprt_beta: self.sprt_beta,
+            sprt_elo0,
+            sprt_elo1,
+            sprt_alpha,
+            sprt_beta,
             side_a: self.side_a.as_ref().map(|p| p.to_proto()),
             side_b: self.side_b.as_ref().map(|p| p.to_proto()),
             start_fens: self.start_fens.clone(),
@@ -200,10 +212,10 @@ impl RatingBody {
             candidate_sha: r.candidate_sha.clone(),
             opponent_sha: r.opponent_sha.clone(),
             total_games: r.total_games,
-            sprt_elo0: r.sprt_elo0,
-            sprt_elo1: r.sprt_elo1,
-            sprt_alpha: r.sprt_alpha,
-            sprt_beta: r.sprt_beta,
+            sprt_elo0: Some(r.sprt_elo0),
+            sprt_elo1: Some(r.sprt_elo1),
+            sprt_alpha: Some(r.sprt_alpha),
+            sprt_beta: Some(r.sprt_beta),
             side_a: Some(side_a),
             side_b: Some(side_b),
             start_fens: r.start_fens.clone(),
@@ -271,6 +283,31 @@ fn parse_job_kind(s: &str) -> Result<JobKind, ApiError> {
         other => Err(ApiError::bad_request(format!(
             "未知 job kind {other:?}（可选 collect / rating）"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rating_body_requires_sprt_params() {
+        let body = RatingBody {
+            variant: String::new(),
+            candidate_sha: "c".into(),
+            opponent_sha: "o".into(),
+            total_games: 0,
+            sprt_elo0: None,
+            sprt_elo1: Some(30.0),
+            sprt_alpha: Some(0.05),
+            sprt_beta: Some(0.05),
+            side_a: None,
+            side_b: None,
+            start_fens: Vec::new(),
+            scenario: "standard".into(),
+        };
+        let err = body.to_proto().unwrap_err();
+        assert!(err.contains("sprtElo0"), "{err}");
     }
 }
 

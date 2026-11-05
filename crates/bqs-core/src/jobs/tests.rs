@@ -610,9 +610,9 @@ fn rating_req(total: u64, candidate: &str, opponent: &str) -> SubmitJobRequest {
             opponent_sha: opponent.into(),
             total_games: total,
             sprt_elo0: 0.0,
-            sprt_elo1: 0.0,
-            sprt_alpha: 0.0,
-            sprt_beta: 0.0,
+            sprt_elo1: 15.0,
+            sprt_alpha: 0.05,
+            sprt_beta: 0.05,
             side_a: None,
             side_b: None,
             start_fens: Vec::new(),
@@ -620,6 +620,25 @@ fn rating_req(total: u64, candidate: &str, opponent: &str) -> SubmitJobRequest {
         }),
         ..Default::default()
     }
+}
+
+#[test]
+fn rating_sprt_params_unconditionally_validated() {
+    let e = env("");
+    e.f.networks.seed_network("cand", None, "onnx");
+    e.f.networks.seed_network("fixed", None, "onnx");
+
+    let mut req = rating_req(0, "cand", "fixed");
+    req.rating.as_mut().unwrap().sprt_elo1 = 0.0;
+    let (ok, msg, _) = e.jobs.submit(&req).unwrap();
+    assert!(!ok, "{msg}");
+    assert!(msg.contains("elo1"), "{msg}");
+
+    let mut req = rating_req(0, "cand", "fixed");
+    req.rating.as_mut().unwrap().sprt_alpha = 1.5;
+    let (ok, msg, _) = e.jobs.submit(&req).unwrap();
+    assert!(!ok, "{msg}");
+    assert!(msg.contains("alpha"), "{msg}");
 }
 
 fn seed_rating_job(e: &Env, match_id: i64, total: u64, state: &str) -> String {
@@ -797,6 +816,10 @@ fn sides_rating_req(
             side_a: Some(side_a),
             side_b: Some(side_b),
             total_games: total,
+            sprt_elo0: 0.0,
+            sprt_elo1: 15.0,
+            sprt_alpha: 0.05,
+            sprt_beta: 0.05,
             ..Default::default()
         }),
         ..Default::default()
@@ -994,7 +1017,10 @@ fn collect_start_fens_validation() {
 
     let (ok, msg, id) = e
         .jobs
-        .submit(&collect_req_with_fens("4x8", vec![good.clone(), good.clone()]))
+        .submit(&collect_req_with_fens(
+            "4x8",
+            vec![good.clone(), good.clone()],
+        ))
         .unwrap();
     assert!(ok, "{msg}");
     let row = e.jobs.get(&id).unwrap().unwrap();
@@ -1007,7 +1033,10 @@ fn collect_start_fens_validation() {
 
     let (ok, msg, _) = e
         .jobs
-        .submit(&collect_req_with_fens("4x8", vec![format!("{good} 垃圾字段")]))
+        .submit(&collect_req_with_fens(
+            "4x8",
+            vec![format!("{good} 垃圾字段")],
+        ))
         .unwrap();
     assert!(!ok, "字段数非法应拒绝");
     assert!(msg.contains("start_fens[0]"), "{msg}");
@@ -1029,10 +1058,7 @@ fn collect_start_fens_validation() {
     assert!(msg.contains("为空串"), "{msg}");
 
     let over = vec![good.clone(); 1025];
-    let (ok, msg, _) = e
-        .jobs
-        .submit(&collect_req_with_fens("4x8", over))
-        .unwrap();
+    let (ok, msg, _) = e.jobs.submit(&collect_req_with_fens("4x8", over)).unwrap();
     assert!(!ok, "超限应拒绝");
     assert!(msg.contains("超限"), "{msg}");
 
@@ -1085,8 +1111,7 @@ fn rating_scenario_validation() {
     e.f.networks.seed_network("cand", None, "onnx");
 
     let mut req = rating_req(20, "cand", "best");
-    req.rating.as_mut().unwrap().scenario =
-        bqs_proto::OpeningScenario::ScenarioAllRevealed as i32;
+    req.rating.as_mut().unwrap().scenario = bqs_proto::OpeningScenario::ScenarioAllRevealed as i32;
     let (ok, msg, id) = e.jobs.submit(&req).unwrap();
     assert!(ok, "{msg}");
     let row = e.jobs.get(&id).unwrap().unwrap();

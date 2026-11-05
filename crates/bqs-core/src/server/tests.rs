@@ -484,7 +484,7 @@ fn get_task_serves_collect_then_derive_chain() {
 
 #[test]
 fn get_task_rating_job_dispatches() {
-    let (s, f) = server_with("[sprt]\nelo0 = 0.0\nelo1 = 15.0\nalpha = 0.05\nbeta = 0.05\n");
+    let (s, f) = server_with("");
     f.networks.seed_network("best", None, "onnx");
     f.networks.seed_network("cand", None, "onnx");
     let reply = s
@@ -496,6 +496,10 @@ fn get_task_rating_job_dispatches() {
                 candidate_sha: "cand".into(),
                 opponent_sha: "best".into(),
                 total_games: 8,
+                sprt_elo0: 0.0,
+                sprt_elo1: 15.0,
+                sprt_alpha: 0.05,
+                sprt_beta: 0.05,
                 ..Default::default()
             }),
             ..Default::default()

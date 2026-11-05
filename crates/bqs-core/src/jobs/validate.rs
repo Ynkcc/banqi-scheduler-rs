@@ -1,10 +1,14 @@
 use bqs_proto::{CollectPlayerSpec, CollectionJobSpec, RatingJobSpec};
 
+use super::spec::{valid_scenario, PlayerSpecJson};
 use super::JobManager;
-use super::spec::{PlayerSpecJson, valid_scenario};
 use crate::consts;
 
-fn require_registered_sha(nets: &dyn crate::ports::NetworkStore, sha: &str, note: &str) -> Result<(), String> {
+fn require_registered_sha(
+    nets: &dyn crate::ports::NetworkStore,
+    sha: &str,
+    note: &str,
+) -> Result<(), String> {
     if sha.is_empty() {
         return Ok(());
     }
@@ -18,10 +22,17 @@ fn require_registered_sha(nets: &dyn crate::ports::NetworkStore, sha: &str, note
 }
 
 fn check_model_sha(sha: &str, msg: String) -> Result<(), String> {
-    if sha.is_empty() { Ok(()) } else { Err(msg) }
+    if sha.is_empty() {
+        Ok(())
+    } else {
+        Err(msg)
+    }
 }
 
-fn validate_player(p: &PlayerSpecJson, nets: &dyn crate::ports::NetworkStore) -> Result<(), String> {
+fn validate_player(
+    p: &PlayerSpecJson,
+    nets: &dyn crate::ports::NetworkStore,
+) -> Result<(), String> {
     let Some(kind) = bq_policy::player_kind::canonical(&p.kind) else {
         return Err(format!(
             "invalid_player_kind=\"{}\"（可选 {}）",
@@ -141,16 +152,16 @@ impl JobManager {
             ));
         }
 
-        for (name, v) in [("alpha", r.sprt_alpha), ("beta", r.sprt_beta)] {
-            if v != 0.0 && !(0.0 < v && v < 1.0) {
-                return Err(format!("rating.sprt_{name} 必须在 (0,1)，当前 {v}"));
-            }
-        }
-        if r.sprt_elo0 != 0.0 && r.sprt_elo1 != 0.0 && r.sprt_elo1 <= r.sprt_elo0 {
+        if r.sprt_elo1 <= r.sprt_elo0 {
             return Err(format!(
                 "rating.sprt_elo1 ({}) 必须大于 rating.sprt_elo0 ({})",
                 r.sprt_elo1, r.sprt_elo0
             ));
+        }
+        for (name, v) in [("alpha", r.sprt_alpha), ("beta", r.sprt_beta)] {
+            if !(0.0 < v && v < 1.0) {
+                return Err(format!("rating.sprt_{name} 必须在 (0,1)，当前 {v}"));
+            }
         }
         if r.side_a.is_some() || r.side_b.is_some() {
             let Some(sa) = r.side_a.as_ref() else {

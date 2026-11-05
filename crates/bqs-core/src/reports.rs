@@ -127,27 +127,27 @@ impl ReportRouter {
             tracing::warn!("[job] ⚠️ rating 上报聚合失败 task={}: {e}", req.task_id);
         }
 
-        let sp = &self.cfg.sprt;
-        let elo0 = if spec.sprt_elo0 != 0.0 {
-            spec.sprt_elo0
-        } else {
-            sp.elo0
-        };
-        let elo1 = if spec.sprt_elo1 != 0.0 {
-            spec.sprt_elo1
-        } else {
-            sp.elo1
-        };
-        let alpha = if spec.sprt_alpha != 0.0 {
-            spec.sprt_alpha
-        } else {
-            sp.alpha
-        };
-        let beta = if spec.sprt_beta != 0.0 {
-            spec.sprt_beta
-        } else {
-            sp.beta
-        };
+        if spec.sprt_elo1 <= spec.sprt_elo0
+            || !(0.0 < spec.sprt_alpha && spec.sprt_alpha < 1.0)
+            || !(0.0 < spec.sprt_beta && spec.sprt_beta < 1.0)
+        {
+            tracing::warn!(
+                "[rating] match={} job={} 旧格式 spec（sprt 参数退化 elo0={} elo1={} alpha={} beta={}），取消任务：请以显式 SPRT 参数重新提交 rating job",
+                m.id,
+                task.job_id,
+                spec.sprt_elo0,
+                spec.sprt_elo1,
+                spec.sprt_alpha,
+                spec.sprt_beta
+            );
+            let _ = self.matches.cancel_match(m.id)?;
+            let _ = self.jobs.control(&task.job_id, "cancel")?;
+            return Ok(reject(&format!("match_{}_legacy_sprt_params", m.id)));
+        }
+        let elo0 = spec.sprt_elo0;
+        let elo1 = spec.sprt_elo1;
+        let alpha = spec.sprt_alpha;
+        let beta = spec.sprt_beta;
         let (verdict, llr) = judge(agg.pairs, elo0, elo1, new_bounds(alpha, beta))
             .map_err(|e| CoreError::Internal(format!("rating sprt judge match={} : {e}", m.id)))?;
         let cap_reached = spec.total_games > 0 && agg.num_games >= spec.total_games as i64;
@@ -232,7 +232,7 @@ mod tests {
         jobs: Arc<JobManager>,
     }
 
-    const CFG: &str = "[sprt]\nelo0 = 0.0\nelo1 = 15.0\nalpha = 0.05\nbeta = 0.05\n";
+    const CFG: &str = "";
 
     fn env() -> Env {
         let f = Fakes::new();
@@ -268,6 +268,10 @@ mod tests {
                 candidate_sha: "cand".into(),
                 opponent_sha: "fixed".into(),
                 total_games: total,
+                sprt_elo0: 0.0,
+                sprt_elo1: 15.0,
+                sprt_alpha: 0.05,
+                sprt_beta: 0.05,
                 ..Default::default()
             }),
             ..Default::default()
@@ -413,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn rating_sprt_params_from_spec_override_config() {
+    fn rating_sprt_params_from_spec() {
         let e = env();
         e.f.networks.seed_network("cand", None, "onnx");
         e.f.networks.seed_network("fixed", None, "onnx");
@@ -427,8 +431,10 @@ mod tests {
                     candidate_sha: "cand".into(),
                     opponent_sha: "fixed".into(),
                     total_games: 0,
-
+                    sprt_elo0: 0.0,
                     sprt_elo1: 100.0,
+                    sprt_alpha: 0.05,
+                    sprt_beta: 0.05,
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -477,6 +483,10 @@ mod tests {
             .route(&rating_result("w0", "plain", [0, 0, 2, 0, 0, 0], 4))
             .unwrap();
         assert!(ack2.accepted);
-        assert!(ack2.message.contains("already_reported"), "{}", ack2.message);
+        assert!(
+            ack2.message.contains("already_reported"),
+            "{}",
+            ack2.message
+        );
     }
 }
