@@ -40,6 +40,17 @@ pub trait MatchStore: Send + Sync {
 
     fn conclude_match(&self, id: i64) -> CoreResult<bool>;
 
+    fn conclude_match_with_stats(
+        &self,
+        id: i64,
+        conclusion: crate::types::MatchConclusion,
+    ) -> CoreResult<bool> {
+        let _ = conclusion;
+        Err(CoreError::Internal(
+            "conclude_match_with_stats 仅 bqs-store::Store 实现（判停结果持久化需求）".into(),
+        ))
+    }
+
     fn cancel_match(&self, id: i64) -> CoreResult<bool>;
 }
 

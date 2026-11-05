@@ -105,6 +105,7 @@ fn match_view() {
         lower: -2.944,
         upper: 2.944,
         verdict: "continue".into(),
+        conclusion: None,
     };
     assert_keys(
         &keys(&v),
@@ -121,6 +122,7 @@ fn match_view() {
             "lower",
             "upper",
             "verdict",
+            "conclusion",
         ],
     );
     let json = serde_json::to_value(&v).unwrap();

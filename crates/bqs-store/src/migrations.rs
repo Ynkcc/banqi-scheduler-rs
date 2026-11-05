@@ -79,6 +79,11 @@ static MIGRATIONS: &[Migration] = &[
         name: "worker ip",
         up: migrate_worker_ip,
     },
+    Migration {
+        version: 15,
+        name: "match conclusion",
+        up: migrate_match_conclusion,
+    },
 ];
 
 fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, StoreError> {
@@ -433,6 +438,46 @@ fn migrate_worker_ip(conn: &Connection) -> Result<(), StoreError> {
         "ip",
         "ALTER TABLE workers ADD COLUMN ip TEXT NOT NULL DEFAULT ''",
     )
+}
+
+fn migrate_match_conclusion(conn: &Connection) -> Result<(), StoreError> {
+    add_column_if_missing(
+        conn,
+        "matches",
+        "final_verdict",
+        "ALTER TABLE matches ADD COLUMN final_verdict TEXT",
+    )?;
+    add_column_if_missing(
+        conn,
+        "matches",
+        "final_llr",
+        "ALTER TABLE matches ADD COLUMN final_llr REAL",
+    )?;
+    add_column_if_missing(
+        conn,
+        "matches",
+        "final_elo0",
+        "ALTER TABLE matches ADD COLUMN final_elo0 REAL",
+    )?;
+    add_column_if_missing(
+        conn,
+        "matches",
+        "final_elo1",
+        "ALTER TABLE matches ADD COLUMN final_elo1 REAL",
+    )?;
+    add_column_if_missing(
+        conn,
+        "matches",
+        "final_alpha",
+        "ALTER TABLE matches ADD COLUMN final_alpha REAL",
+    )?;
+    add_column_if_missing(
+        conn,
+        "matches",
+        "final_beta",
+        "ALTER TABLE matches ADD COLUMN final_beta REAL",
+    )?;
+    Ok(())
 }
 
 fn migrate_feature_packs(conn: &Connection) -> Result<(), StoreError> {

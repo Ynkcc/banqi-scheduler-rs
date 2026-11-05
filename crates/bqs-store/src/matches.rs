@@ -1,5 +1,5 @@
 use bqs_core::ports::MatchStore;
-use bqs_core::types::{match_status, Match};
+use bqs_core::types::{match_status, Match, MatchConclusion};
 use bqs_core::CoreResult;
 use bqs_judgment::Hexanomial;
 
@@ -7,7 +7,30 @@ use crate::{Store, StoreError};
 
 use rusqlite::OptionalExtension;
 
-const MATCH_COLUMNS: &str = "id, candidate, opponent, status, pair_ll, pair_ld, pair_dd, pair_wl, pair_dw, pair_ww, num_games, target_games";
+const MATCH_COLUMNS: &str = "id, candidate, opponent, status, pair_ll, pair_ld, pair_dd, pair_wl, pair_dw, pair_ww, num_games, target_games, \
+	final_verdict, final_llr, final_elo0, final_elo1, final_alpha, final_beta";
+
+fn scan_conclusion(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<MatchConclusion>> {
+    let verdict: Option<String> = row.get(12)?;
+    let llr: Option<f64> = row.get(13)?;
+    let elo0: Option<f64> = row.get(14)?;
+    let elo1: Option<f64> = row.get(15)?;
+    let alpha: Option<f64> = row.get(16)?;
+    let beta: Option<f64> = row.get(17)?;
+    match (verdict, llr, elo0, elo1, alpha, beta) {
+        (Some(verdict), Some(llr), Some(elo0), Some(elo1), Some(alpha), Some(beta)) => {
+            Ok(Some(MatchConclusion {
+                verdict,
+                llr,
+                sprt_elo0: elo0,
+                sprt_elo1: elo1,
+                sprt_alpha: alpha,
+                sprt_beta: beta,
+            }))
+        }
+        _ => Ok(None),
+    }
+}
 
 fn scan_match_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Match> {
     let p = |i: usize| -> rusqlite::Result<i64> { row.get(4 + i) };
@@ -16,6 +39,8 @@ fn scan_match_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Match> {
         row.get::<_, Option<String>>(i)
             .map(|v| v.unwrap_or_default())
     };
+
+    let conclusion = scan_conclusion(row)?;
     Ok(Match {
         id: row.get(0)?,
         candidate: s(1)?,
@@ -24,6 +49,7 @@ fn scan_match_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Match> {
         pairs: Hexanomial([p(0)?, p(1)?, p(2)?, p(3)?, p(4)?, p(5)?]),
         num_games: row.get(10)?,
         target_games: row.get(11)?,
+        conclusion,
     })
 }
 
@@ -115,6 +141,29 @@ impl MatchStore for Store {
         })
     }
 
+    fn conclude_match_with_stats(&self, id: i64, conclusion: MatchConclusion) -> CoreResult<bool> {
+        self.with_conn(|conn| {
+            let n = conn
+                .execute(
+                    "UPDATE matches SET status=?, final_verdict=?, final_llr=?, final_elo0=?, final_elo1=?, final_alpha=?, final_beta=?
+					 WHERE id=? AND status=?",
+                    rusqlite::params![
+                        match_status::CONCLUDED,
+                        conclusion.verdict,
+                        conclusion.llr,
+                        conclusion.sprt_elo0,
+                        conclusion.sprt_elo1,
+                        conclusion.sprt_alpha,
+                        conclusion.sprt_beta,
+                        id,
+                        match_status::RUNNING,
+                    ],
+                )
+                .map_err(StoreError::from)?;
+            Ok(n > 0)
+        })
+    }
+
     fn cancel_match(&self, id: i64) -> CoreResult<bool> {
         self.with_conn(|conn| {
             let n = conn
@@ -137,6 +186,7 @@ fn zero_match() -> Match {
         pairs: Hexanomial::ZERO,
         num_games: 0,
         target_games: 0,
+        conclusion: None,
     }
 }
 

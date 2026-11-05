@@ -28,6 +28,16 @@ pub struct Network {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct MatchConclusion {
+    pub verdict: String,
+    pub llr: f64,
+    pub sprt_elo0: f64,
+    pub sprt_elo1: f64,
+    pub sprt_alpha: f64,
+    pub sprt_beta: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Match {
     pub id: i64,
     pub candidate: String,
@@ -39,6 +49,8 @@ pub struct Match {
     pub num_games: i64,
 
     pub target_games: i64,
+
+    pub conclusion: Option<MatchConclusion>,
 }
 
 impl Match {

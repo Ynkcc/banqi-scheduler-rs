@@ -9,8 +9,8 @@ use bqs_judgment::sprt::{judge, llr, new_bounds};
 use bqs_proto::RegisterNetworkRequest;
 
 use crate::views::{
-    EpisodeRateEstimateView, KindStatsView, MatchView, NetworkView, OkView, SprtView, StatusView,
-    TaskView, WorkerView,
+    EpisodeRateEstimateView, KindStatsView, MatchConclusionView, MatchView, NetworkView, OkView,
+    SprtView, StatusView, TaskView, WorkerView,
 };
 use crate::{read_endpoint, write_endpoint, ApiError, ApiResult, AppState, MAX_CONTROL_BODY};
 
@@ -263,6 +263,14 @@ pub async fn matches(State(st): State<AppState>) -> ApiResult<Json<Vec<MatchView
                 lower: bounds.lower,
                 upper: bounds.upper,
                 verdict: bqs_judgment::Verdict::Continue.as_str().into(),
+                conclusion: m.conclusion.as_ref().map(|c| MatchConclusionView {
+                    verdict: c.verdict.clone(),
+                    llr: c.llr,
+                    sprt_elo0: c.sprt_elo0,
+                    sprt_elo1: c.sprt_elo1,
+                    sprt_alpha: c.sprt_alpha,
+                    sprt_beta: c.sprt_beta,
+                }),
             };
             if m.pairs.total() > 0 {
                 match llr(m.pairs, sprt.elo0, sprt.elo1) {

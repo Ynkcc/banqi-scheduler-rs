@@ -154,7 +154,17 @@ impl ReportRouter {
         let mut concluded = false;
 
         if verdict != Verdict::Continue || cap_reached {
-            concluded = self.matches.conclude_match(m.id)?;
+            concluded = self.matches.conclude_match_with_stats(
+                m.id,
+                crate::types::MatchConclusion {
+                    verdict: verdict.as_str().to_string(),
+                    llr,
+                    sprt_elo0: elo0,
+                    sprt_elo1: elo1,
+                    sprt_alpha: alpha,
+                    sprt_beta: beta,
+                },
+            )?;
         }
         if concluded {
             self.jobs.complete_rating_job(&task.job_id)?;

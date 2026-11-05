@@ -115,6 +115,9 @@ pub struct MatchView {
     pub upper: f64,
     #[serde(rename = "verdict")]
     pub verdict: String,
+
+    #[serde(rename = "conclusion")]
+    pub conclusion: Option<MatchConclusionView>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize)]
@@ -343,6 +346,20 @@ pub struct GameLookupItemView {
 pub struct GameLookupPageView {
     #[serde(rename = "items")]
     pub items: Vec<GameLookupItemView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MatchConclusionView {
+    pub verdict: String,
+    pub llr: f64,
+    #[serde(rename = "sprtElo0")]
+    pub sprt_elo0: f64,
+    #[serde(rename = "sprtElo1")]
+    pub sprt_elo1: f64,
+    #[serde(rename = "sprtAlpha")]
+    pub sprt_alpha: f64,
+    #[serde(rename = "sprtBeta")]
+    pub sprt_beta: f64,
 }
 
 #[derive(Debug, Serialize)]

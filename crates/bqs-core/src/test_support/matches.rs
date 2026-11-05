@@ -3,7 +3,7 @@ use std::sync::Mutex;
 
 use crate::{
     ports::MatchStore,
-    types::{match_status, Match},
+    types::{match_status, Match, MatchConclusion},
     CoreError, CoreResult,
 };
 
@@ -33,6 +33,7 @@ impl FakeMatches {
                 pairs: bqs_judgment::Hexanomial::ZERO,
                 num_games: 0,
                 target_games,
+                conclusion: None,
             },
         );
         id
@@ -135,6 +136,19 @@ impl MatchStore for FakeMatches {
             return Ok(false);
         }
         m.status = match_status::CONCLUDED.to_string();
+        Ok(true)
+    }
+
+    fn conclude_match_with_stats(&self, id: i64, conclusion: MatchConclusion) -> CoreResult<bool> {
+        let mut g = self.inner.lock().unwrap();
+        let Some(m) = g.matches.get_mut(&id) else {
+            return Err(CoreError::Store(format!("match {id} 不存在")));
+        };
+        if !m.running() {
+            return Ok(false);
+        }
+        m.status = match_status::CONCLUDED.to_string();
+        m.conclusion = Some(conclusion);
         Ok(true)
     }
 
