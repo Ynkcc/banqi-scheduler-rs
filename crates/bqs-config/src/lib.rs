@@ -148,6 +148,7 @@ pub struct SearchDefaults {
     pub expl_temp_start: f64,
     pub expl_temp_end: f64,
     pub expl_temp_decay_steps: u32,
+    pub expectimax_root_fullwidth: bool,
 }
 
 impl Default for SearchDefaults {
@@ -176,6 +177,7 @@ impl Default for SearchDefaults {
             expl_temp_start: 1.0,
             expl_temp_end: 0.15,
             expl_temp_decay_steps: 48,
+            expectimax_root_fullwidth: false,
         }
     }
 }

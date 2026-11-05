@@ -425,6 +425,8 @@ message CollectSearchParams {
   double health_confidence_exp = 23;
   // Expectimax 探索采样模式：gumbel（默认）| softmax
   string expl_mode = 24;
+  // Expectimax 根层全窗口搜索（root_values 完整分布，供探索采样/policy 标签；根层剪枝收益归零、显著变慢）
+  bool expectimax_root_fullwidth = 25;
 }
 
 message CollectionJobSpec {

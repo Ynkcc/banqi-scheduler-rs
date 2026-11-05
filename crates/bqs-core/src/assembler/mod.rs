@@ -65,6 +65,7 @@ impl TaskAssembler {
             health_weight: d.health_weight,
             health_confidence_exp: d.health_confidence_exp,
             expl_mode: d.expl_mode.clone(),
+            expectimax_root_fullwidth: d.expectimax_root_fullwidth,
         }
     }
 
