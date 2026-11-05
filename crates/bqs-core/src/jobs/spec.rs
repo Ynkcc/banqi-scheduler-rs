@@ -51,6 +51,8 @@ pub struct SearchSpecJson {
     pub health_weight: f64,
     #[serde(alias = "health_confidence_exp")]
     pub health_confidence_exp: f64,
+    #[serde(alias = "expl_mode")]
+    pub expl_mode: String,
 }
 
 impl SearchSpecJson {
@@ -80,6 +82,7 @@ impl SearchSpecJson {
                 health_enabled: s.health_enabled,
                 health_weight: s.health_weight,
                 health_confidence_exp: s.health_confidence_exp,
+                expl_mode: s.expl_mode,
             },
             None => Self::default(),
         }
@@ -109,6 +112,7 @@ impl SearchSpecJson {
             && !self.health_enabled
             && self.health_weight == 0.0
             && self.health_confidence_exp == 0.0
+            && self.expl_mode.is_empty()
     }
 
     pub fn to_proto(&self) -> Option<CollectSearchParams> {
@@ -140,6 +144,7 @@ impl SearchSpecJson {
             health_enabled: s.health_enabled,
             health_weight: s.health_weight,
             health_confidence_exp: s.health_confidence_exp,
+            expl_mode: s.expl_mode.clone(),
         })
     }
 }

@@ -423,6 +423,8 @@ message CollectSearchParams {
   bool health_enabled = 21;
   double health_weight = 22;
   double health_confidence_exp = 23;
+  // Expectimax 探索采样模式：gumbel（默认）| softmax
+  string expl_mode = 24;
 }
 
 message CollectionJobSpec {
