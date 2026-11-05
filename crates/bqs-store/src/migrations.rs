@@ -74,6 +74,11 @@ static MIGRATIONS: &[Migration] = &[
         name: "episode game identity index",
         up: migrate_episode_games,
     },
+    Migration {
+        version: 14,
+        name: "worker ip",
+        up: migrate_worker_ip,
+    },
 ];
 
 fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, StoreError> {
@@ -419,6 +424,15 @@ fn migrate_episode_games(conn: &Connection) -> Result<(), StoreError> {
         message: format!("create idx_episode_games_seed: {e}"),
     })?;
     Ok(())
+}
+
+fn migrate_worker_ip(conn: &Connection) -> Result<(), StoreError> {
+    add_column_if_missing(
+        conn,
+        "workers",
+        "ip",
+        "ALTER TABLE workers ADD COLUMN ip TEXT NOT NULL DEFAULT ''",
+    )
 }
 
 fn migrate_feature_packs(conn: &Connection) -> Result<(), StoreError> {

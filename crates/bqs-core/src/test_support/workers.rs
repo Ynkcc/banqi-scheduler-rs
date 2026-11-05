@@ -24,6 +24,7 @@ impl WorkerStore for FakeWorkers {
         memory_mb: i64,
         health_status: &str,
         last_error: &str,
+        ip: &str,
     ) -> CoreResult<()> {
         let mut map = self.map.lock().unwrap();
         let w = map.entry(id.to_string()).or_default();
@@ -34,6 +35,9 @@ impl WorkerStore for FakeWorkers {
         w.memory_mb = memory_mb;
         w.health_status = health_status.to_string();
         w.last_error = last_error.to_string();
+        if !ip.is_empty() {
+            w.ip = ip.to_string();
+        }
         Ok(())
     }
 
@@ -58,5 +62,9 @@ impl WorkerStore for FakeWorkers {
             }
             None => Err(CoreError::Store(format!("未知 worker {id}"))),
         }
+    }
+
+    fn delete_worker(&self, id: &str) -> CoreResult<bool> {
+        Ok(self.map.lock().unwrap().remove(id).is_some())
     }
 }

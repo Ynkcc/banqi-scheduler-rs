@@ -539,14 +539,17 @@ fn submit_job_rejects_selfplay_kind() {
 fn heartbeat_touches_worker() {
     let (s, f) = default_server();
     let reply = s
-        .heartbeat(HeartbeatRequest {
-            worker_id: "w1".into(),
-            current_threads: 8,
-            completed_games: 42,
-            client_version: "1.2.3".into(),
-            memory_mb: 1024,
-            ..Default::default()
-        })
+        .heartbeat(
+            HeartbeatRequest {
+                worker_id: "w1".into(),
+                current_threads: 8,
+                completed_games: 42,
+                client_version: "1.2.3".into(),
+                memory_mb: 1024,
+                ..Default::default()
+            },
+            "192.168.1.10",
+        )
         .unwrap();
     assert!(
         !reply.pause_self_play,
@@ -557,6 +560,7 @@ fn heartbeat_touches_worker() {
     assert_eq!(w.threads, 8);
     assert_eq!(w.completed_games, 42);
     assert_eq!(w.client_version, "1.2.3");
+    assert_eq!(w.ip, "192.168.1.10");
 }
 
 #[test]

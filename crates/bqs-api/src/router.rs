@@ -3,7 +3,7 @@ use std::path::Path;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{Method, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post, put};
+use axum::routing::{any, delete, get, post, put};
 use axum::Router;
 
 use crate::{
@@ -22,6 +22,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/networks/upload", post(handlers_status::sign_upload))
         .route("/api/matches", get(handlers_status::matches))
         .route("/api/workers", get(handlers_status::workers))
+        .route(
+            "/api/workers/{id}",
+            delete(handlers_status::worker_delete),
+        )
         .route("/api/workers/{id}/note", put(handlers_status::worker_note))
         .route("/api/episodes", get(handlers_episodes::episodes))
         .route(

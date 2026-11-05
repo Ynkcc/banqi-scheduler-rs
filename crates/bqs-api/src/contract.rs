@@ -132,6 +132,7 @@ fn match_view() {
 fn worker_view() {
     let v = WorkerView {
         id: "w".into(),
+        ip: "10.0.0.1".into(),
         note: String::new(),
         last_seen: 0,
         online: true,
@@ -153,6 +154,7 @@ fn worker_view() {
         &keys(&v),
         &[
             "id",
+            "ip",
             "note",
             "lastSeen",
             "online",

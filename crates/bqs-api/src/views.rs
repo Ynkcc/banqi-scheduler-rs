@@ -161,6 +161,9 @@ impl From<EpisodeRateEstimate> for EpisodeRateEstimateView {
 pub struct WorkerView {
     #[serde(rename = "id")]
     pub id: String,
+
+    #[serde(rename = "ip")]
+    pub ip: String,
     #[serde(rename = "note")]
     pub note: String,
     #[serde(rename = "lastSeen")]

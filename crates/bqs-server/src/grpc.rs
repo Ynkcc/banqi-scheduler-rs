@@ -79,7 +79,16 @@ impl SchedulerService for SchedulerSvc {
         &self,
         request: tonic::Request<HeartbeatRequest>,
     ) -> Result<tonic::Response<HeartbeatReply>, tonic::Status> {
-        let reply = forward!(self.0, request.into_inner(), heartbeat)?;
+        let ip = request
+            .remote_addr()
+            .map(|addr| addr.ip().to_string())
+            .unwrap_or_default();
+        let req = request.into_inner();
+        let server = Arc::clone(&self.0);
+        let reply = tokio::task::spawn_blocking(move || server.heartbeat(req, &ip))
+            .await
+            .map_err(join_err)?
+            .map_err(internal)?;
         Ok(tonic::Response::new(reply))
     }
 

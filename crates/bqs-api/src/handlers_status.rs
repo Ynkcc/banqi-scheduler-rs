@@ -310,6 +310,7 @@ pub async fn workers(State(st): State<AppState>) -> ApiResult<Json<Vec<WorkerVie
             }
             out.push(WorkerView {
                 id: wk.id.clone(),
+                ip: wk.ip.clone(),
                 note: wk.note.clone(),
                 last_seen: wk.last_seen,
                 online: bqs_core::is_online(wk.last_seen, now, st.online_window_secs),
@@ -369,6 +370,29 @@ pub async fn worker_note(
             Ok(OkView { ok: true })
         },
     )
+    .await
+}
+
+pub async fn worker_delete(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<OkView>> {
+    read_endpoint(&st, move |st| -> Result<OkView, ApiError> {
+        let workers = &st.server.ports.workers;
+        let wk = workers
+            .list_workers()?
+            .into_iter()
+            .find(|w| w.id == id)
+            .ok_or_else(|| ApiError::not_found(format!("worker not found: {id}")))?;
+        if bqs_core::is_online(wk.last_seen, st.server.clock.now(), st.online_window_secs) {
+            return Err(ApiError::bad_request(format!("worker {id} 在线，禁止删除")));
+        }
+        let deleted = workers.delete_worker(&id)?;
+        if deleted {
+            tracing::info!("[workers] 删除离线 worker={id} last_seen={}", wk.last_seen);
+        }
+        Ok(OkView { ok: true })
+    })
     .await
 }
 

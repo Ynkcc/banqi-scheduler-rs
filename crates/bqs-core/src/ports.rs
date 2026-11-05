@@ -121,12 +121,15 @@ pub trait WorkerStore: Send + Sync {
         memory_mb: i64,
         health_status: &str,
         last_error: &str,
+        ip: &str,
     ) -> CoreResult<()>;
 
     fn worker_version(&self, id: &str) -> CoreResult<Option<String>>;
     fn list_workers(&self) -> CoreResult<Vec<Worker>>;
 
     fn set_worker_note(&self, id: &str, note: &str) -> CoreResult<()>;
+
+    fn delete_worker(&self, id: &str) -> CoreResult<bool>;
 }
 
 pub trait FeaturePackStore: Send + Sync {

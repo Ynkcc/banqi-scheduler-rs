@@ -123,6 +123,8 @@ pub struct ImportEpisodeAck {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Worker {
     pub id: String,
+
+    pub ip: String,
     pub last_seen: i64,
     pub threads: i64,
     pub completed_games: i64,

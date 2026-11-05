@@ -62,7 +62,7 @@ impl Server {
         Ok(none("no_task_available"))
     }
 
-    pub fn heartbeat(&self, req: HeartbeatRequest) -> CoreResult<HeartbeatReply> {
+    pub fn heartbeat(&self, req: HeartbeatRequest, ip: &str) -> CoreResult<HeartbeatReply> {
         self.ports.workers.touch_worker(
             &req.worker_id,
             req.current_threads as i64,
@@ -71,6 +71,7 @@ impl Server {
             req.memory_mb,
             &req.health_status,
             &req.last_error,
+            ip,
         )?;
         if !req.client_version.is_empty() {
             if let Ok(Some(v)) = self.ports.workers.worker_version(&req.worker_id) {
