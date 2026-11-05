@@ -119,7 +119,7 @@ impl JobStore for Store {
             let mut sql = format!(
                 "SELECT job_id, kind, priority, state, total_games, completed_games,
 				 dispatched_games, spec_json, created_at, updated_at, next_seq FROM jobs{where_sql}
-				 ORDER BY priority DESC, created_at ASC"
+				 ORDER BY created_at ASC, rowid ASC"
             );
 
             if let Some(l) = query.limit.filter(|l| *l > 0) {

@@ -36,8 +36,8 @@ mod tests {
         let ids: Vec<&str> = all.items.iter().map(|j| j.job_id.as_str()).collect();
         assert_eq!(
             ids,
-            vec!["j-high", "j-low-2", "j-low-1"],
-            "优先级 DESC、created_at ASC"
+            vec!["j-low-2", "j-low-1", "j-high"],
+            "created_at ASC（创建顺序）"
         );
         assert_eq!(all.total, 3);
         let collect = store
@@ -64,7 +64,7 @@ mod tests {
             .unwrap();
         assert_eq!(page.total, 3, "total 不受 limit/offset 影响");
         let page_ids: Vec<&str> = page.items.iter().map(|j| j.job_id.as_str()).collect();
-        assert_eq!(page_ids, vec!["j-low-2", "j-low-1"]);
+        assert_eq!(page_ids, vec!["j-low-1", "j-high"]);
 
         let one = store
             .list_jobs(&JobQuery {
