@@ -306,6 +306,9 @@ pub struct RatingSpecJson {
     #[serde(alias = "start_fens")]
     pub start_fens: Vec<String>,
     pub scenario: i32,
+
+    #[serde(default)]
+    pub pair_seed_refresh: bool,
 }
 
 impl RatingSpecJson {
@@ -324,6 +327,7 @@ impl RatingSpecJson {
             match_id: 0,
             start_fens: s.start_fens,
             scenario: s.scenario,
+            pair_seed_refresh: false,
         }
     }
 
