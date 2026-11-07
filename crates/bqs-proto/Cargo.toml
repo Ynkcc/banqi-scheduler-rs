@@ -7,6 +7,8 @@ description = "banqi-scheduler gRPC 契约层：scheduler.proto 的 tonic/prost 
 [dependencies]
 tonic = { workspace = true }
 prost = { workspace = true }
+# bqrecord.* 类型（GameRecord/GameLabelPack/DataKind）与 bq-record 共享生成定义
+bq-record = { workspace = true }
 
 [build-dependencies]
 tonic-build = { workspace = true }

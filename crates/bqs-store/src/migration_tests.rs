@@ -84,7 +84,10 @@ mod tests {
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap()
         };
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        assert_eq!(
+            versions,
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        );
 
         for (table, col) in [
             ("workers", "note"),
@@ -98,6 +101,9 @@ mod tests {
             ("episodes", "draw_truncation"),
             ("episodes", "seed_base"),
             ("episodes", "pair_seed_refresh"),
+            ("episodes", "label_object_key"),
+            ("episodes", "label_sha256"),
+            ("episodes", "label_size"),
             ("matches", "pair_wl"),
         ] {
             let n: i64 = conn

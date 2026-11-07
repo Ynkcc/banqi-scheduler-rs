@@ -1,6 +1,5 @@
-use bqs_proto::{
-    CollectionJobSpec, DataKind, GenerationSpec, SelfPlayParams, TaskRequest, TaskResponse,
-};
+use bq_record::DataKind;
+use bqs_proto::{CollectionJobSpec, GenerationSpec, SelfPlayParams, TaskRequest, TaskResponse};
 
 use crate::{featurepack::PendingDerive, types::Network, CoreResult};
 

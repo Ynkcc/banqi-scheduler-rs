@@ -27,7 +27,8 @@ const EPISODE_COLUMNS: &str =
     "id, worker_id, task_id, network_sha, game_count, total_steps, winner, \
      object_key, created_at, kind, opponent_sha, opponent_spec, match_id, \
      red_wins, black_wins, draw_no_capture, draw_truncation, \
-     seed_base, pairs_parallel, pair_seed_refresh";
+     seed_base, pairs_parallel, pair_seed_refresh, \
+     label_object_key, label_sha256, label_size";
 
 fn scan_episode_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Episode> {
     Ok(Episode {
@@ -51,6 +52,9 @@ fn scan_episode_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Episode> {
         seed_base: row.get(17)?,
         pairs_parallel: row.get::<_, Option<i64>>(18)?.map(|v| v != 0),
         pair_seed_refresh: row.get::<_, Option<i64>>(19)?.map(|v| v != 0),
+        label_object_key: row.get(20)?,
+        label_sha256: row.get(21)?,
+        label_size: row.get(22)?,
     })
 }
 
@@ -89,8 +93,9 @@ impl EpisodeStore for Store {
                 "INSERT INTO episodes (worker_id, task_id, network_sha, game_count, total_steps, \
 					winner, object_key, created_at, kind, opponent_sha, opponent_spec, match_id, \
 					red_wins, black_wins, draw_no_capture, draw_truncation, \
-					seed_base, pairs_parallel, pair_seed_refresh)
-				 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+					seed_base, pairs_parallel, pair_seed_refresh, \
+					label_object_key, label_sha256, label_size)
+				 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 rusqlite::params![
                     draft.worker_id,
                     draft.task_id,
@@ -111,6 +116,9 @@ impl EpisodeStore for Store {
                     draft.seed_base,
                     draft.pairs_parallel.map(|v| v as i64),
                     draft.pair_seed_refresh.map(|v| v as i64),
+                    draft.label_object_key,
+                    draft.label_sha256,
+                    draft.label_size,
                 ],
             )
             .map_err(StoreError::from)?;
@@ -140,12 +148,12 @@ impl EpisodeStore for Store {
         })
     }
 
-    fn list_episode_keys(
+    fn list_episode_rows(
         &self,
         after_key: &str,
         limit: i64,
         kind: Option<i64>,
-    ) -> CoreResult<Vec<String>> {
+    ) -> CoreResult<Vec<Episode>> {
         let limit = if limit <= 0 || limit > 1000 {
             200
         } else {
@@ -153,7 +161,7 @@ impl EpisodeStore for Store {
         };
         self.with_conn(|conn| {
             let mut query = format!(
-                "SELECT object_key FROM episodes
+                "SELECT {EPISODE_COLUMNS} FROM episodes
 				 WHERE id > COALESCE((SELECT id FROM episodes WHERE object_key = ?), 0) AND kind != ?"
             );
 
@@ -169,7 +177,7 @@ impl EpisodeStore for Store {
             let rows = stmt
                 .query_map(
                     rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())),
-                    |row| row.get::<_, String>(0),
+                    scan_episode_row,
                 )
                 .map_err(StoreError::from)?;
             rows.collect::<Result<Vec<_>, _>>()
@@ -224,7 +232,12 @@ impl EpisodeStore for Store {
         })
     }
 
-    fn list_episodes_by_match(&self, match_id: i64, before_id: i64, limit: i64) -> CoreResult<Vec<Episode>> {
+    fn list_episodes_by_match(
+        &self,
+        match_id: i64,
+        before_id: i64,
+        limit: i64,
+    ) -> CoreResult<Vec<Episode>> {
         let limit = clamp_episode_page_limit(limit);
         self.with_conn(|conn| {
             let mut query = format!("SELECT {EPISODE_COLUMNS} FROM episodes WHERE match_id = ?");
@@ -283,14 +296,14 @@ impl EpisodeStore for Store {
                 let ep = scan_episode_row(row)?;
 
                 let game = EpisodeGameRow {
-                    game_index: row.get(20)?,
-                    pair_index: row.get(21)?,
-                    pair_position: row.get(22)?,
-                    game_seed: row.get(23)?,
-                    a_is_red: row.get::<_, i64>(24)? != 0,
-                    seed_refreshed: row.get::<_, i64>(25)? != 0,
-                    winner: row.get(26)?,
-                    steps: row.get(27)?,
+                    game_index: row.get(23)?,
+                    pair_index: row.get(24)?,
+                    pair_position: row.get(25)?,
+                    game_seed: row.get(26)?,
+                    a_is_red: row.get::<_, i64>(27)? != 0,
+                    seed_refreshed: row.get::<_, i64>(28)? != 0,
+                    winner: row.get(29)?,
+                    steps: row.get(30)?,
                 };
                 Ok((ep, game))
             };
@@ -584,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn list_keys_cursor_and_kind_filter() {
+    fn list_rows_cursor_and_kind_filter() {
         let (_dir, s) = crate::testutil::open_temp_store();
 
         ES::insert_episode(&*s, draft("t1", "k/a", 0, 1)).unwrap();
@@ -592,23 +605,67 @@ mod tests {
         ES::insert_episode(&*s, draft("t3", "k/c", 2, 3)).unwrap();
         ES::insert_episode(&*s, draft("t4", "k/d", 0, 4)).unwrap();
 
-        let keys = ES::list_episode_keys(&*s, "", 0, None).unwrap();
-        assert_eq!(keys, vec!["k/a", "k/b", "k/d"]);
+        let keys = |rows: Vec<bqs_core::types::Episode>| -> Vec<String> {
+            rows.into_iter().map(|e| e.object_key).collect()
+        };
+        let rows = ES::list_episode_rows(&*s, "", 0, None).unwrap();
+        assert_eq!(keys(rows), vec!["k/a", "k/b", "k/d"]);
 
-        let keys = ES::list_episode_keys(&*s, "k/b", 0, None).unwrap();
-        assert_eq!(keys, vec!["k/d"]);
+        let rows = ES::list_episode_rows(&*s, "k/b", 0, None).unwrap();
+        assert_eq!(keys(rows), vec!["k/d"]);
 
-        let keys = ES::list_episode_keys(&*s, "", 0, Some(1)).unwrap();
-        assert_eq!(keys, vec!["k/b"]);
+        let rows = ES::list_episode_rows(&*s, "", 0, Some(1)).unwrap();
+        assert_eq!(keys(rows), vec!["k/b"]);
 
-        let keys = ES::list_episode_keys(&*s, "k/a", 0, Some(1)).unwrap();
-        assert_eq!(keys, vec!["k/b"]);
+        let rows = ES::list_episode_rows(&*s, "k/a", 0, Some(1)).unwrap();
+        assert_eq!(keys(rows), vec!["k/b"]);
 
-        let keys = ES::list_episode_keys(&*s, "", 1, None).unwrap();
-        assert_eq!(keys, vec!["k/a"]);
+        let rows = ES::list_episode_rows(&*s, "", 1, None).unwrap();
+        assert_eq!(keys(rows), vec!["k/a"]);
 
-        let keys = ES::list_episode_keys(&*s, "unknown-key", 0, None).unwrap();
-        assert_eq!(keys, vec!["k/a", "k/b", "k/d"]);
+        let rows = ES::list_episode_rows(&*s, "unknown-key", 0, None).unwrap();
+        assert_eq!(keys(rows), vec!["k/a", "k/b", "k/d"]);
+    }
+
+    #[test]
+    fn label_pack_columns_roundtrip() {
+        let (_dir, s) = crate::testutil::open_temp_store();
+
+        let mut d = draft("t-label", "episodes/n1/with.lab.v1.lpb.gz", 0, 10);
+        d.label_object_key = "episodes/n1/with.lab.v1.lpb.gz".into();
+        d.label_sha256 = "deadbeef".into();
+        d.label_size = 12345;
+        ES::insert_episode(&*s, d).unwrap();
+
+        ES::insert_episode(&*s, draft("t-nolabel", "episodes/n1/bare.epb.gz", 0, 11)).unwrap();
+
+        let with = ES::get_episode_by_task(&*s, "t-label").unwrap().unwrap();
+        assert_eq!(with.label_object_key, "episodes/n1/with.lab.v1.lpb.gz");
+        assert_eq!(with.label_sha256, "deadbeef");
+        assert_eq!(with.label_size, 12345);
+
+        let bare = ES::get_episode_by_task(&*s, "t-nolabel").unwrap().unwrap();
+        assert!(bare.label_object_key.is_empty());
+        assert!(bare.label_sha256.is_empty());
+        assert_eq!(bare.label_size, 0);
+
+        let mut seeded = draft("t-seed", "episodes/n1/seed.epb.gz", 0, 12);
+        seeded.games = vec![bqs_core::types::EpisodeGameRow {
+            game_index: 0,
+            pair_index: 0,
+            pair_position: 0,
+            game_seed: Some(4242),
+            a_is_red: true,
+            seed_refreshed: false,
+            winner: Some(1),
+            steps: 33,
+        }];
+        ES::insert_episode(&*s, seeded).unwrap();
+        let hits = ES::find_games_by_seed(&*s, 4242).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1.steps, 33);
+        assert_eq!(hits[0].1.winner, Some(1));
+        assert!(hits[0].1.a_is_red);
     }
 
     #[test]

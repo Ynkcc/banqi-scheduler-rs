@@ -42,6 +42,9 @@ impl FakeEpisodes {
             seed_base: None,
             pairs_parallel: None,
             pair_seed_refresh: None,
+            label_object_key: String::new(),
+            label_sha256: String::new(),
+            label_size: 0,
         });
     }
 
@@ -106,16 +109,19 @@ impl EpisodeStore for FakeEpisodes {
             seed_base: draft.seed_base,
             pairs_parallel: draft.pairs_parallel,
             pair_seed_refresh: draft.pair_seed_refresh,
+            label_object_key: draft.label_object_key,
+            label_sha256: draft.label_sha256,
+            label_size: draft.label_size,
         });
         Ok(id)
     }
 
-    fn list_episode_keys(
+    fn list_episode_rows(
         &self,
         after_key: &str,
         limit: i64,
         kind: Option<i64>,
-    ) -> CoreResult<Vec<String>> {
+    ) -> CoreResult<Vec<Episode>> {
         let g = self.inner.lock().unwrap();
         let mut limit = limit;
         if limit <= 0 || limit > 1000 {
@@ -127,19 +133,16 @@ impl EpisodeStore for FakeEpisodes {
             .find(|e| e.object_key == after_key)
             .map(|e| e.id)
             .unwrap_or(0);
-        let mut pairs: Vec<(i64, String)> = g
+        let mut rows: Vec<Episode> = g
             .list
             .iter()
             .filter(|e| e.id > after_id && e.kind != 2)
             .filter(|e| kind.map_or(true, |k| e.kind == k))
-            .map(|e| (e.id, e.object_key.clone()))
+            .cloned()
             .collect();
-        pairs.sort_by_key(|(id, _)| *id);
-        Ok(pairs
-            .into_iter()
-            .map(|(_, k)| k)
-            .take(limit as usize)
-            .collect())
+        rows.sort_by_key(|e| e.id);
+        rows.truncate(limit.max(0) as usize);
+        Ok(rows)
     }
 
     fn episode_id_by_key(&self, key: &str) -> CoreResult<Option<i64>> {
@@ -151,6 +154,17 @@ impl EpisodeStore for FakeEpisodes {
             .iter()
             .find(|e| e.object_key == key)
             .map(|e| e.id))
+    }
+
+    fn get_episode(&self, id: i64) -> CoreResult<Option<Episode>> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .list
+            .iter()
+            .find(|e| e.id == id)
+            .cloned())
     }
 
     fn list_episodes_page(&self, before_id: i64, limit: i64) -> CoreResult<Vec<Episode>> {

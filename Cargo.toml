@@ -51,6 +51,8 @@ ureq = { version = "2", default-features = false, features = ["tls"] }
 # crate；路径指向上级仓库 banqi-core workspace）
 bq-env = { path = "../banqi-core/crates/bq-env" }
 bq-policy = { path = "../banqi-core/crates/bq-policy" }
+# 对局记录共享契约（banqi-core workspace；GameRecord/GameLabelPack 类型与 codec）
+bq-record = { path = "../banqi-core/crates/bq-record" }
 # 回放共享库（banqi-core workspace；episode 回放 god 视角重建复用）
 bq-replay = { path = "../banqi-core/crates/bq-replay" }
 

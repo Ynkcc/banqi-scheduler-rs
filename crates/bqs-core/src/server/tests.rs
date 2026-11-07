@@ -194,6 +194,15 @@ fn register_task(s: &Server, task_id: &str, worker: &str, sha: &str) {
 }
 
 fn episode_meta(task_id: &str, worker: &str, sha: &str) -> EpisodeMeta {
+    episode_meta_with_label(task_id, worker, sha, false)
+}
+
+fn episode_meta_with_label(
+    task_id: &str,
+    worker: &str,
+    sha: &str,
+    with_label: bool,
+) -> EpisodeMeta {
     EpisodeMeta {
         worker_id: worker.into(),
         task_id: task_id.into(),
@@ -204,7 +213,7 @@ fn episode_meta(task_id: &str, worker: &str, sha: &str) -> EpisodeMeta {
         timestamp: 0,
         content_length: 128,
         content_sha256: String::new(),
-        kind: 0,
+        kind: bq_record::DataKind::DataResnet as i32,
         red_wins: 2,
         black_wins: 1,
         draw_no_capture: 1,
@@ -213,6 +222,13 @@ fn episode_meta(task_id: &str, worker: &str, sha: &str) -> EpisodeMeta {
         pairs_parallel: Some(true),
         pair_seed_refresh: Some(true),
         games: Vec::new(),
+        label_object_key: String::new(),
+        label_content_length: if with_label { 456 } else { 0 },
+        label_content_sha256: if with_label {
+            "ab".repeat(32)
+        } else {
+            String::new()
+        },
     }
 }
 
@@ -267,6 +283,40 @@ fn report_episode_registers_and_signs_put() {
 }
 
 #[test]
+fn report_episode_dual_object_keys() {
+    let (s, f) = default_server();
+
+    register_task(&s, "t1", "w1", "sha-a");
+    let bare = s.report_episode(episode_meta("t1", "w1", "sha-a")).unwrap();
+    assert!(bare.accepted);
+    assert!(bare.label_object_key.is_empty());
+    assert!(bare.label_upload_url.is_empty());
+    let ep = f.episodes.by_task("t1").unwrap();
+    assert!(ep.label_object_key.is_empty());
+
+    register_task(&s, "t2", "w1", "sha-a");
+    let ack = s
+        .report_episode(episode_meta_with_label("t2", "w1", "sha-a", true))
+        .unwrap();
+    assert!(ack.accepted);
+    assert!(ack.object_key.ends_with(".epb.gz"));
+    assert!(ack.label_object_key.ends_with(".lab.v1.lpb.gz"));
+    assert_eq!(
+        ack.label_object_key.strip_suffix(".lab.v1.lpb.gz"),
+        ack.object_key.strip_suffix(".epb.gz"),
+        "标签包与记录批共享同一 data_id"
+    );
+    assert_eq!(
+        ack.label_upload_url,
+        format!("put:{}", ack.label_object_key)
+    );
+    let ep = f.episodes.by_task("t2").unwrap();
+    assert_eq!(ep.label_object_key, ack.label_object_key);
+    assert_eq!(ep.label_size, 456);
+    assert_eq!(ep.label_sha256, "ab".repeat(32));
+}
+
+#[test]
 fn report_episode_idempotent_duplicate_replays_key() {
     let (s, _) = default_server();
     register_task(&s, "t1", "w1", "sha-a");
@@ -276,6 +326,33 @@ fn report_episode_idempotent_duplicate_replays_key() {
     assert_eq!(second.object_key, first.object_key, "重试必须复用原对象键");
     assert_eq!(second.message, "duplicate_replay");
     assert!(!second.upload_url.is_empty(), "重试返回重签 PUT URL");
+    assert!(
+        second.label_upload_url.is_empty(),
+        "首报无标签包时重发亦不放发标签 PUT"
+    );
+}
+
+#[test]
+fn report_episode_idempotent_duplicate_replays_dual_keys() {
+    let (s, _) = default_server();
+    register_task(&s, "t1", "w1", "sha-a");
+    let first = s
+        .report_episode(episode_meta_with_label("t1", "w1", "sha-a", true))
+        .unwrap();
+    let second = s
+        .report_episode(episode_meta_with_label("t1", "w1", "sha-a", true))
+        .unwrap();
+    assert!(second.accepted);
+    assert_eq!(second.object_key, first.object_key);
+    assert_eq!(
+        second.label_object_key, first.label_object_key,
+        "重试必须复用原标签包对象键"
+    );
+    assert_eq!(
+        second.label_upload_url,
+        format!("put:{}", first.label_object_key),
+        "重试返回重签标签包 PUT URL"
+    );
 }
 
 #[test]
@@ -443,7 +520,7 @@ fn get_task_serves_collect_then_derive_chain() {
                     kind: "random".into(),
                     ..Default::default()
                 }),
-                data_kind: DataKind::DataResnet as i32,
+                data_kind: bq_record::DataKind::DataResnet as i32,
                 ..Default::default()
             }),
             ..Default::default()
@@ -555,10 +632,7 @@ fn heartbeat_touches_worker() {
             "192.168.1.10",
         )
         .unwrap();
-    assert!(
-        !reply.pause_self_play,
-        "暂停语义已移除，恒为 false"
-    );
+    assert!(!reply.pause_self_play, "暂停语义已移除，恒为 false");
     assert!(reply.best_network.is_empty(), "best 语义已移除");
     let w = f.workers.get("w1").unwrap();
     assert_eq!(w.threads, 8);

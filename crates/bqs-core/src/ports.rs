@@ -71,12 +71,12 @@ pub trait EpisodeStore: Send + Sync {
         Ok(Vec::new())
     }
 
-    fn list_episode_keys(
+    fn list_episode_rows(
         &self,
         after_key: &str,
         limit: i64,
         kind: Option<i64>,
-    ) -> CoreResult<Vec<String>>;
+    ) -> CoreResult<Vec<Episode>>;
 
     fn episode_id_by_key(&self, key: &str) -> CoreResult<Option<i64>>;
 

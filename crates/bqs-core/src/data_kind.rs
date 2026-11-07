@@ -1,5 +1,6 @@
 use bqs_config::DataKind;
-use bqs_proto::DataKind as ProtoDataKind;
+
+use bq_record::DataKind as ProtoDataKind;
 
 pub fn parse(s: &str) -> Result<DataKind, String> {
     match s.trim().to_ascii_lowercase().as_str() {

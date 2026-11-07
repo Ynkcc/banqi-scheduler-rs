@@ -32,6 +32,14 @@ impl Server {
             let url = self
                 .signer
                 .presign_put(&existing.object_key, self.ttl_secs())?;
+            let (label_url, label_key_out) = if existing.label_object_key.is_empty() {
+                (String::new(), String::new())
+            } else {
+                let u = self
+                    .signer
+                    .presign_put(&existing.label_object_key, self.ttl_secs())?;
+                (u, existing.label_object_key.clone())
+            };
             tracing::info!(
                 "[episode] 幂等重发 worker={} task={} -> 复用 {}",
                 meta.worker_id,
@@ -42,8 +50,9 @@ impl Server {
                 accepted: true,
                 upload_url: url,
                 object_key: existing.object_key,
+                label_upload_url: label_url,
+                label_object_key: label_key_out,
                 message: "duplicate_replay".into(),
-                ..Default::default()
             });
         }
         let obj_id = crate::sources::new_id();
@@ -54,6 +63,19 @@ impl Server {
             &meta.network_sha
         };
         let key = episode_key(sha_for_key, &obj_id);
+
+        let label_key = if meta.label_object_key.is_empty() {
+            bq_record::codec::label_pack_key(&key).expect("episode_key 恒以 .epb.gz 结尾")
+        } else {
+            meta.label_object_key.clone()
+        };
+
+        let label_present = meta.label_content_length > 0 && !meta.label_content_sha256.is_empty();
+        let label_url = if label_present {
+            self.signer.presign_put(&label_key, self.ttl_secs())?
+        } else {
+            String::new()
+        };
         let url = self.signer.presign_put(&key, self.ttl_secs())?;
         let draft = EpisodeDraft {
             worker_id: meta.worker_id.clone(),
@@ -65,6 +87,14 @@ impl Server {
             object_key: key.clone(),
             created_at: self.clock.now(),
             kind: meta.kind as i64,
+
+            label_object_key: if label_present {
+                label_key.clone()
+            } else {
+                String::new()
+            },
+            label_sha256: meta.label_content_sha256.clone(),
+            label_size: meta.label_content_length,
 
             opponent_sha: task.opponent_sha.clone(),
             opponent_spec: task.opponent_spec.clone(),
@@ -119,7 +149,13 @@ impl Server {
             accepted: true,
             upload_url: url,
             object_key: key,
-            ..Default::default()
+            label_upload_url: label_url,
+            label_object_key: if label_present {
+                label_key
+            } else {
+                String::new()
+            },
+            message: String::new(),
         })
     }
 
@@ -186,21 +222,34 @@ impl Server {
 
     pub fn list_episodes(&self, req: ListEpisodesRequest) -> CoreResult<ListEpisodesReply> {
         let kind = req.kind.map(|k| k as i64);
-        let keys = self
+        let rows = self
             .ports
             .episodes
-            .list_episode_keys(&req.after_key, req.limit as i64, kind)?;
-        let mut objects = Vec::with_capacity(keys.len());
-        for k in &keys {
-            let url = self.signer.presign_get(k, self.ttl_secs())?;
+            .list_episode_rows(&req.after_key, req.limit as i64, kind)?;
+        let mut objects = Vec::with_capacity(rows.len());
+        for ep in &rows {
+            let url = self.signer.presign_get(&ep.object_key, self.ttl_secs())?;
+
+            let (label_url, label_size) = if ep.label_object_key.is_empty() {
+                (String::new(), 0i64)
+            } else {
+                (
+                    self.signer
+                        .presign_get(&ep.label_object_key, self.ttl_secs())?,
+                    ep.label_size,
+                )
+            };
             objects.push(EpisodeObject {
-                object_key: k.clone(),
+                object_key: ep.object_key.clone(),
                 download_url: url,
                 size: 0,
+                label_object_key: ep.label_object_key.clone(),
+                label_download_url: label_url,
+                label_size,
             });
         }
 
-        let has_more = !keys.is_empty() && keys.len() as i32 == req.limit && req.limit > 0;
+        let has_more = !rows.is_empty() && rows.len() as i32 == req.limit && req.limit > 0;
         Ok(ListEpisodesReply { objects, has_more })
     }
 }

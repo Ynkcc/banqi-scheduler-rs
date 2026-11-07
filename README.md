@@ -17,7 +17,7 @@ crates/
   bqs-config/     类型化配置树：未知键/未知 section 拒绝启动（serde deny_unknown_fields）
   bqs-judgment/   判定引擎（纯函数，无 I/O）：六桶 GSPRT + 停机/回滚/对打判据
   bqs-core/       领域内核：ports（端口 trait）+ 8 个独立持锁子系统 + RPC 编排门面
-  bqs-store/      适配器：SQLite（rusqlite/WAL）+ 版本化迁移链 v1..v9（可直接打开 Go 版库）
+  bqs-store/      适配器：SQLite（rusqlite/WAL）+ 版本化迁移链 v1..v16（可直接打开 Go 版库；v9+ 为 Rust 版增量迁移）
   bqs-storage/    适配器：S3 SigV4 预签名（手写实现 + 已知答案向量单测）+ 存储Profile 热切换
   bqs-api/        WebUI JSON API（axum，字段名与 Go 版逐字段一致，前端零改动可用）
   bqs-server/     二进制：装配根 + tonic 传输层 + 双监听 + 优雅停机
@@ -36,8 +36,9 @@ SDK。调度器与对象存储之间没有数据面流量（预签名是纯字�
   `CoreError` 只表示真故障 → gRPC `Status::internal`。
 - **先落库、后置终态**：上报管线铁律（CAS 抢占上报权 + 失败回滚终态），聚合/落库
   失败可由 worker 重试重新抢占。
-- **契约兼容承诺**：gRPC 消息 = `proto/scheduler.proto`（唯一真源）；SQLite schema =
-  Go 版迁移链终态（v1..v8 逐字段一致）；WebUI JSON 字段名与 Go 版 `/api/*` 一致
+- **契约兼容承诺**：gRPC 消息 = `proto/scheduler.proto`（对局记录与标签包契约的
+  单一真源在 `banqi-core/proto/game_record.proto`，scheduler.proto import 引用）；
+  SQLite schema = Go 版迁移链终态（v1..v8 逐字段一致，v9+ Rust 增量）；WebUI JSON 字段名与 Go 版 `/api/*` 一致
   （契约快照测试锁定）；存储 profile JSON 键名与 Go 版 camelCase 对齐（库双向兼容）。
 - **常量集中**：全部 magic number 收敛 `bqs-core/src/consts.rs`。
 
@@ -53,7 +54,7 @@ SDK。调度器与对象存储之间没有数据面流量（预签名是纯字�
 | eval 启动恢复失败 | 上抛拒启 | 告警降级（作业在 DB，可再恢复） |
 | trainconfig float | `ParseFloat` 放行 inf/NaN | 拒绝 |
 | WebUI 静态资源 | `go:embed` 内嵌 | `server.webui_dist` 目录托管（构建产物解耦） |
-| 回放端点 | `/api/episodes/{id}/replay` | 暂未实现（需对象下载 + proto 解码依赖） |
+| 回放端点 | `/api/episodes/{id}/replay` | 已实现：**双对象数据源**（记录批 + 标签包，见「Episode 数据流」），`GET /api/episodes/{id}/replay[/{index}]` |
 
 ## 快速开始
 
@@ -83,10 +84,11 @@ cargo test --workspace        # 全部单测（判定向量 / 迁移链 / 子系
 ## WebUI 路由摘要
 
 只读：`/api/status|networks|matches|eval|eval-config|workers|trainers|episodes|data-stats|tasks|task-stats|train-config|storage(/active|/profiles/{name})`、
+`GET /api/episodes/lookup-game`、`GET /api/episodes/{id}/games`、`GET /api/episodes/{id}/replay[/{index}]`（回放页，双对象数据源，见「Episode 数据流」）、
 `GET /api/jobs?state=&kind=&jobId=&limit=&offset=`（统一 Job 分页列表，响应含 `total/limit/offset`，limit 缺省 100、0 = 全量）、
 `GET /api/jobs/{id}`（单 job 状态查询）
 控制：`POST /api/networks`（手动登记网络，`skipMatch=true` 不发起对打）、`POST /api/networks/{sha}/promote`、`/api/eval/trigger`、`/api/control`、
-`/api/storage/activate`、`POST /api/jobs`（提交 job）、`POST /api/jobs/{id}/{pause|resume|cancel}`；
+`/api/storage/activate`、`POST /api/episodes/import`（离线导入 episode）、`POST /api/jobs`（提交 job）、`POST /api/jobs/{id}/{pause|resume|cancel}`；
 `PUT /api/eval-config|train-config|workers/{id}/note|storage/profiles/{name}`；
 `DELETE /api/storage/profiles/{name}`。
 
@@ -120,11 +122,37 @@ ListJobs / ControlJob`、`JobStatus` 规格回显、`HeartbeatReply.cancel_task_
   job 级单调任务序号确定性解析（`bqs_core::jobs::resolve_seed`），经
   `collect_seed` 下发，保证可复现。
 
+## Episode 数据流（三对象族，schema_version 3）
+
+一个 episode 批对应对象存储中同目录的三个对象。对局记录与标签包的契约唯一真源在
+`banqi-core/proto/game_record.proto`（`bq-record` crate：prost + serde 双 derive，Rust 三端共享；
+训练端 pb2 同源生成），`scheduler.proto` 经 import 引用：
+
+| 对象 | 对象键 | 内容 | 主要消费方 |
+|---|---|---|---|
+| 记录批 | `episodes/{sha}/{id}.epb.gz` | `bqrecord.GameRecordBatch` proto（**schema_version=3**，原 EpisodeBatch 更名迁入 game_record.proto），`GameRecord` 只含对局本身（identity / play / outcome / provenance / timing 五个分组嵌套） | 回放页（棋盘/棋谱/终局）、import 链路 |
+| 标签包 | `episodes/{sha}/{id}.lab.v1.lpb.gz` | `GameLabelPack` proto（pack_version=1）：训练标签 + 搜索诊断 + 局级元数据（players/actions/outcome 有意冗余，训练器脱离记录批自足） | 训练主链路、回放页（教师策略/诊断） |
+| 特征包 | `episodes/{sha}/{id}.pack.v{n}.fpb.gz` | `FeaturePack` proto（不变），`record_sha256` 绑定记录批 gz 体 | NNUE / ResNet 训练 |
+
+上报与消费契约：
+
+- **`ReportEpisode` 双 URL**：一次 RPC 返回 `EpisodeAck.upload_url` + `label_upload_url`，
+  记录批与标签包原子成对上报（collector outbox 整对 spool 重传，任一失败整对重传）；
+  `episodes` 表登记 `label_object_key / label_sha256 / label_size`（迁移 v16）。
+- **`ListEpisodes` 双 URL**：`EpisodeObject` 同时返回 `label_object_key / label_download_url /
+  label_size`（可能为空：import 来源的 episode 或标签包未成功上传）。
+- **训练器只消费标签包 + 特征包**，不再下载记录批（存量旧 `.epb.gz` 不兼容，按新契约重建）。
+- **回放页双对象数据源**（`GET /api/episodes/{id}/replay[/{index}]`）：棋盘/棋谱/终局来自
+  记录批（`bq_record::replay` 统一派生 god 视角与 FEN），教师策略/诊断来自标签包；标签包
+  缺失时诊断字段置 null 并在视图标记 `labelsMissing: true`（不阻断棋盘回放）。
+
 ## 跨端耦合备忘（改动必须三端同步）
 
 - `RULE_SENTINEL_SHA = "rule"` ↔ collector 的 `RULE_TEACHER_SHA`（逐字节）；
-- 对象键布局：`episodes/<sha>/<id>.epb.gz`、`episodes/<sha>/<id>.pack.v<n>.fpb.gz`、
-  `networks/<sha>.<onnx|pt|nnue>`（三端各有一份派生实现）；
+- 对象键布局：`episodes/<sha>/<id>.epb.gz`、`episodes/<sha>/<id>.lab.v1.lpb.gz`、
+  `episodes/<sha>/<id>.pack.v<n>.fpb.gz`、`networks/<sha>.<onnx|pt|nnue>`；
+  key 派生 Rust 侧统一走 `bq_record::codec::label_pack_key`（`.epb.gz` 后缀替换），
+  训练端 Python 保留一份对应实现（改动必须三端同步）；
 - 评估对手标识 ↔ collector `rule_opponents.rs`；
 - 训练超参白名单 ↔ `banqi_training/config.py` 的 `TRAIN_CONFIG_OVERRIDABLE`；
 - 变体元数据经跨仓库 path 依赖直取 `banqi-core/crates/bq-env`（编译期构建，

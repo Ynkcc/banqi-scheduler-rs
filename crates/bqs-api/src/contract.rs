@@ -226,6 +226,7 @@ fn episode_views() {
         seed_base: Some("42".into()),
         pairs_parallel: Some(true),
         pair_seed_refresh: Some(false),
+        label_object_key: "episodes/s/x.lab.v1.lpb.gz".into(),
     };
     assert_keys(
         &keys(&ev),
@@ -250,6 +251,7 @@ fn episode_views() {
             "seedBase",
             "pairsParallel",
             "pairSeedRefresh",
+            "labelObjectKey",
         ],
     );
     let page = EpisodePageView {
@@ -367,14 +369,14 @@ fn replay_views() {
         hidden_bag: bag,
         board_source: "snapshot".into(),
         producer: 0,
-        search_value: 0.25,
-        player_value: -0.5,
-        hidden_count: 32,
-        search_depth: 4,
-        search_nodes: 1024,
-        chosen_value_gap: 0.0,
-        expl_random: false,
-        labeler_fallback: false,
+        search_value: Some(0.25),
+        player_value: Some(-0.5),
+        hidden_count: Some(32),
+        search_depth: Some(4),
+        search_nodes: Some(1024),
+        chosen_value_gap: Some(0.0),
+        expl_random: Some(false),
+        labeler_fallback: Some(false),
         labeler_action: Some(3),
         policy_actions: Some(vec![3]),
         policy_values: Some(vec![1.0]),
@@ -436,10 +438,26 @@ fn replay_views() {
     quiet.policy_actions = None;
     quiet.policy_values = None;
     quiet.labeler_action = None;
+    quiet.search_value = None;
+    quiet.player_value = None;
+    quiet.hidden_count = None;
+    quiet.search_depth = None;
+    quiet.search_nodes = None;
+    quiet.chosen_value_gap = None;
+    quiet.expl_random = None;
+    quiet.labeler_fallback = None;
     let null_json = serde_json::to_value(&quiet).unwrap();
     assert!(null_json["policyActions"].is_null());
     assert!(null_json["policyValues"].is_null());
     assert!(null_json["labelerAction"].is_null());
+    assert!(null_json["searchValue"].is_null(), "无标签包时诊断字段应为 null");
+    assert!(null_json["playerValue"].is_null());
+    assert!(null_json["hiddenCount"].is_null());
+    assert!(null_json["searchDepth"].is_null());
+    assert!(null_json["searchNodes"].is_null());
+    assert!(null_json["chosenValueGap"].is_null());
+    assert!(null_json["explRandom"].is_null());
+    assert!(null_json["labelerFallback"].is_null());
 
     let game = ReplayGameView {
         index: 0,
@@ -465,6 +483,7 @@ fn replay_views() {
         labeler_agree: 1.0,
         labeler_total: 8,
         expl_count: 0,
+        labels_missing: false,
     };
     assert_keys(
         &keys(&game),

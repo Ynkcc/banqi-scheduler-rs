@@ -115,8 +115,8 @@ impl JobManager {
             .ok_or("collect.player_b required")?;
         validate_player(&pa, nets)?;
         validate_player(&pb, nets)?;
-        if c.data_kind != bqs_proto::DataKind::DataResnet as i32
-            && c.data_kind != bqs_proto::DataKind::DataNnue as i32
+        if c.data_kind != bq_record::DataKind::DataResnet as i32
+            && c.data_kind != bq_record::DataKind::DataNnue as i32
         {
             return Err("collect.data_kind 必须为 DATA_RESNET / DATA_NNUE".into());
         }

@@ -14,3 +14,13 @@ pub fn games_for_threads(baseline: i32, base: i64, threads: i32) -> i64 {
     let g = base * t / baseline as i64;
     g.max(1)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn episode_key_format() {
+        assert_eq!(episode_key("abc", "d1"), "episodes/abc/d1.epb.gz");
+    }
+}

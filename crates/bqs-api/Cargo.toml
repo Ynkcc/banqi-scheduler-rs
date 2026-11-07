@@ -12,6 +12,8 @@ bqs-proto = { workspace = true }
 prost = { workspace = true }
 # 回放 god 视角重建（快照解码 / initial_layout 回退）与变体元数据
 bq-replay = { workspace = true }
+# 对局记录契约（GameRecord/GameLabelPack codec 与 replay 转换）
+bq-record = { workspace = true }
 bq-env = { workspace = true }
 bqs-judgment = { workspace = true }
 bqs-config = { workspace = true }
@@ -21,3 +23,10 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
+
+[dev-dependencies]
+# e2e 集成回归：Fakes / FakeSettings（test-util）+ 本地内存对象存储 HTTP 服务
+bqs-core = { workspace = true, features = ["test-util"] }
+bqs-config = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
+tracing-subscriber = { workspace = true }

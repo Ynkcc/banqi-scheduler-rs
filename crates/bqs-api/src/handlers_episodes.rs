@@ -99,6 +99,7 @@ fn to_episode_view(e: &Episode) -> EpisodeView {
         seed_base: e.seed_base.map(|s| (s as u64).to_string()),
         pairs_parallel: e.pairs_parallel,
         pair_seed_refresh: e.pair_seed_refresh,
+        label_object_key: e.label_object_key.clone(),
     }
 }
 

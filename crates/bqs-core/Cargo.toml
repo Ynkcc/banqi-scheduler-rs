@@ -6,6 +6,7 @@ description = "banqi-scheduler 领域内核：ports（端口 trait）+ 各独立
 
 [dependencies]
 bqs-proto = { workspace = true }
+bq-record = { workspace = true }
 bqs-config = { workspace = true }
 bqs-judgment = { workspace = true }
 bq-env = { workspace = true }

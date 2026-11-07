@@ -5,6 +5,10 @@ package scheduler;
 
 option go_package = "banqi/server/pb";
 
+// 对局记录与标签包契约：单一真源在 banqi-core/proto/game_record.proto，
+// GameRecord / GameLabelPack / DataKind 等类型从该文件引入（bqrecord 包）。
+import "game_record.proto";
+
 message TaskRequest {
   string worker_id = 1;
   string client_version = 2;
@@ -17,7 +21,7 @@ message GenerationSpec {
   string variant = 1;
   OpeningScenario scenario = 2;
   optional uint64 seed = 3;
-  DataKind data_kind = 4;
+  bqrecord.DataKind data_kind = 4;
   uint64 games = 5;
   uint64 deadline_unix = 6;
   // 收集器成对并行：true = 按“对”为单位并行执行（默认），
@@ -76,12 +80,6 @@ enum TaskKind {
   TASK_COLLECT = 6;
 }
 
-enum DataKind {
-  DATA_RESNET = 0;
-  DATA_NNUE = 1;
-  DATA_NONE = 2;
-}
-
 message SelfPlayParams {
   int32 mcts_sims = 1;
   string extra_config = 5;
@@ -89,17 +87,6 @@ message SelfPlayParams {
   // worker 以此为唯一来源构建搜索配置，本地不再保留任何默认值。
   CollectSearchParams search = 7;
   reserved 2, 3, 4, 6;
-}
-
-message GameSummary {
-  uint32 game_index = 1;
-  uint32 pair_index = 2;
-  uint32 pair_position = 3;
-  optional uint64 game_seed = 4;
-  bool a_is_red = 5;
-  bool seed_refreshed = 6;
-  optional int32 winner = 7;
-  uint32 steps = 8;
 }
 
 message EpisodeMeta {
@@ -112,7 +99,7 @@ message EpisodeMeta {
   int64 timestamp = 7;
   int64 content_length = 8;
   string content_sha256 = 9;
-  DataKind kind = 10;
+  bqrecord.DataKind kind = 10;
   int32 red_wins = 11;
   int32 black_wins = 12;
   int32 draw_no_capture = 13;
@@ -123,7 +110,11 @@ message EpisodeMeta {
   optional bool pairs_parallel = 16;
   optional bool pair_seed_refresh = 17;
   // 逐局标识摘要（对局反查的索引来源）
-  repeated GameSummary games = 18;
+  repeated bqrecord.GameSummary games = 18;
+  // 标签包对象（.lab.v1.lpb.gz）三元组：任一缺失表示标签包未上传成功
+  string label_object_key = 19;
+  int64 label_content_length = 20;
+  string label_content_sha256 = 21;
 }
 
 message EpisodeAck {
@@ -131,19 +122,26 @@ message EpisodeAck {
   string message = 2;
   string upload_url = 3;
   string object_key = 4;
+  // 标签包预签名 PUT：一次 RPC 返回记录与标签包两个上传地址（原子成对上报）
+  string label_upload_url = 5;
+  string label_object_key = 6;
 }
 
 // 离线训练数据浏览（外部脚本/Python 离线训练消费）
 message ListEpisodesRequest {
   int32 limit = 1;
   string after_key = 2;
-  optional DataKind kind = 3;
+  optional bqrecord.DataKind kind = 3;
 }
 
 message EpisodeObject {
   string object_key = 1;
   string download_url = 2;
   int64 size = 3;
+  // 标签包对象（可能为空：import 来源的 episode 或标签包未成功上传）
+  string label_object_key = 4;
+  string label_download_url = 5;
+  int64 label_size = 6;
 }
 
 message ListEpisodesReply {
@@ -239,97 +237,10 @@ message GetInfoReply {
   string stop_reason = 3;
 }
 
-message EpisodeBatch {
-  uint32 schema_version = 1;
-  string variant = 2;
-  DataKind kind = 5;
-  repeated GameRecord records = 3;
-  reserved 4;
-}
-
-message GameRecord {
-  uint32 steps = 1;
-
-  optional uint64 game_seed = 2;
-  bytes initial_layout = 3;
-  bytes players = 4;
-  bytes actions = 5;
-  repeated bytes snapshots = 6;
-  optional int32 winner = 7;
-  uint32 termination_reason = 8;
-  optional float terminal_margin = 9;
-  optional float health_diff_red = 10;
-
-  repeated uint64 producer_hashes = 11;
-  bytes producers = 12;
-  uint32 search_config_version = 13;
-
-  bytes value_labels = 14;
-  bytes own_values = 15;
-  bytes root_visits = 16;
-  bytes is_full_search = 17;
-
-  bytes policies = 18;
-  bytes labeler_actions = 19;
-  bytes labeler_policy_actions = 20;
-  bytes labeler_policy_values = 21;
-  bytes labeler_policy_offsets = 22;
-  bytes labeler_fallbacks = 23;
-
-  bytes search_depths = 24;
-  bytes search_nodes = 25;
-  bytes hidden_counts = 26;
-  bytes chosen_value_gaps = 27;
-  bytes expl_random = 28;
-
-  // —— 对局标识（对局反查 / 配对关联）——
-  // 任务内全局序号（0-based，与派发顺序一致）
-  optional uint32 game_index = 29;
-  // 对序号 = game_index / 2（收集器按两局一组执行）
-  optional uint32 pair_index = 30;
-  // 对内位置：0 = 第一局，1 = 第二局
-  optional uint32 pair_position = 31;
-  // 玩家 A（产数据方）是否执红：对内两局应互补（换手）
-  optional bool a_is_red = 32;
-  // 本局种子是否为对内刷新种子（pair_seed_refresh=true 时对内第二局为 true）
-  optional bool seed_refreshed = 33;
-}
-
-message NnueMeta {
-  uint32 feature_dim = 1;
-  uint32 states_per_square = 2;
-  uint32 bag_stride = 3;
-  uint32 num_active = 4;
-  uint32 total_positions = 5;
-  uint32 threat_buckets = 6;
-}
-
-message NnueFeatures {
-  NnueMeta meta = 1;
-  bytes indices = 2;
-  bytes offsets = 3;
-}
-
-message ResNetFeatures {
-  uint32 board_channels = 1;
-  uint32 board_rows = 2;
-  uint32 board_cols = 3;
-  uint32 scalar_count = 4;
-  uint32 action_space = 5;
-  bytes boards_bits = 6;
-  bytes scalars = 7;
-  bytes action_masks_bits = 8;
-}
-
-message FeaturePack {
-  uint32 pack_version = 1;
-  string variant = 2;
-  DataKind kind = 3;
-  uint32 steps = 4;
-  bytes record_sha256 = 5;
-  NnueFeatures nnue = 6;
-  ResNetFeatures resnet = 7;
-}
+// EpisodeBatch / FeaturePack / NnueMeta / NnueFeatures / ResNetFeatures / GameSummary
+// 已迁至 game_record.proto（package bqrecord）——数据面契约（记录批 / 标签包 / 特征包 /
+// 逐局摘要）统一由 bqrecord 提供；本文件只保留控制面（任务派发 / RPC 信封 / 调度域）。
+// EpisodeBatch 更名为 bqrecord.GameRecordBatch。
 
 message FeaturePackMeta {
   string worker_id = 1;
@@ -435,7 +346,7 @@ message CollectionJobSpec {
   SeedStrategy seed_strategy = 3;
   CollectPlayerSpec player_a = 4;
   CollectPlayerSpec player_b = 5;
-  DataKind data_kind = 6;
+  bqrecord.DataKind data_kind = 6;
   uint64 total_games = 7;
   // 任务级覆写：成对并行开关（缺省 = 调度器默认 true）
   optional bool pairs_parallel = 8;
@@ -448,7 +359,7 @@ message CollectionJobSpec {
 
 message SelfPlayJobSpec {
   string variant = 1;
-  DataKind data_kind = 2;
+  bqrecord.DataKind data_kind = 2;
   string network_sha = 3;
   string opponent_sha = 4;
   double mix_ratio = 5;

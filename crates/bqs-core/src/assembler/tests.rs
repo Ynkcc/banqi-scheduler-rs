@@ -65,15 +65,15 @@ fn games_for_threads_scaling() {
 fn data_kind_for_format_mapping() {
     assert_eq!(
         data_kind_for_format("onnx"),
-        bqs_proto::DataKind::DataResnet as i32
+        bq_record::DataKind::DataResnet as i32
     );
     assert_eq!(
         data_kind_for_format("nnue"),
-        bqs_proto::DataKind::DataNnue as i32
+        bq_record::DataKind::DataNnue as i32
     );
     assert_eq!(
         data_kind_for_format("whatever"),
-        bqs_proto::DataKind::DataResnet as i32
+        bq_record::DataKind::DataResnet as i32
     );
 }
 
@@ -152,7 +152,7 @@ fn rating_task_assembly() {
     );
     assert_eq!(
         g.data_kind,
-        bqs_proto::DataKind::DataResnet as i32,
+        bq_record::DataKind::DataResnet as i32,
         "data_kind 跟随候选架构"
     );
     let p = match g.behavior.expect("behavior 缺省") {
@@ -226,7 +226,7 @@ fn collect_task_passthrough_pair_overrides() {
         bqs_proto::CollectionJobSpec {
             variant: "4x8".into(),
             scenario: 0,
-            data_kind: bqs_proto::DataKind::DataResnet as i32,
+            data_kind: bq_record::DataKind::DataResnet as i32,
             total_games: 4,
             pairs_parallel,
             pair_seed_refresh,
@@ -282,7 +282,7 @@ fn collect_task_fills_network_keys() {
     };
     let spec = bqs_proto::CollectionJobSpec {
         variant: "4x8".into(),
-        data_kind: bqs_proto::DataKind::DataNnue as i32,
+        data_kind: bq_record::DataKind::DataNnue as i32,
         total_games: 4,
         player_a: Some(player("best-nnue")),
         player_b: Some(player("best-nnue")),

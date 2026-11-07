@@ -1,12 +1,13 @@
 use bq_env::config::Variant;
-use bq_env::types::{Piece, PieceType, Player, Slot};
-use bq_env::{PositionSnapshot, SnapshotEnv};
-use bq_replay::{ReplayInput, ReplayMove, ReplayStep};
+use bq_env::PositionSnapshot;
+use bq_replay::ReplayStep;
 
+use bq_record::types::GameRecordBatch;
+use bq_record::GameLabelPack;
 use bqs_core::types::Episode;
-use bqs_proto::{EpisodeBatch, GameRecord};
 
 use crate::views::{HiddenBagView, ReplayGameView, ReplayStepView};
+
 
 fn action_to_coords(rows: usize, cols: usize) -> Vec<(usize, usize)> {
     let n = rows * cols;
@@ -25,6 +26,7 @@ fn action_to_coords(rows: usize, cols: usize) -> Vec<(usize, usize)> {
             }
         }
     }
+
     for r1 in 0..rows {
         for c1 in 0..cols {
             let from = r1 * cols + c1;
@@ -69,48 +71,32 @@ fn u16_at(b: &[u8], i: usize) -> Option<u32> {
     Some(u16::from_le_bytes(b[s..s + 2].try_into().unwrap()) as u32)
 }
 
-fn piece_from_layout_byte(b: u8) -> Option<Piece> {
-    let ty = [
-        PieceType::Soldier,
-        PieceType::Cannon,
-        PieceType::Horse,
-        PieceType::Chariot,
-        PieceType::Elephant,
-        PieceType::Advisor,
-        PieceType::General,
-    ][(b & 0x7) as usize];
-    let pl = if (b >> 3) & 1 == 0 {
-        Player::Red
-    } else {
-        Player::Black
-    };
-    Some(Piece::new(ty, pl))
-}
-
-fn hidden_identity(snap: &PositionSnapshot, sq: usize, layout: Option<&[Piece]>) -> Option<Piece> {
-    snap.true_board
-        .as_ref()
-        .and_then(|tb| tb.get(sq))
-        .copied()
-        .or_else(|| layout.and_then(|l| l.get(sq)).copied())
-}
-
-fn decode_snapshots(rec: &GameRecord, steps: usize) -> Result<Vec<PositionSnapshot>, String> {
-    if rec.snapshots.len() != steps {
+fn decode_snapshots(snapshots: &[Vec<u8>], steps: usize) -> Result<Vec<PositionSnapshot>, String> {
+    if snapshots.len() != steps {
         return Err(format!(
             "replay: 步前快照缺失/解码失败（{}/{} 条）",
-            rec.snapshots.len(),
+            snapshots.len(),
             steps
         ));
     }
-    rec.snapshots
+    snapshots
         .iter()
         .map(|b| PositionSnapshot::decode(b).map_err(|e| format!("replay: 快照解码失败: {e}")))
         .collect()
 }
 
+
+fn labels_for_game<'a>(pack: &'a GameLabelPack, index: usize) -> Option<&'a bq_record::GameLabels> {
+    let exact = pack
+        .games
+        .iter()
+        .find(|g| g.context.as_ref().map(|c| c.game_index as usize) == Some(index));
+    exact.or_else(|| pack.games.get(index))
+}
+
 pub fn build_game(
-    batch: &EpisodeBatch,
+    batch: &GameRecordBatch,
+    labels: Option<&GameLabelPack>,
     ep: &Episode,
     index: usize,
 ) -> Result<ReplayGameView, String> {
@@ -122,126 +108,53 @@ pub fn build_game(
         ));
     }
     let rec = &batch.records[index];
-    let variant: Variant = batch.variant.parse().map_err(|e| format!("replay: {e}"))?;
-    let cfg = variant.config();
-    let positions = cfg.total_positions;
-    let steps = rec.steps as usize;
-    let table = action_to_coords(cfg.rows, cfg.cols);
+    let identity = rec.identity.as_ref();
+    let outcome = rec.outcome.as_ref();
+    let play = rec.play.as_ref().ok_or("replay: 缺少 play 分组")?;
+    let steps = play.steps as usize;
+    let variant: Variant = identity
+        .map(|i| i.variant.as_str())
+        .unwrap_or_default()
+        .parse()
+        .map_err(|e| format!("replay: 未知变体: {e}"))?;
+    let coords = action_to_coords(variant.config().rows, variant.config().cols);
 
-    let layout: Option<Vec<Piece>> = if rec.initial_layout.len() == positions {
-        Some(
-            rec.initial_layout
-                .iter()
-                .map(|&b| piece_from_layout_byte(b))
-                .collect::<Option<Vec<_>>>()
-                .ok_or("replay: initial_layout 含非法棋子字节")?,
-        )
-    } else {
-        None
-    };
 
-    let snaps = decode_snapshots(rec, steps)?;
+    let input = bq_record::replay::to_replay_input(rec)?;
+    let game = bq_replay::build_replay(&input)?;
 
+    let snaps = decode_snapshots(&play.snapshots, steps)?;
     let mut actions = Vec::with_capacity(steps);
     for i in 0..steps {
-        actions.push(u16_at(&rec.actions, i).ok_or_else(|| {
+        actions.push(u16_at(&play.actions, i).ok_or_else(|| {
             format!(
                 "replay: actions 字节数 {} != steps*2={}",
-                rec.actions.len(),
+                play.actions.len(),
                 steps * 2
             )
         })?);
     }
-    if rec.players.len() != steps {
-        return Err(format!(
-            "replay: players 字节数 {} != steps={}",
-            rec.players.len(),
-            steps
-        ));
-    }
-    let players_i8 = |i: usize| rec.players[i] as i8;
 
-    let final_snap: Option<PositionSnapshot> = if steps > 0 && snaps[steps - 1].true_board.is_some() {
-        let last_pre = &snaps[steps - 1];
-        bq_env::for_variant_env!(variant, E => {
-            <E as SnapshotEnv>::from_snapshot(last_pre)
-                .and_then(|mut env| env.step_with_reveal(actions[steps - 1] as usize, None).map(|_| env.to_snapshot()))
+    let final_fen = input
+        .final_snapshot
+        .as_ref()
+        .and_then(|b| PositionSnapshot::decode(b).ok())
+        .map(|s| s.to_fen());
+
+
+    let label = labels.and_then(|p| labels_for_game(p, index));
+    let labels_missing = label.is_none();
+    let train = label.and_then(|g| g.labels.as_ref());
+    let diag = label.and_then(|g| g.diagnostics.as_ref());
+
+    let policy_offsets: Vec<u32> = train
+        .map(|t| {
+            (0..=steps + 1)
+                .take_while(|&i| i * 4 + 4 <= t.labeler_policy_offsets.len())
+                .map(|i| u32_at(&t.labeler_policy_offsets, i))
+                .collect()
         })
-        .ok()
-    } else {
-        None
-    };
-    let final_snapshot: Option<Vec<u8>> = final_snap.as_ref().map(|s| s.encode());
-
-    let mut moves = Vec::with_capacity(steps);
-    for (ply, &action) in actions.iter().enumerate() {
-        let Some((from, to)) = table.get(action as usize).copied() else {
-            return Err(format!(
-                "replay: step {ply} 动作 {action} 超出动作空间 {}",
-                table.len()
-            ));
-        };
-        let pre = &snaps[ply];
-        let (is_flip, is_chance, revealed, captured) = if (action as usize) < positions {
-            if !matches!(pre.slots[to], Slot::Hidden) {
-                return Err(format!("replay: step {ply} 翻棋目标 {to} 与快照明暗不符"));
-            }
-
-
-            let id = hidden_identity(pre, to, layout.as_deref());
-            (true, true, id.map(|p| p.short_name()), None)
-        } else {
-            if !matches!(pre.slots[from], Slot::Revealed(_)) {
-                return Err(format!(
-                    "replay: step {ply} 起点格 {from} 与快照不符（无棋子）"
-                ));
-            }
-            match pre.slots[to] {
-                Slot::Empty => (false, false, None, None),
-                Slot::Hidden => {
-                    let id = hidden_identity(pre, to, layout.as_deref());
-                    (
-                        false,
-                        true,
-                        id.map(|p| p.short_name()),
-                        id.map(|p| p.short_name()),
-                    )
-                }
-                Slot::Revealed(victim) => (false, false, None, Some(victim.short_name())),
-            }
-        };
-        moves.push(ReplayMove {
-            player: if players_i8(ply) < 0 {
-                "Black".into()
-            } else {
-                "Red".into()
-            },
-            action: action as usize,
-            from,
-            to,
-            is_flip,
-            is_chance,
-            is_capture: captured.is_some() && !is_chance,
-            revealed,
-            captured,
-        });
-    }
-
-    let input = ReplayInput {
-        variant,
-        initial_fen: None,
-        initial_layout: layout.clone(),
-        snapshots: rec.snapshots.clone(),
-        final_snapshot,
-        final_fen: None,
-        moves,
-    };
-    let game = bq_replay::build_replay(&input)?;
-
-    let policy_offsets: Vec<u32> = (0..=steps + 1)
-        .take_while(|&i| i * 4 + 4 <= rec.labeler_policy_offsets.len())
-        .map(|i| u32_at(&rec.labeler_policy_offsets, i))
-        .collect();
+        .unwrap_or_default();
     let mut labeler_total = 0usize;
     let mut labeler_agree = 0f64;
     let mut expl_count = 0usize;
@@ -265,51 +178,61 @@ pub fn build_game(
             snaps[ply].move_counter
         };
 
-        let p = u8_at(&rec.producers, ply);
+        let p = rec
+            .provenance
+            .as_ref()
+            .map(|pr| u8_at(&pr.producers, ply))
+            .unwrap_or(0xFF);
         let producer: i64 = if p == 0xFF { -1 } else { p as i64 };
 
         let mut labeler_action = None;
-        let la = u32_at(&rec.labeler_actions, ply);
-        if la != 0xFFFF_FFFF {
-            labeler_action = Some(la);
-            labeler_total += 1;
-            if let (Some((lf, lt)), Some((af, at))) =
-                (table.get(la as usize), table.get(action as usize))
-                && (lf, lt) == (af, at)
-            {
-                labeler_agree += 1.0;
+        if let Some(t) = train {
+            let la = u32_at(&t.labeler_actions, ply);
+            if la != 0xFFFF_FFFF {
+                labeler_action = Some(la);
+                labeler_total += 1;
+                if let (Some((lf, lt)), Some((af, at))) =
+                    (coords.get(la as usize), coords.get(action as usize))
+                    && (lf, lt) == (af, at)
+                {
+                    labeler_agree += 1.0;
+                }
             }
         }
-        if u8_at(&rec.expl_random, ply) == 1 {
+        if let Some(d) = diag
+            && u8_at(&d.expl_random, ply) == 1
+        {
             expl_count += 1;
         }
 
-        let (policy_actions, policy_values) = {
-            let (lo, hi) = (
-                policy_offsets.get(ply).copied().unwrap_or(0),
-                policy_offsets.get(ply + 1).copied().unwrap_or(0),
-            );
-            if hi > lo && (hi as usize) * 4 <= rec.labeler_policy_actions.len() {
-                let pa: Vec<u32> = (lo as usize..hi as usize)
-                    .map(|k| u32_at(&rec.labeler_policy_actions, k))
-                    .collect();
-                let pv: Vec<f32> = if (hi as usize) * 4 <= rec.labeler_policy_values.len() {
-                    (lo as usize..hi as usize)
-                        .map(|k| f32_at(&rec.labeler_policy_values, k))
-                        .collect()
+        let (policy_actions, policy_values) = train
+            .map(|t| {
+                let (lo, hi) = (
+                    policy_offsets.get(ply).copied().unwrap_or(0),
+                    policy_offsets.get(ply + 1).copied().unwrap_or(0),
+                );
+                if hi > lo && (hi as usize) * 4 <= t.labeler_policy_actions.len() {
+                    let pa: Vec<u32> = (lo as usize..hi as usize)
+                        .map(|k| u32_at(&t.labeler_policy_actions, k))
+                        .collect();
+                    let pv: Vec<f32> = if (hi as usize) * 4 <= t.labeler_policy_values.len() {
+                        (lo as usize..hi as usize)
+                            .map(|k| f32_at(&t.labeler_policy_values, k))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    (Some(pa), Some(pv))
                 } else {
-                    Vec::new()
-                };
-                (Some(pa), Some(pv))
-            } else {
-                (None, None)
-            }
-        };
+                    (None, None)
+                }
+            })
+            .unwrap_or((None, None));
 
         step_views.push(ReplayStepView {
             ply,
             player: m.player.clone(),
-            action: action,
+            action,
             from: m.from as i64,
             to: m.to as i64,
             kind: kind.as_str().to_string(),
@@ -327,14 +250,14 @@ pub fn build_game(
             },
             board_source: m.board_source.clone(),
             producer,
-            search_value: f32_at(&rec.value_labels, ply),
-            player_value: f32_at(&rec.own_values, ply),
-            hidden_count: u32_at(&rec.hidden_counts, ply) as i64,
-            search_depth: u8_at(&rec.search_depths, ply) as i64,
-            search_nodes: u32_at(&rec.search_nodes, ply) as i64,
-            chosen_value_gap: f32_at(&rec.chosen_value_gaps, ply),
-            expl_random: u8_at(&rec.expl_random, ply) == 1,
-            labeler_fallback: u8_at(&rec.labeler_fallbacks, ply) == 1,
+            search_value: train.map(|t| f32_at(&t.value_labels, ply)),
+            player_value: train.map(|t| f32_at(&t.own_values, ply)),
+            hidden_count: diag.map(|d| u32_at(&d.hidden_counts, ply) as i64),
+            search_depth: diag.map(|d| u8_at(&d.search_depths, ply) as i64),
+            search_nodes: diag.map(|d| u32_at(&d.search_nodes, ply) as i64),
+            chosen_value_gap: diag.map(|d| f32_at(&d.chosen_value_gaps, ply)),
+            expl_random: diag.map(|d| u8_at(&d.expl_random, ply) == 1),
+            labeler_fallback: train.map(|t| u8_at(&t.labeler_fallbacks, ply) == 1),
             labeler_action,
             policy_actions,
             policy_values,
@@ -344,22 +267,27 @@ pub fn build_game(
         labeler_agree /= labeler_total as f64;
     }
 
-
     let red_is_a = crate::handlers_replay::red_is_a_of(rec);
     Ok(ReplayGameView {
         index,
         steps,
         game_length: steps,
-        winner: rec.winner,
-        termination: crate::handlers_replay::termination_label(rec.termination_reason).to_string(),
-        seed: rec.game_seed.map(|s| s.to_string()).unwrap_or_default(),
-        has_seed: rec.game_seed.is_some(),
+        winner: outcome.and_then(|o| o.winner),
+        termination: crate::handlers_replay::termination_label(
+            outcome.map(|o| o.termination_reason).unwrap_or(0),
+        )
+        .to_string(),
+        seed: identity
+            .and_then(|i| i.game_seed)
+            .map(|s| s.to_string())
+            .unwrap_or_default(),
+        has_seed: identity.and_then(|i| i.game_seed).is_some(),
         side_a: crate::handlers_replay::describe_side(&ep.network_sha, ""),
         side_b: crate::handlers_replay::describe_side(&ep.opponent_sha, &ep.opponent_spec),
         red_is_a,
         a_side_only: false,
         initial_fen: snaps.first().map(|s| s.to_fen()),
-        final_fen: final_snap.map(|s| s.to_fen()),
+        final_fen,
         initial_board: game.initial_board,
         initial_shown: game.initial_shown,
         initial_bag: HiddenBagView {
@@ -376,17 +304,26 @@ pub fn build_game(
         labeler_agree,
         labeler_total,
         expl_count,
+        labels_missing,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bq_env::SnapshotEnv;
     use bq_env::DarkChessEnv;
     use bq_env::GameEnv;
+    use bq_env::types::{Player, Slot};
+    use bq_record::codec::{LABEL_PACK_VERSION, encode_label_pack_gz};
+    use bq_record::types::{
+        DataKind, GameIdentity, GameOutcome, GamePlay, GameRecord, Provenance, RecordSource,
+        StepDiagnostics, TrainingLabels,
+    };
     use prost::Message;
 
-    fn synth_record(steps: usize, with_diags: bool) -> (GameRecord, Vec<Vec<u8>>) {
+
+    fn synth(steps: usize, with_diags: bool) -> (GameRecord, GameLabelPack) {
         let mut env = DarkChessEnv::default();
 
         let mut initial_layout: Vec<u8> = Vec::with_capacity(32);
@@ -451,32 +388,74 @@ mod tests {
             }
             env.step_with_reveal(action, None).unwrap();
         }
+        let real_steps = actions.len() / 2;
+
         let rec = GameRecord {
-            steps: actions.len() as u32 / 2,
-            game_seed: Some(42),
-            initial_layout: initial_layout.clone(),
-            players,
-            actions,
-            snapshots,
-            winner: Some(1),
-            termination_reason: 1,
-            producers,
-            value_labels,
-            own_values,
-            hidden_counts,
-            search_depths,
-            search_nodes,
-            chosen_value_gaps: chosen_gaps,
-            expl_random,
-            labeler_actions,
-            labeler_fallbacks,
-            labeler_policy_actions: pol_actions,
-            labeler_policy_values: pol_values,
-            labeler_policy_offsets: pol_offsets.iter().flat_map(|o| o.to_le_bytes()).collect(),
+            identity: Some(GameIdentity {
+                variant: "4x8".into(),
+                source: RecordSource::SourceCollector as i32,
+                game_seed: Some(42),
+                game_index: Some(0),
+                a_is_red: Some(true),
+                ..Default::default()
+            }),
+            play: Some(GamePlay {
+                steps: real_steps as u32,
+                initial_layout: initial_layout.clone(),
+                players,
+                actions,
+                snapshots,
+            }),
+            outcome: Some(GameOutcome {
+                winner: Some(1),
+                termination_reason: 1,
+                ..Default::default()
+            }),
+            provenance: Some(Provenance {
+                producers,
+                ..Default::default()
+            }),
             ..Default::default()
         };
-        let snaps = rec.snapshots.clone();
-        (rec, snaps)
+
+        let mut labels = bq_record::GameLabels::new(0);
+        if let Some(ctx) = labels.context.as_mut() {
+            ctx.steps = real_steps as u32;
+            ctx.players = rec.play.as_ref().unwrap().players.clone();
+            ctx.actions = rec.play.as_ref().unwrap().actions.clone();
+            ctx.game_seed = Some(42);
+        }
+        if with_diags {
+            labels.labels = Some(TrainingLabels {
+                value_labels,
+                own_values,
+                labeler_actions,
+                labeler_fallbacks,
+                labeler_policy_actions: pol_actions,
+                labeler_policy_values: pol_values,
+                labeler_policy_offsets: pol_offsets
+                    .iter()
+                    .flat_map(|o| o.to_le_bytes())
+                    .collect(),
+                ..Default::default()
+            });
+            labels.diagnostics = Some(StepDiagnostics {
+                hidden_counts,
+                search_depths,
+                search_nodes,
+                chosen_value_gaps: chosen_gaps,
+                expl_random,
+            });
+        } else {
+            labels.labels = Some(TrainingLabels::default());
+            labels.diagnostics = Some(StepDiagnostics::default());
+        }
+
+        let mut pack = GameLabelPack::new("4x8", DataKind::DataNnue, "f".repeat(64));
+        pack.games = vec![labels];
+        pack.game_count = 1;
+        pack.steps_total = real_steps as u64;
+        (rec, pack)
     }
 
     fn episode() -> Episode {
@@ -501,13 +480,16 @@ mod tests {
             seed_base: None,
             pairs_parallel: None,
             pair_seed_refresh: None,
+            label_object_key: String::new(),
+            label_sha256: String::new(),
+            label_size: 0,
         }
     }
 
-    fn batch(rec: GameRecord) -> EpisodeBatch {
-        EpisodeBatch {
+    fn batch(rec: GameRecord) -> GameRecordBatch {
+        GameRecordBatch {
             variant: "4x8".into(),
-            kind: 1,
+            kind: DataKind::DataNnue as i32,
             records: vec![rec],
             ..Default::default()
         }
@@ -515,8 +497,8 @@ mod tests {
 
     #[test]
     fn full_conversion_snapshot_path() {
-        let (rec, _) = synth_record(8, true);
-        let g = build_game(&batch(rec), &episode(), 0).expect("完整转换应成功");
+        let (rec, pack) = synth(8, true);
+        let g = build_game(&batch(rec), Some(&pack), &episode(), 0).expect("完整转换应成功");
         assert_eq!(g.index, 0);
         assert_eq!(g.steps, 8);
         assert_eq!(g.moves.len(), 8);
@@ -536,10 +518,10 @@ mod tests {
 
         let s = &g.moves[0];
         assert_eq!(s.ply, 0);
-        assert_eq!(s.search_value, 0.25);
-        assert_eq!(s.player_value, -0.5);
-        assert_eq!(s.search_depth, 4);
-        assert_eq!(s.search_nodes, 1024);
+        assert_eq!(s.search_value, Some(0.25));
+        assert_eq!(s.player_value, Some(-0.5));
+        assert_eq!(s.search_depth, Some(4));
+        assert_eq!(s.search_nodes, Some(1024));
         assert_eq!(s.producer, 0);
         assert_eq!(s.labeler_action, Some(s.action));
         assert_eq!(s.policy_actions.as_deref(), Some(&[s.action][..]));
@@ -549,36 +531,62 @@ mod tests {
         assert!((g.labeler_agree - 1.0).abs() < 1e-9);
 
         assert_eq!(g.final_shown.len(), 32);
+        assert!(!g.labels_missing);
+
+        let json = serde_json::to_value(&g).unwrap();
+        assert!(json.get("labelsMissing").is_none());
     }
 
     #[test]
-    fn missing_diagnostics_default_to_zero() {
-        let (mut rec, _) = synth_record(3, false);
-        rec.labeler_actions = vec![0xFF; 12];
-        let g = build_game(&batch(rec), &episode(), 0).unwrap();
+    fn missing_label_pack_degrades_to_null() {
+        let (rec, _) = synth(3, false);
+        let g = build_game(&batch(rec), None, &episode(), 0).unwrap();
+        assert!(g.labels_missing);
         for m in &g.moves {
-            assert_eq!(m.search_value, 0.0);
-            assert_eq!(m.search_depth, 0);
+            assert_eq!(m.search_value, None);
+            assert_eq!(m.player_value, None);
+            assert_eq!(m.search_depth, None);
+            assert_eq!(m.search_nodes, None);
+            assert_eq!(m.hidden_count, None);
+            assert_eq!(m.chosen_value_gap, None);
+            assert_eq!(m.expl_random, None);
+            assert_eq!(m.labeler_fallback, None);
             assert_eq!(m.labeler_action, None);
             assert!(m.policy_actions.is_none());
             assert!(m.policy_values.is_none());
         }
         assert_eq!(g.labeler_total, 0);
         assert_eq!(g.labeler_agree, 0.0);
+        assert_eq!(g.expl_count, 0);
+
+        let json = serde_json::to_value(&g).unwrap();
+        assert_eq!(json["labelsMissing"], serde_json::json!(true));
+        assert!(json["moves"][0]["searchValue"].is_null());
+    }
+
+    #[test]
+    fn empty_label_groups_default_to_zero() {
+        let (rec, pack) = synth(3, false);
+        let g = build_game(&batch(rec), Some(&pack), &episode(), 0).unwrap();
+        assert!(!g.labels_missing, "局有 GameLabels 槽位即视为有标签包");
+        for m in &g.moves {
+
+            assert_eq!(m.search_value, Some(0.0), "TrainingLabels 空组 → 0 值");
+            assert_eq!(m.search_depth, Some(0), "StepDiagnostics 空组 → 0 值");
+        }
     }
 
     #[test]
     fn index_out_of_range_message() {
-        let (rec, _) = synth_record(2, false);
-        let err = build_game(&batch(rec), &episode(), 3).unwrap_err();
+        let (rec, pack) = synth(2, true);
+        let err = build_game(&batch(rec), Some(&pack), &episode(), 3).unwrap_err();
         assert!(err.contains("超出范围"), "{err}");
     }
-
 
     #[test]
     fn unseeded_report_replays_without_identity() {
         let mut env = DarkChessEnv::default();
-        let mut rec = GameRecord::default();
+        let mut rec = GameRecord::new("4x8", RecordSource::SourceCollector);
         let reveal_actions = env.config.reveal_actions_count;
         for _ in 0..6 {
             if env.check_game_over_conditions().0 {
@@ -589,20 +597,22 @@ mod tests {
                 .iter()
                 .find(|&&a| (a as usize) < reveal_actions)
                 .expect("开局必有翻子动作");
-            rec.snapshots.push(env.to_snapshot().encode());
-            rec.actions
+            let play = rec.play.get_or_insert_with(Default::default);
+            play.snapshots.push(env.to_snapshot().encode());
+            play.actions
                 .extend_from_slice(&(action as u16).to_le_bytes());
-            rec.players.push(if env.get_current_player() == Player::Red {
+            play.players.push(if env.get_current_player() == Player::Red {
                 1u8
             } else {
                 0xFF
             });
             env.step_with_reveal(action, None).unwrap();
         }
-        rec.steps = rec.players.len() as u32;
-        assert!(rec.steps >= 2, "合成翻子对局应至少 2 步");
+        let play = rec.play.as_mut().unwrap();
+        play.steps = play.players.len() as u32;
+        assert!(play.steps >= 2, "合成翻子对局应至少 2 步");
 
-        let g = build_game(&batch(rec), &episode(), 0).expect("无 seed 上报也应可回放");
+        let g = build_game(&batch(rec), None, &episode(), 0).expect("无 seed 上报也应可回放");
         assert_eq!(g.moves.len(), g.steps);
         let pre_revealed = env.config.initial_revealed_pieces;
         assert_eq!(
@@ -611,40 +621,41 @@ mod tests {
             "开局明子数应与 initial_revealed_pieces 一致"
         );
 
-        let flips: Vec<_> = g
-            .moves
-            .iter()
-            .filter(|m| m.kind == "flip")
-            .collect();
+        let flips: Vec<_> = g.moves.iter().filter(|m| m.kind == "flip").collect();
         assert!(!flips.is_empty(), "合成对局应含翻子步");
     }
 
     #[test]
     fn missing_snapshot_rejects_whole_game() {
-        let (mut rec, _) = synth_record(4, false);
-        rec.snapshots.truncate(2);
-        let err = build_game(&batch(rec), &episode(), 0).unwrap_err();
+        let (mut rec, pack) = synth(4, true);
+        rec.play.as_mut().unwrap().snapshots.truncate(2);
+        let err = build_game(&batch(rec), Some(&pack), &episode(), 0).unwrap_err();
         assert!(err.contains("步前快照"), "{err}");
     }
 
     #[test]
     fn unknown_variant_rejected() {
-        let (rec, _) = synth_record(2, false);
-        let mut b = batch(rec);
-        b.variant = "9x9".into();
-        let err = build_game(&b, &episode(), 0).unwrap_err();
+        let (mut rec, pack) = synth(2, true);
+        rec.identity.as_mut().unwrap().variant = "9x9".into();
+        let err = build_game(&batch(rec), Some(&pack), &episode(), 0).unwrap_err();
         assert!(err.contains("未知变体"), "{err}");
     }
 
     #[test]
-    fn proto_roundtrip_preserves_fields() {
-        let (rec, _) = synth_record(5, true);
+    fn proto_roundtrip_and_label_gz_preserves_fields() {
+        let (rec, pack) = synth(5, true);
         let b = batch(rec);
         let bytes = b.encode_to_vec();
-        let b2 = EpisodeBatch::decode(bytes.as_slice()).unwrap();
-        let g = build_game(&b2, &episode(), 0).unwrap();
+        let b2 = GameRecordBatch::decode(bytes.as_slice()).unwrap();
+
+
+        let gz = encode_label_pack_gz(&pack).unwrap();
+        let pack2 = bq_record::codec::decode_label_pack_gz(&gz).unwrap();
+        assert_eq!(pack2.pack_version, LABEL_PACK_VERSION);
+
+        let g = build_game(&b2, Some(&pack2), &episode(), 0).unwrap();
         assert_eq!(g.steps, 5);
-        assert_eq!(g.moves[2].search_value, 0.25);
+        assert_eq!(g.moves[2].search_value, Some(0.25));
     }
 
     impl ReplayGameView {

@@ -283,6 +283,9 @@ pub struct EpisodeView {
 
     #[serde(rename = "pairSeedRefresh")]
     pub pair_seed_refresh: Option<bool>,
+
+    #[serde(rename = "labelObjectKey")]
+    pub label_object_key: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -545,22 +548,23 @@ pub struct ReplayStepView {
     pub board_source: String,
     #[serde(rename = "producer")]
     pub producer: i64,
+
     #[serde(rename = "searchValue")]
-    pub search_value: f32,
+    pub search_value: Option<f32>,
     #[serde(rename = "playerValue")]
-    pub player_value: f32,
+    pub player_value: Option<f32>,
     #[serde(rename = "hiddenCount")]
-    pub hidden_count: i64,
+    pub hidden_count: Option<i64>,
     #[serde(rename = "searchDepth")]
-    pub search_depth: i64,
+    pub search_depth: Option<i64>,
     #[serde(rename = "searchNodes")]
-    pub search_nodes: i64,
+    pub search_nodes: Option<i64>,
     #[serde(rename = "chosenValueGap")]
-    pub chosen_value_gap: f32,
+    pub chosen_value_gap: Option<f32>,
     #[serde(rename = "explRandom")]
-    pub expl_random: bool,
+    pub expl_random: Option<bool>,
     #[serde(rename = "labelerFallback")]
-    pub labeler_fallback: bool,
+    pub labeler_fallback: Option<bool>,
     #[serde(rename = "labelerAction")]
     pub labeler_action: Option<u32>,
     #[serde(rename = "policyActions")]
@@ -619,4 +623,7 @@ pub struct ReplayGameView {
     pub labeler_total: usize,
     #[serde(rename = "explCount")]
     pub expl_count: usize,
+
+    #[serde(rename = "labelsMissing", skip_serializing_if = "std::ops::Not::not")]
+    pub labels_missing: bool,
 }

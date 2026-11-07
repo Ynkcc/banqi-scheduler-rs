@@ -1,5 +1,6 @@
+use bq_record::DataKind;
 use bqs_proto::{
-    CollectPlayerSpec, CollectionJobSpec, DataKind, JobKind, RatingJobSpec, SeedStrategy,
+    CollectPlayerSpec, CollectionJobSpec, JobKind, RatingJobSpec, SeedStrategy,
     SeedStrategyKind, SubmitJobRequest, TaskKind,
 };
 

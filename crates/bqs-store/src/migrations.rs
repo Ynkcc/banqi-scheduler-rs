@@ -84,6 +84,11 @@ static MIGRATIONS: &[Migration] = &[
         name: "match conclusion",
         up: migrate_match_conclusion,
     },
+    Migration {
+        version: 16,
+        name: "episode label pack columns",
+        up: migrate_episode_label_pack,
+    },
 ];
 
 fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, StoreError> {
@@ -478,6 +483,27 @@ fn migrate_match_conclusion(conn: &Connection) -> Result<(), StoreError> {
         "ALTER TABLE matches ADD COLUMN final_beta REAL",
     )?;
     Ok(())
+}
+
+fn migrate_episode_label_pack(conn: &Connection) -> Result<(), StoreError> {
+    add_column_if_missing(
+        conn,
+        "episodes",
+        "label_object_key",
+        "ALTER TABLE episodes ADD COLUMN label_object_key TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        conn,
+        "episodes",
+        "label_sha256",
+        "ALTER TABLE episodes ADD COLUMN label_sha256 TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        conn,
+        "episodes",
+        "label_size",
+        "ALTER TABLE episodes ADD COLUMN label_size INTEGER NOT NULL DEFAULT 0",
+    )
 }
 
 fn migrate_feature_packs(conn: &Connection) -> Result<(), StoreError> {

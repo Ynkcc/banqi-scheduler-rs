@@ -285,7 +285,7 @@ fn submit_collect(env: &Env, total: u64) -> String {
                     kind: "random".into(),
                     ..Default::default()
                 }),
-                data_kind: bqs_proto::DataKind::DataResnet as i32,
+                data_kind: bq_record::DataKind::DataResnet as i32,
                 total_games: total,
                 pairs_parallel: None,
                 pair_seed_refresh: None,

@@ -86,6 +86,10 @@ pub struct Episode {
     pub pairs_parallel: Option<bool>,
 
     pub pair_seed_refresh: Option<bool>,
+
+    pub label_object_key: String,
+    pub label_sha256: String,
+    pub label_size: i64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -121,6 +125,10 @@ pub struct EpisodeDraft {
     pub seed_base: Option<i64>,
     pub pairs_parallel: Option<bool>,
     pub pair_seed_refresh: Option<bool>,
+
+    pub label_object_key: String,
+    pub label_sha256: String,
+    pub label_size: i64,
 
     pub games: Vec<EpisodeGameRow>,
 }
