@@ -25,6 +25,8 @@ pub struct NetworkView {
     pub status: String,
     #[serde(rename = "notes")]
     pub notes: String,
+    #[serde(rename = "format")]
+    pub format: String,
 }
 
 #[derive(Debug, Serialize)]

@@ -30,6 +30,7 @@ pub fn to_network_view(n: &Network) -> NetworkView {
         is_best: n.is_best,
         status: n.status.clone(),
         notes: n.notes.clone().unwrap_or_default(),
+        format: n.format.clone(),
     }
 }
 
@@ -96,6 +97,47 @@ pub async fn networks(State(st): State<AppState>) -> ApiResult<Json<Vec<NetworkV
     read_endpoint(&st, |st| -> Result<Vec<NetworkView>, ApiError> {
         let items = st.server.ports.networks.list_networks()?;
         Ok(items.iter().map(to_network_view).collect())
+    })
+    .await
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkDownloadView {
+    pub url: String,
+    pub object_key: String,
+}
+
+pub async fn download_network(
+    State(st): State<AppState>,
+    Path(sha): Path<String>,
+) -> ApiResult<Json<NetworkDownloadView>> {
+    let sha = sha.trim().to_ascii_lowercase();
+    if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ApiError::bad_request(format!(
+            "invalid_sha=\"{sha}\" (want 64 hex chars)"
+        )));
+    }
+    read_endpoint(&st, move |st| -> Result<NetworkDownloadView, ApiError> {
+        let format = st
+            .server
+            .ports
+            .networks
+            .get_network(&sha)?
+            .map(|n| n.format)
+            .unwrap_or_default();
+        if !bqs_core::consts::WEIGHT_FORMATS.contains(&format.as_str()) {
+            return Err(ApiError::not_found(format!(
+                "network \"{sha}\" 未登记或未记录可下载的权重格式（format={format:?}）"
+            )));
+        }
+        let object_key = format!("networks/{sha}.{format}");
+        let url = st
+            .server
+            .signer
+            .presign_get(&object_key, bqs_core::consts::PRESIGN_TTL.as_secs() as i64)?;
+        tracing::info!("[webui] sign network download key={object_key}");
+        Ok(NetworkDownloadView { url, object_key })
     })
     .await
 }

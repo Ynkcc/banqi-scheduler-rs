@@ -1,7 +1,7 @@
 use bq_record::DataKind;
 use bqs_proto::{
-    CollectPlayerSpec, CollectionJobSpec, JobKind, RatingJobSpec, SeedStrategy,
-    SeedStrategyKind, SubmitJobRequest, TaskKind,
+    CollectPlayerSpec, CollectionJobSpec, JobKind, RatingJobSpec, SeedStrategy, SeedStrategyKind,
+    SubmitJobRequest, TaskKind,
 };
 
 use super::*;
@@ -128,6 +128,52 @@ fn submit_rejects_invalid_variant_and_totals() {
         .unwrap();
     assert!(!ok);
     assert!(msg.contains("invalid_player_kind"), "{msg}");
+}
+
+#[test]
+fn submit_resolves_short_sha_prefix() {
+    let e = env("");
+    let full_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let full_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    let full_c = format!("ab{}", "c".repeat(62));
+    e.f.networks.seed_network(full_a, None, "onnx");
+    e.f.networks.seed_network(full_b, None, "onnx");
+    e.f.networks.seed_network(&full_c, None, "onnx");
+
+    let (ok, msg, id) = e
+        .jobs
+        .submit(&collect_req("4x8", 16, "aaaa", "mcts_resnet", "random"))
+        .unwrap();
+    assert!(ok, "{msg}");
+    let row = e.jobs.get(&id).unwrap().unwrap();
+    let JobSpecJson::Collect(spec) = JobSpecJson::parse(&row.spec_json).unwrap() else {
+        panic!("collect spec json");
+    };
+    assert_eq!(spec.player_a.network_sha, full_a);
+
+    let (ok, msg, id) = e.jobs.submit(&rating_req(20, "bbbb", full_a)).unwrap();
+    assert!(ok, "{msg}");
+    let row = e.jobs.get(&id).unwrap().unwrap();
+    let JobSpecJson::Rating(spec) = JobSpecJson::parse(&row.spec_json).unwrap() else {
+        panic!("rating spec json");
+    };
+    assert_eq!(spec.candidate_sha, full_b);
+    assert_eq!(spec.side_a.network_sha, full_b);
+
+    let (ok, msg, _) = e
+        .jobs
+        .submit(&collect_req("4x8", 16, "a", "mcts_resnet", "random"))
+        .unwrap();
+    assert!(!ok);
+    assert!(msg.contains("歧义"), "{msg}");
+
+    let (ok, msg, _) = e
+        .jobs
+        .submit(&collect_req("4x8", 16, "ffff", "mcts_resnet", "random"))
+        .unwrap();
+    assert!(!ok);
+    assert!(msg.contains("network_not_registered"), "{msg}");
 }
 
 #[test]

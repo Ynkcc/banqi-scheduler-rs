@@ -52,8 +52,8 @@ impl JobManager {
                         String::new(),
                     ));
                 };
-                match self.validate_collect(c) {
-                    Ok(()) => JobSpecJson::Collect(CollectSpecJson::from_proto(c.clone())),
+                match self.resolve_collect(c) {
+                    Ok(c) => JobSpecJson::Collect(CollectSpecJson::from_proto(c)),
                     Err(m) => return Ok((false, m, String::new())),
                 }
             }
@@ -73,11 +73,11 @@ impl JobManager {
                     ));
                 };
 
-                let (side_a, side_b) = match self.validate_and_resolve_rating(r) {
+                let (r, side_a, side_b) = match self.validate_and_resolve_rating(r) {
                     Ok(v) => v,
                     Err(m) => return Ok((false, m, String::new())),
                 };
-                let mut spec = RatingSpecJson::from_proto(r.clone());
+                let mut spec = RatingSpecJson::from_proto(r);
                 spec.side_a = side_a.clone();
                 spec.side_b = side_b.clone();
 

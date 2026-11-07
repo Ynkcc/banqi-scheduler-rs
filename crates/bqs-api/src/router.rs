@@ -20,6 +20,10 @@ pub fn router(state: AppState) -> Router {
             get(handlers_status::networks).post(handlers_status::register_network),
         )
         .route("/api/networks/upload", post(handlers_status::sign_upload))
+        .route(
+            "/api/networks/{sha}/download",
+            get(handlers_status::download_network),
+        )
         .route("/api/matches", get(handlers_status::matches))
         .route(
             "/api/matches/{id}/pairs",
