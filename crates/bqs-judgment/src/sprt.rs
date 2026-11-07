@@ -78,7 +78,8 @@ pub fn llr(p: Hexanomial, elo0: f64, elo1: f64) -> Result<f64, LlrError> {
     let s1 = score_from_elo(elo1);
 
     let variance = if !(variance > 0.0) { 0.1 } else { variance };
-    let n = p.total() as f64;
+
+    let n = 2.0 * p.total() as f64;
     Ok(n * (s - (s0 + s1) / 2.0) * (s1 - s0) / variance)
 }
 
