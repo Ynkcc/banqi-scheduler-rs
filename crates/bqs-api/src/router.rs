@@ -24,6 +24,10 @@ pub fn router(state: AppState) -> Router {
             "/api/networks/{sha}/download",
             get(handlers_status::download_network),
         )
+        .route(
+            "/api/networks/{sha}/download/file",
+            get(handlers_status::download_network_file),
+        )
         .route("/api/matches", get(handlers_status::matches))
         .route(
             "/api/matches/{id}/pairs",

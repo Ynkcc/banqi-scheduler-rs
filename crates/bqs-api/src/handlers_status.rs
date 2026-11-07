@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use axum::extract::{Path, State};
+use axum::response::IntoResponse;
 use axum::Json;
 
 use bqs_core::dispatch::TaskStateStats;
@@ -140,6 +141,57 @@ pub async fn download_network(
         Ok(NetworkDownloadView { url, object_key })
     })
     .await
+}
+
+pub async fn download_network_file(
+    State(st): State<AppState>,
+    Path(sha): Path<String>,
+) -> Result<axum::response::Response, ApiError> {
+    let sha = sha.trim().to_ascii_lowercase();
+    if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ApiError::bad_request(format!(
+            "invalid_sha=\"{sha}\" (want 64 hex chars)"
+        )));
+    }
+    let fetch = tokio::task::spawn_blocking(move || -> Result<(String, Vec<u8>), ApiError> {
+        let format = st
+            .server
+            .ports
+            .networks
+            .get_network(&sha)?
+            .map(|n| n.format)
+            .unwrap_or_default();
+        if !bqs_core::consts::WEIGHT_FORMATS.contains(&format.as_str()) {
+            return Err(ApiError::not_found(format!(
+                "network \"{sha}\" 未登记或未记录可下载的权重格式（format={format:?}）"
+            )));
+        }
+        let object_key = format!("networks/{sha}.{format}");
+        let data = bqs_storage::fetch::fetch_object(st.server.signer.as_ref(), &object_key, 600)
+            .map_err(|e| ApiError::bad_gateway(format!("下载 {object_key} 失败: {e}")))?;
+        Ok((format!("{sha}.{format}"), data))
+    })
+    .await
+    .map_err(|e| ApiError::internal(format!("join: {e}")))??;
+    let (filename, data) = fetch;
+    tracing::info!(
+        "[webui] network download proxied file={filename} bytes={}",
+        data.len()
+    );
+    Ok((
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/octet-stream".to_string(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        data,
+    )
+        .into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]

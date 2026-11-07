@@ -1,7 +1,7 @@
 use std::io::Read;
 
-use bqs_core::CoreError;
 use bqs_core::ports::ObjectSigner;
+use bqs_core::CoreError;
 
 pub const MAX_OBJECT_SIZE: usize = 256 << 20;
 
@@ -13,6 +13,50 @@ pub enum FetchError {
     Download { key: String, detail: String },
     #[error("gunzip {key}: {detail}")]
     Gunzip { key: String, detail: String },
+}
+
+pub fn fetch_object(
+    signer: &dyn ObjectSigner,
+    key: &str,
+    timeout_secs: u64,
+) -> Result<Vec<u8>, FetchError> {
+    let url = signer
+        .presign_get(key, 60)
+        .map_err(|source| FetchError::Presign {
+            key: key.to_string(),
+            source,
+        })?;
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .build();
+    let resp = agent.get(&url).call().map_err(|e| FetchError::Download {
+        key: key.to_string(),
+        detail: e.to_string(),
+    })?;
+    let status = resp.status();
+    if status >= 300 {
+        return Err(FetchError::Download {
+            key: key.to_string(),
+            detail: format!("HTTP {status}"),
+        });
+    }
+
+    let mut raw = Vec::new();
+    resp.into_reader()
+        .take((MAX_OBJECT_SIZE + 1) as u64)
+        .read_to_end(&mut raw)
+        .map_err(|e| FetchError::Download {
+            key: key.to_string(),
+            detail: e.to_string(),
+        })?;
+    if raw.len() > MAX_OBJECT_SIZE {
+        return Err(FetchError::Download {
+            key: key.to_string(),
+            detail: format!("对象超过 {} MB 上限", MAX_OBJECT_SIZE >> 20),
+        });
+    }
+    Ok(raw)
 }
 
 pub fn fetch_gzip_object(signer: &dyn ObjectSigner, key: &str) -> Result<Vec<u8>, FetchError> {
