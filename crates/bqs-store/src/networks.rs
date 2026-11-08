@@ -7,17 +7,16 @@ use crate::{Store, StoreError};
 use rusqlite::OptionalExtension;
 
 const NETWORK_COLUMNS: &str =
-    "sha, COALESCE(parent_sha,''), created_at, is_best, status, COALESCE(notes,''), format";
+    "sha, COALESCE(parent_sha,''), created_at, status, COALESCE(notes,''), format";
 
 fn scan_network_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Network> {
     Ok(Network {
         sha: row.get(0)?,
         parent_sha: row.get(1)?,
         created_at: row.get(2)?,
-        is_best: row.get::<_, i64>(3)? != 0,
-        status: row.get(4)?,
-        notes: row.get(5)?,
-        format: row.get(6)?,
+        status: row.get(3)?,
+        notes: row.get(4)?,
+        format: row.get(5)?,
     })
 }
 

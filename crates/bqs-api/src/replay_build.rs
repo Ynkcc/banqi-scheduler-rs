@@ -311,6 +311,7 @@ pub fn build_game(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bq_env::seed::SeedableEnv;
     use bq_env::SnapshotEnv;
     use bq_env::DarkChessEnv;
     use bq_env::GameEnv;
@@ -326,14 +327,10 @@ mod tests {
     fn synth(steps: usize, with_diags: bool) -> (GameRecord, GameLabelPack) {
         let mut env = DarkChessEnv::default();
 
-        let mut initial_layout: Vec<u8> = Vec::with_capacity(32);
-        for player in [0u8, 1u8] {
-            initial_layout.extend(std::iter::repeat_n(player << 3, 5));
-            for ty in 1..=6 {
-                let count = if ty == 6 { 1 } else { 2 };
-                initial_layout.extend(std::iter::repeat_n(player << 3 | ty, count));
-            }
-        }
+
+        env.set_seed(42);
+        let initial_layout = env.initial_layout_bytes().expect("设种子后应有初始布局");
+
         let mut actions = Vec::new();
         let mut players = Vec::new();
         let mut snapshots = Vec::new();

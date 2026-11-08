@@ -89,6 +89,11 @@ static MIGRATIONS: &[Migration] = &[
         name: "episode label pack columns",
         up: migrate_episode_label_pack,
     },
+    Migration {
+        version: 17,
+        name: "drop network best",
+        up: migrate_drop_network_best,
+    },
 ];
 
 fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, StoreError> {
@@ -128,7 +133,6 @@ fn migrate_base_tables(conn: &Connection) -> Result<(), StoreError> {
 			sha TEXT PRIMARY KEY,
 			parent_sha TEXT,
 			created_at INTEGER NOT NULL,
-			is_best INTEGER NOT NULL DEFAULT 0,
 			status TEXT NOT NULL DEFAULT 'candidate',
 			notes TEXT,
 			format TEXT NOT NULL DEFAULT 'onnx'
@@ -504,6 +508,24 @@ fn migrate_episode_label_pack(conn: &Connection) -> Result<(), StoreError> {
         "label_size",
         "ALTER TABLE episodes ADD COLUMN label_size INTEGER NOT NULL DEFAULT 0",
     )
+}
+
+fn migrate_drop_network_best(conn: &Connection) -> Result<(), StoreError> {
+    conn.execute_batch("UPDATE networks SET status='archived' WHERE status='best'")
+        .map_err(|e| StoreError::Migration {
+            version: 17,
+            name: "drop network best",
+            message: format!("normalize legacy best status: {e}"),
+        })?;
+    if !column_exists(conn, "networks", "is_best")? {
+        return Ok(());
+    }
+    conn.execute_batch("ALTER TABLE networks DROP COLUMN is_best")
+        .map_err(|e| StoreError::Migration {
+            version: 17,
+            name: "drop network best",
+            message: format!("drop networks.is_best: {e}"),
+        })
 }
 
 fn migrate_feature_packs(conn: &Connection) -> Result<(), StoreError> {

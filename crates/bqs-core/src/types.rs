@@ -2,7 +2,6 @@ use bqs_judgment::Hexanomial;
 
 pub mod network_status {
     pub const CANDIDATE: &str = "candidate";
-    pub const BEST: &str = "best";
     pub const REJECTED: &str = "rejected";
     pub const ARCHIVED: &str = "archived";
 }
@@ -19,7 +18,6 @@ pub struct Network {
     pub sha: String,
     pub parent_sha: Option<String>,
     pub created_at: i64,
-    pub is_best: bool,
 
     pub status: String,
     pub notes: Option<String>,

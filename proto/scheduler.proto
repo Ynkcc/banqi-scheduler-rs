@@ -192,8 +192,7 @@ message MatchResultAck {
   bool accepted = 1;
   string message = 2;
   bool match_concluded = 3;
-  bool promoted = 4;
-  string best_sha = 5;
+  reserved 4, 5; // 旧 promoted / best_sha（best 语义已移除）
 }
 
 message HeartbeatRequest {
@@ -212,7 +211,7 @@ message HeartbeatReply {
   reserved 2;
   float temperature = 3;
   bool playout_cap_random = 4;
-  string best_network = 5;
+  reserved 5; // 旧 best_network（best 语义已移除）
   repeated string cancel_task_ids = 6;
 }
 

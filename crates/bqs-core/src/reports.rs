@@ -342,8 +342,6 @@ mod tests {
             .route(&rating_result("w1", "rt1", [0, 0, 0, 0, 0, 100], 200))
             .unwrap();
         assert!(ack.accepted && ack.match_concluded);
-        assert!(!ack.promoted, "rating job 永不晋级");
-        assert!(ack.best_sha.is_empty(), "best 语义已移除");
 
         assert_eq!(e.jobs.get(&job_id).unwrap().unwrap().state, "completed");
         assert_eq!(
@@ -371,7 +369,7 @@ mod tests {
             .router
             .route(&rating_result("w1", "rt1", [100, 0, 0, 0, 0, 0], 200))
             .unwrap();
-        assert!(ack.accepted && ack.match_concluded && !ack.promoted);
+        assert!(ack.accepted && ack.match_concluded);
         assert_eq!(e.jobs.get(&job_id).unwrap().unwrap().state, "completed");
     }
 
@@ -393,7 +391,7 @@ mod tests {
             .router
             .route(&rating_result("w1", "rt2", [0, 0, 2, 0, 0, 0], 4))
             .unwrap();
-        assert!(ack.accepted && ack.match_concluded && !ack.promoted);
+        assert!(ack.accepted && ack.match_concluded);
         assert_eq!(e.jobs.get(&job_id).unwrap().unwrap().state, "completed");
         assert_eq!(
             e.f.matches.get_match(match_id).unwrap().unwrap().num_games,

@@ -72,13 +72,13 @@ fn network_view() {
         sha: "abc".into(),
         parent_sha: String::new(),
         created_at: 1,
-        is_best: false,
         status: "candidate".into(),
         notes: String::new(),
+        format: "onnx".into(),
     };
     assert_keys(
         &keys(&v),
-        &["sha", "parentSha", "createdAt", "isBest", "status", "notes"],
+        &["sha", "parentSha", "createdAt", "status", "notes", "format"],
     );
 }
 

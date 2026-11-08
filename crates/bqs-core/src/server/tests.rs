@@ -633,7 +633,6 @@ fn heartbeat_touches_worker() {
         )
         .unwrap();
     assert!(!reply.pause_self_play, "暂停语义已移除，恒为 false");
-    assert!(reply.best_network.is_empty(), "best 语义已移除");
     let w = f.workers.get("w1").unwrap();
     assert_eq!(w.threads, 8);
     assert_eq!(w.completed_games, 42);

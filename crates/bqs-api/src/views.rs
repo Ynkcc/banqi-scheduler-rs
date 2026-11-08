@@ -19,8 +19,6 @@ pub struct NetworkView {
     pub parent_sha: String,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
-    #[serde(rename = "isBest")]
-    pub is_best: bool,
     #[serde(rename = "status")]
     pub status: String,
     #[serde(rename = "notes")]

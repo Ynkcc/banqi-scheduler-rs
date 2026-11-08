@@ -86,7 +86,7 @@ mod tests {
         };
         assert_eq!(
             versions,
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
         );
 
         for (table, col) in [
@@ -133,14 +133,22 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 1);
-        let best: i64 = conn
+        let best_col: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM networks WHERE sha='old-best' AND is_best=1",
+                "SELECT COUNT(*) FROM pragma_table_info('networks') WHERE name='is_best'",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(best, 1);
+        assert_eq!(best_col, 0, "v17 后 networks.is_best 列应已移除");
+        let old_best: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM networks WHERE sha='old-best'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(old_best, 1, "v17 后旧网络行数据应保留");
         let wl: i64 = conn
             .query_row(
                 "SELECT pair_wl FROM matches WHERE candidate='old-best'",

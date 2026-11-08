@@ -28,7 +28,6 @@ pub fn to_network_view(n: &Network) -> NetworkView {
         sha: n.sha.clone(),
         parent_sha: n.parent_sha.clone().unwrap_or_default(),
         created_at: n.created_at,
-        is_best: n.is_best,
         status: n.status.clone(),
         notes: n.notes.clone().unwrap_or_default(),
         format: n.format.clone(),
