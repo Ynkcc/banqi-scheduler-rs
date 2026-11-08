@@ -21,10 +21,6 @@ pub struct SearchSpecJson {
     pub expectimax_node_budget: u64,
     #[serde(alias = "expectimax_max_depth")]
     pub expectimax_max_depth: u32,
-    #[serde(alias = "labeler_mode")]
-    pub labeler_mode: String,
-    #[serde(alias = "labeler_budget_mult")]
-    pub labeler_budget_mult: u32,
     #[serde(alias = "expl_enabled")]
     pub expl_enabled: bool,
     #[serde(alias = "expl_topk")]
@@ -69,8 +65,6 @@ impl SearchSpecJson {
                 playout_cap_random: s.playout_cap_random,
                 expectimax_node_budget: s.expectimax_node_budget,
                 expectimax_max_depth: s.expectimax_max_depth,
-                labeler_mode: s.labeler_mode,
-                labeler_budget_mult: s.labeler_budget_mult,
                 expl_enabled: s.expl_enabled,
                 expl_topk: s.expl_topk,
                 expl_temp_start: s.expl_temp_start,
@@ -100,8 +94,6 @@ impl SearchSpecJson {
             && !self.playout_cap_random
             && self.expectimax_node_budget == 0
             && self.expectimax_max_depth == 0
-            && self.labeler_mode.is_empty()
-            && self.labeler_budget_mult == 0
             && !self.expl_enabled
             && self.expl_topk == 0
             && self.expl_temp_start == 0.0
@@ -133,8 +125,6 @@ impl SearchSpecJson {
             playout_cap_random: s.playout_cap_random,
             expectimax_node_budget: s.expectimax_node_budget,
             expectimax_max_depth: s.expectimax_max_depth,
-            labeler_mode: s.labeler_mode.clone(),
-            labeler_budget_mult: s.labeler_budget_mult,
             expl_enabled: s.expl_enabled,
             expl_topk: s.expl_topk,
             expl_temp_start: s.expl_temp_start,

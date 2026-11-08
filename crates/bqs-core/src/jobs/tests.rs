@@ -894,7 +894,6 @@ fn rating_sides_submit_normalizes_and_freezes() {
                 network_sha: "best".into(),
                 search: Some(bqs_proto::CollectSearchParams {
                     expectimax_node_budget: 4000,
-                    labeler_mode: "best".into(),
                     ..Default::default()
                 }),
             },
@@ -925,7 +924,6 @@ fn rating_sides_submit_normalizes_and_freezes() {
         spec.side_a.search.as_ref().unwrap().expectimax_node_budget,
         4000
     );
-    assert_eq!(spec.side_a.search.as_ref().unwrap().labeler_mode, "best");
     assert_eq!(
         spec.side_b.search.as_ref().unwrap().expectimax_node_budget,
         1000

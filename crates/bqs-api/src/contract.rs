@@ -376,10 +376,6 @@ fn replay_views() {
         search_nodes: Some(1024),
         chosen_value_gap: Some(0.0),
         expl_random: Some(false),
-        labeler_fallback: Some(false),
-        labeler_action: Some(3),
-        policy_actions: Some(vec![3]),
-        policy_values: Some(vec![1.0]),
     };
     let step_json = serde_json::to_value(&step).unwrap();
     for k in [
@@ -407,10 +403,6 @@ fn replay_views() {
         "searchNodes",
         "chosenValueGap",
         "explRandom",
-        "labelerFallback",
-        "labelerAction",
-        "policyActions",
-        "policyValues",
     ] {
         assert!(step_json.get(k).is_some(), "ReplayStep 缺字段 {k}");
     }
@@ -419,9 +411,6 @@ fn replay_views() {
         is_chance: false,
         revealed: String::new(),
         captured: String::new(),
-        policy_actions: None,
-        policy_values: None,
-        labeler_action: None,
         ..step.clone()
     };
     quiet.is_chance = false;
@@ -435,9 +424,6 @@ fn replay_views() {
     assert!(quiet_json.get("revealed").is_none(), "revealed 空 应省略");
     assert!(quiet_json.get("captured").is_none(), "captured 空 应省略");
 
-    quiet.policy_actions = None;
-    quiet.policy_values = None;
-    quiet.labeler_action = None;
     quiet.search_value = None;
     quiet.player_value = None;
     quiet.hidden_count = None;
@@ -445,11 +431,7 @@ fn replay_views() {
     quiet.search_nodes = None;
     quiet.chosen_value_gap = None;
     quiet.expl_random = None;
-    quiet.labeler_fallback = None;
     let null_json = serde_json::to_value(&quiet).unwrap();
-    assert!(null_json["policyActions"].is_null());
-    assert!(null_json["policyValues"].is_null());
-    assert!(null_json["labelerAction"].is_null());
     assert!(null_json["searchValue"].is_null(), "无标签包时诊断字段应为 null");
     assert!(null_json["playerValue"].is_null());
     assert!(null_json["hiddenCount"].is_null());
@@ -457,7 +439,6 @@ fn replay_views() {
     assert!(null_json["searchNodes"].is_null());
     assert!(null_json["chosenValueGap"].is_null());
     assert!(null_json["explRandom"].is_null());
-    assert!(null_json["labelerFallback"].is_null());
 
     let game = ReplayGameView {
         index: 0,
@@ -480,8 +461,6 @@ fn replay_views() {
         final_shown: vec![true],
         final_bag: bag,
         moves: vec![step],
-        labeler_agree: 1.0,
-        labeler_total: 8,
         expl_count: 0,
         labels_missing: false,
     };
@@ -508,8 +487,6 @@ fn replay_views() {
             "finalShown",
             "finalBag",
             "moves",
-            "labelerAgree",
-            "labelerTotal",
             "explCount",
         ],
     );

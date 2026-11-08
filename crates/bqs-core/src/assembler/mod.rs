@@ -49,8 +49,6 @@ impl TaskAssembler {
             playout_cap_random: d.playout_cap_random,
             expectimax_node_budget: d.expectimax_node_budget,
             expectimax_max_depth: d.expectimax_max_depth,
-            labeler_mode: d.labeler_mode.clone(),
-            labeler_budget_mult: d.labeler_budget_mult,
             expl_enabled: d.expl_enabled,
             expl_topk: d.expl_topk,
             expl_temp_start: d.expl_temp_start,

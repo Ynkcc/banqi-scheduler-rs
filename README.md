@@ -1,7 +1,7 @@
 # banqi-scheduler-rs
 
 分布式自对弈训练的**中心调度器**（Go 版 `banqi-scheduler` 的 Rust 重构版）：任务分发
-（selfplay / rating / eval / reanalysis / derive）、网络登记与晋级、episode 元数据登记 +
+（selfplay / rating / eval / derive）、网络登记与晋级、episode 元数据登记 +
 对象存储预签名直传、六桶 GSPRT 判停、绝对强度评估与停机判据、生成-消费平衡。
 
 调度器**不执行任何棋类计算**，只做「编排 + 元数据 + 签名」：生产端是 Rust 的
@@ -100,8 +100,7 @@ ListJobs / ControlJob`、`JobStatus` 规格回显、`HeartbeatReply.cancel_task_
 
 - **训练闭环全部走 job**：selfplay 由 `[selfplay]` 配置在启动时引导一个持续型
   job（total_games=0）；eval 由 evalcoord 在评估轮开始时为每个对手自动建 job
-  （total 取 `[eval] games`），也可手动 `SubmitJob`。rating / reanalysis /
-  derive 保持既有通道。
+  （total 取 `[eval] games`），也可手动 `SubmitJob`。rating / derive 保持既有通道。
 - **完成口径不含在飞**：completed_games 只按已收到的真实上报聚合（collect /
   selfplay 按 `ReportEpisode.game_count`，eval 按 `ReportMatchResult.games`），
   task→job 映射落库（`job_tasks` 表），先落库后更新计数——重启后迟到上报仍聚合。
@@ -131,7 +130,7 @@ ListJobs / ControlJob`、`JobStatus` 规格回显、`HeartbeatReply.cancel_task_
 | 对象 | 对象键 | 内容 | 主要消费方 |
 |---|---|---|---|
 | 记录批 | `episodes/{sha}/{id}.epb.gz` | `bqrecord.GameRecordBatch` proto（**schema_version=3**，原 EpisodeBatch 更名迁入 game_record.proto），`GameRecord` 只含对局本身（identity / play / outcome / provenance / timing 五个分组嵌套） | 回放页（棋盘/棋谱/终局）、import 链路 |
-| 标签包 | `episodes/{sha}/{id}.lab.v1.lpb.gz` | `GameLabelPack` proto（pack_version=1）：训练标签 + 搜索诊断 + 局级元数据（players/actions/outcome 有意冗余，训练器脱离记录批自足） | 训练主链路、回放页（教师策略/诊断） |
+| 标签包 | `episodes/{sha}/{id}.lab.v1.lpb.gz` | `GameLabelPack` proto（pack_version=1）：训练标签 + 搜索诊断 + 局级元数据（players/actions/outcome 有意冗余，训练器脱离记录批自足） | 训练主链路、回放页（诊断） |
 | 特征包 | `episodes/{sha}/{id}.pack.v{n}.fpb.gz` | `FeaturePack` proto（不变），`record_sha256` 绑定记录批 gz 体 | NNUE / ResNet 训练 |
 
 上报与消费契约：
@@ -143,7 +142,7 @@ ListJobs / ControlJob`、`JobStatus` 规格回显、`HeartbeatReply.cancel_task_
   label_size`（可能为空：import 来源的 episode 或标签包未成功上传）。
 - **训练器只消费标签包 + 特征包**，不再下载记录批（存量旧 `.epb.gz` 不兼容，按新契约重建）。
 - **回放页双对象数据源**（`GET /api/episodes/{id}/replay[/{index}]`）：棋盘/棋谱/终局来自
-  记录批（`bq_record::replay` 统一派生 god 视角与 FEN），教师策略/诊断来自标签包；标签包
+  记录批（`bq_record::replay` 统一派生 god 视角与 FEN），搜索诊断来自标签包；标签包
   缺失时诊断字段置 null 并在视图标记 `labelsMissing: true`（不阻断棋盘回放）。
 
 ## 跨端耦合备忘（改动必须三端同步）

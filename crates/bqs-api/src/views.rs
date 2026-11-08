@@ -563,14 +563,6 @@ pub struct ReplayStepView {
     pub chosen_value_gap: Option<f32>,
     #[serde(rename = "explRandom")]
     pub expl_random: Option<bool>,
-    #[serde(rename = "labelerFallback")]
-    pub labeler_fallback: Option<bool>,
-    #[serde(rename = "labelerAction")]
-    pub labeler_action: Option<u32>,
-    #[serde(rename = "policyActions")]
-    pub policy_actions: Option<Vec<u32>>,
-    #[serde(rename = "policyValues")]
-    pub policy_values: Option<Vec<f32>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -617,10 +609,6 @@ pub struct ReplayGameView {
     pub final_bag: HiddenBagView,
     #[serde(rename = "moves")]
     pub moves: Vec<ReplayStepView>,
-    #[serde(rename = "labelerAgree")]
-    pub labeler_agree: f64,
-    #[serde(rename = "labelerTotal")]
-    pub labeler_total: usize,
     #[serde(rename = "explCount")]
     pub expl_count: usize,
 

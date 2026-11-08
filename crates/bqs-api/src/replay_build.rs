@@ -9,42 +9,6 @@ use bqs_core::types::Episode;
 use crate::views::{HiddenBagView, ReplayGameView, ReplayStepView};
 
 
-fn action_to_coords(rows: usize, cols: usize) -> Vec<(usize, usize)> {
-    let n = rows * cols;
-    let mut out = Vec::with_capacity(n * 6);
-    for sq in 0..n {
-        out.push((sq, sq));
-    }
-    for r1 in 0..rows {
-        for c1 in 0..cols {
-            let from = r1 * cols + c1;
-            for (dr, dc) in [(-1i64, 0i64), (1, 0), (0, -1), (0, 1)] {
-                let (r2, c2) = (r1 as i64 + dr, c1 as i64 + dc);
-                if r2 >= 0 && r2 < rows as i64 && c2 >= 0 && c2 < cols as i64 {
-                    out.push((from, (r2 as usize) * cols + c2 as usize));
-                }
-            }
-        }
-    }
-
-    for r1 in 0..rows {
-        for c1 in 0..cols {
-            let from = r1 * cols + c1;
-            for c2 in 0..cols {
-                if c1.abs_diff(c2) > 1 {
-                    out.push((from, r1 * cols + c2));
-                }
-            }
-            for r2 in 0..rows {
-                if r1.abs_diff(r2) > 1 {
-                    out.push((from, r2 * cols + c1));
-                }
-            }
-        }
-    }
-    out
-}
-
 fn f32_at(b: &[u8], i: usize) -> f32 {
     let s = i * 4;
     if b.len() < s + 4 {
@@ -117,7 +81,7 @@ pub fn build_game(
         .unwrap_or_default()
         .parse()
         .map_err(|e| format!("replay: 未知变体: {e}"))?;
-    let coords = action_to_coords(variant.config().rows, variant.config().cols);
+    let _ = variant;
 
 
     let input = bq_record::replay::to_replay_input(rec)?;
@@ -147,16 +111,6 @@ pub fn build_game(
     let train = label.and_then(|g| g.labels.as_ref());
     let diag = label.and_then(|g| g.diagnostics.as_ref());
 
-    let policy_offsets: Vec<u32> = train
-        .map(|t| {
-            (0..=steps + 1)
-                .take_while(|&i| i * 4 + 4 <= t.labeler_policy_offsets.len())
-                .map(|i| u32_at(&t.labeler_policy_offsets, i))
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut labeler_total = 0usize;
-    let mut labeler_agree = 0f64;
     let mut expl_count = 0usize;
 
     let mut step_views = Vec::with_capacity(steps);
@@ -185,49 +139,11 @@ pub fn build_game(
             .unwrap_or(0xFF);
         let producer: i64 = if p == 0xFF { -1 } else { p as i64 };
 
-        let mut labeler_action = None;
-        if let Some(t) = train {
-            let la = u32_at(&t.labeler_actions, ply);
-            if la != 0xFFFF_FFFF {
-                labeler_action = Some(la);
-                labeler_total += 1;
-                if let (Some((lf, lt)), Some((af, at))) =
-                    (coords.get(la as usize), coords.get(action as usize))
-                    && (lf, lt) == (af, at)
-                {
-                    labeler_agree += 1.0;
-                }
-            }
-        }
         if let Some(d) = diag
             && u8_at(&d.expl_random, ply) == 1
         {
             expl_count += 1;
         }
-
-        let (policy_actions, policy_values) = train
-            .map(|t| {
-                let (lo, hi) = (
-                    policy_offsets.get(ply).copied().unwrap_or(0),
-                    policy_offsets.get(ply + 1).copied().unwrap_or(0),
-                );
-                if hi > lo && (hi as usize) * 4 <= t.labeler_policy_actions.len() {
-                    let pa: Vec<u32> = (lo as usize..hi as usize)
-                        .map(|k| u32_at(&t.labeler_policy_actions, k))
-                        .collect();
-                    let pv: Vec<f32> = if (hi as usize) * 4 <= t.labeler_policy_values.len() {
-                        (lo as usize..hi as usize)
-                            .map(|k| f32_at(&t.labeler_policy_values, k))
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
-                    (Some(pa), Some(pv))
-                } else {
-                    (None, None)
-                }
-            })
-            .unwrap_or((None, None));
 
         step_views.push(ReplayStepView {
             ply,
@@ -257,14 +173,7 @@ pub fn build_game(
             search_nodes: diag.map(|d| u32_at(&d.search_nodes, ply) as i64),
             chosen_value_gap: diag.map(|d| f32_at(&d.chosen_value_gaps, ply)),
             expl_random: diag.map(|d| u8_at(&d.expl_random, ply) == 1),
-            labeler_fallback: train.map(|t| u8_at(&t.labeler_fallbacks, ply) == 1),
-            labeler_action,
-            policy_actions,
-            policy_values,
         });
-    }
-    if labeler_total > 0 {
-        labeler_agree /= labeler_total as f64;
     }
 
     let red_is_a = crate::handlers_replay::red_is_a_of(rec);
@@ -301,8 +210,6 @@ pub fn build_game(
             black: game.final_hidden_bag.black.map(i64::from),
         },
         moves: step_views,
-        labeler_agree,
-        labeler_total,
         expl_count,
         labels_missing,
     })
@@ -342,13 +249,8 @@ mod tests {
         let mut search_nodes = Vec::new();
         let mut chosen_gaps = Vec::new();
         let mut expl_random = Vec::new();
-        let mut labeler_actions = Vec::new();
-        let mut labeler_fallbacks = Vec::new();
-        let mut pol_actions = Vec::new();
-        let mut pol_values = Vec::new();
-        let mut pol_offsets: Vec<u32> = vec![0];
 
-        for i in 0..steps {
+        for _i in 0..steps {
             if env.check_game_over_conditions().0 {
                 break;
             }
@@ -377,11 +279,6 @@ mod tests {
                 search_nodes.extend_from_slice(&1024u32.to_le_bytes());
                 chosen_gaps.extend_from_slice(&0.0f32.to_le_bytes());
                 expl_random.push(0u8);
-                labeler_actions.extend_from_slice(&(action as u32).to_le_bytes());
-                labeler_fallbacks.push(0u8);
-                pol_actions.extend_from_slice(&(action as u32).to_le_bytes());
-                pol_values.extend_from_slice(&1.0f32.to_le_bytes());
-                pol_offsets.push((i as u32) + 1);
             }
             env.step_with_reveal(action, None).unwrap();
         }
@@ -426,14 +323,6 @@ mod tests {
             labels.labels = Some(TrainingLabels {
                 value_labels,
                 own_values,
-                labeler_actions,
-                labeler_fallbacks,
-                labeler_policy_actions: pol_actions,
-                labeler_policy_values: pol_values,
-                labeler_policy_offsets: pol_offsets
-                    .iter()
-                    .flat_map(|o| o.to_le_bytes())
-                    .collect(),
                 ..Default::default()
             });
             labels.diagnostics = Some(StepDiagnostics {
@@ -520,12 +409,6 @@ mod tests {
         assert_eq!(s.search_depth, Some(4));
         assert_eq!(s.search_nodes, Some(1024));
         assert_eq!(s.producer, 0);
-        assert_eq!(s.labeler_action, Some(s.action));
-        assert_eq!(s.policy_actions.as_deref(), Some(&[s.action][..]));
-        assert_eq!(s.policy_values.as_deref(), Some(&[1.0][..]));
-
-        assert_eq!(g.labeler_total, 8);
-        assert!((g.labeler_agree - 1.0).abs() < 1e-9);
 
         assert_eq!(g.final_shown.len(), 32);
         assert!(!g.labels_missing);
@@ -547,13 +430,7 @@ mod tests {
             assert_eq!(m.hidden_count, None);
             assert_eq!(m.chosen_value_gap, None);
             assert_eq!(m.expl_random, None);
-            assert_eq!(m.labeler_fallback, None);
-            assert_eq!(m.labeler_action, None);
-            assert!(m.policy_actions.is_none());
-            assert!(m.policy_values.is_none());
         }
-        assert_eq!(g.labeler_total, 0);
-        assert_eq!(g.labeler_agree, 0.0);
         assert_eq!(g.expl_count, 0);
 
         let json = serde_json::to_value(&g).unwrap();

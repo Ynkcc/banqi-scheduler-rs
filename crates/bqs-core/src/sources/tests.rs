@@ -197,7 +197,6 @@ fn rating_dispatch_with_sides_and_non_network_opponent() {
                     network_sha: "cand".into(),
                     search: Some(bqs_proto::CollectSearchParams {
                         expectimax_node_budget: 4000,
-                        labeler_mode: "best".into(),
                         ..Default::default()
                     }),
                 }),
