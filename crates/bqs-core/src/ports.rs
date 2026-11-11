@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bqs_judgment::Hexanomial;
 
-use crate::{types::*, CoreResult};
+use crate::{CoreResult, types::*};
 
 pub trait SettingsStore: Send + Sync {
     fn get_setting(&self, key: &str) -> CoreResult<Option<String>>;
@@ -91,6 +91,18 @@ pub trait EpisodeStore: Send + Sync {
         let _ = (match_id, before_id, limit);
         Err(CoreError::Internal(
             "list_episodes_by_match 仅 bqs-store::Store 实现（match 对局反查需求）".into(),
+        ))
+    }
+
+    fn list_episodes_by_job(
+        &self,
+        job_id: &str,
+        before_id: i64,
+        limit: i64,
+    ) -> CoreResult<Vec<Episode>> {
+        let _ = (job_id, before_id, limit);
+        Err(CoreError::Internal(
+            "list_episodes_by_job 仅 bqs-store::Store 实现（作业 episode 反查需求）".into(),
         ))
     }
 

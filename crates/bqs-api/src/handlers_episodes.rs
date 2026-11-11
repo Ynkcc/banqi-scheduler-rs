@@ -1,17 +1,16 @@
+use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::Uri;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use bqs_core::types::Episode;
 
 use crate::views::{
-    data_kind_name, DataStatsView, EpisodeGameView, EpisodePageView, EpisodeView,
-    GameLookupItemView, GameLookupPageView, MatchPairCategoryView, MatchPairItemView,
-    MatchPairsView,
+    DataStatsView, EpisodeGameView, EpisodePageView, EpisodeView, GameLookupItemView,
+    GameLookupPageView, MatchPairCategoryView, MatchPairItemView, MatchPairsView, data_kind_name,
 };
-use crate::{int_query, read_endpoint, ApiError, ApiResult, AppState, MAX_CONTROL_BODY};
+use crate::{ApiError, ApiResult, AppState, MAX_CONTROL_BODY, int_query, read_endpoint};
 
 #[derive(Debug, Deserialize)]
 pub struct ImportEpisodeBody {
@@ -114,6 +113,17 @@ fn u64_query(query: Option<&str>, key: &str) -> Option<u64> {
     None
 }
 
+fn str_query<'a>(query: Option<&'a str>, key: &str) -> Option<&'a str> {
+    let q = query?;
+    for pair in q.split('&') {
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        if k == key && !v.is_empty() {
+            return Some(v);
+        }
+    }
+    None
+}
+
 pub async fn episode_games(
     State(st): State<AppState>,
     Path(id): Path<String>,
@@ -156,8 +166,19 @@ pub async fn episodes(State(st): State<AppState>, uri: Uri) -> ApiResult<Json<Ep
     let before = int_query(uri.query(), "before");
     let limit = clamp_episode_page_limit(int_query(uri.query(), "limit"));
     let match_id = int_query(uri.query(), "match");
+    let job = str_query(uri.query(), "job")
+        .map(str::trim)
+        .map(str::to_string);
     read_endpoint(&st, move |st| -> Result<EpisodePageView, ApiError> {
-        let items = if match_id > 0 {
+        let items = if let Some(job) = job.as_deref().filter(|s| !s.is_empty()) {
+            if st.server.ports.jobs.get_job(job)?.is_none() {
+                return Err(ApiError::bad_request(format!("job {job} 不存在")));
+            }
+            st.server
+                .ports
+                .episodes
+                .list_episodes_by_job(job, before, limit)?
+        } else if match_id > 0 {
             st.server
                 .ports
                 .episodes
@@ -181,11 +202,7 @@ fn candidate_result_char(g: &bqs_core::types::EpisodeGameRow) -> char {
         return 'D';
     }
     let a_wins = if g.a_is_red { w > 0 } else { w < 0 };
-    if a_wins {
-        'W'
-    } else {
-        'L'
-    }
+    if a_wins { 'W' } else { 'L' }
 }
 
 fn pair_category(results: &str) -> &'static str {

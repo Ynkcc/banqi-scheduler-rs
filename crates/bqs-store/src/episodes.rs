@@ -1,8 +1,8 @@
+use bqs_core::CoreResult;
 use bqs_core::ports::{
     EpisodeDataStats, EpisodeRateEstimate, EpisodeStore, GenerationStats, KindStats,
 };
 use bqs_core::types::{Episode, EpisodeDraft, EpisodeGameRow};
-use bqs_core::CoreResult;
 
 use std::collections::BTreeMap;
 
@@ -23,8 +23,7 @@ pub fn clamp_episode_page_limit(limit: i64) -> i64 {
     }
 }
 
-const EPISODE_COLUMNS: &str =
-    "id, worker_id, task_id, network_sha, game_count, total_steps, winner, \
+const EPISODE_COLUMNS: &str = "id, worker_id, task_id, network_sha, game_count, total_steps, winner, \
      object_key, created_at, kind, opponent_sha, opponent_spec, match_id, \
      red_wins, black_wins, draw_no_capture, draw_truncation, \
      seed_base, pairs_parallel, pair_seed_refresh, \
@@ -204,6 +203,37 @@ impl EpisodeStore for Store {
             let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
             if before_id > 0 {
                 query.push_str(" WHERE id < ?");
+                args.push(Box::new(before_id));
+            }
+            query.push_str(" ORDER BY id DESC LIMIT ?");
+            args.push(Box::new(limit));
+            let mut stmt = conn.prepare(&query).map_err(StoreError::from)?;
+            let rows = stmt
+                .query_map(
+                    rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())),
+                    scan_episode_row,
+                )
+                .map_err(StoreError::from)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
+        })
+    }
+
+    fn list_episodes_by_job(
+        &self,
+        job_id: &str,
+        before_id: i64,
+        limit: i64,
+    ) -> CoreResult<Vec<Episode>> {
+        let limit = clamp_episode_page_limit(limit);
+        self.with_conn(|conn| {
+            let mut query = format!(
+                "SELECT {EPISODE_COLUMNS} FROM episodes
+				 WHERE task_id IN (SELECT task_id FROM job_tasks WHERE job_id = ?)"
+            );
+            let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(job_id.to_string())];
+            if before_id > 0 {
+                query.push_str(" AND id < ?");
                 args.push(Box::new(before_id));
             }
             query.push_str(" ORDER BY id DESC LIMIT ?");
@@ -625,6 +655,59 @@ mod tests {
 
         let rows = ES::list_episode_rows(&*s, "unknown-key", 0, None).unwrap();
         assert_eq!(keys(rows), vec!["k/a", "k/b", "k/d"]);
+    }
+
+    #[test]
+    fn list_episodes_by_job_and_cursor() {
+        use bqs_core::ports::{JobQuery, JobRow, JobStore as JS};
+
+        let (_dir, s) = crate::testutil::open_temp_store();
+
+        JS::insert_job(
+            &*s,
+            JobRow {
+                job_id: "j1".into(),
+                kind: 0,
+                priority: 10,
+                state: "running".into(),
+                total_games: 3,
+                completed_games: 0,
+                dispatched_games: 0,
+                spec_json: "{}".into(),
+                created_at: 1,
+                updated_at: 1,
+                next_seq: 0,
+            },
+        )
+        .unwrap();
+        JS::insert_job_task(&*s, "t1", "j1", 1).unwrap();
+        JS::insert_job_task(&*s, "t2", "j1", 1).unwrap();
+
+        let id1 = ES::insert_episode(&*s, draft("t1", "k/a", 0, 100)).unwrap();
+        let id2 = ES::insert_episode(&*s, draft("t2", "k/b", 0, 200)).unwrap();
+        ES::insert_episode(&*s, draft("t-none", "k/c", 0, 300)).unwrap();
+
+        let page = ES::list_episodes_by_job(&*s, "j1", 0, 10).unwrap();
+        assert_eq!(
+            page.iter().map(|e| e.id).collect::<Vec<_>>(),
+            vec![id2, id1]
+        );
+
+        let page = ES::list_episodes_by_job(&*s, "j1", id2, 10).unwrap();
+        assert_eq!(page.iter().map(|e| e.id).collect::<Vec<_>>(), vec![id1]);
+
+        let page = ES::list_episodes_by_job(&*s, "j1", 0, 1).unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].id, id2);
+
+        assert!(
+            ES::list_episodes_by_job(&*s, "ghost", 0, 10)
+                .unwrap()
+                .is_empty()
+        );
+
+        let jobs = JS::list_jobs(&*s, &JobQuery::all()).unwrap();
+        assert_eq!(jobs.total, 1);
     }
 
     #[test]
