@@ -177,11 +177,10 @@ async fn run(args: Args) -> Result<()> {
             .unwrap_or(""),
     );
     tracing::info!(
-        "[scheduler] variant={} initial_revealed={} data_kind={} min_client_version={:?}",
+        "[scheduler] variant={} initial_revealed={} data_kind={}",
         sp.variant,
         sp.initial_revealed,
         sp.data_kind.as_str(),
-        cfg.server.min_client_version,
     );
     tokio::pin!(grpc);
     tokio::select! {

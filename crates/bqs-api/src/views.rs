@@ -64,8 +64,6 @@ pub struct StatusView {
     pub initial_revealed: i32,
     #[serde(rename = "dataKind")]
     pub data_kind: String,
-    #[serde(rename = "minClientVersion")]
-    pub min_client_version: String,
     #[serde(rename = "counts")]
     pub counts: CountsView,
     #[serde(rename = "shouldStop")]

@@ -55,8 +55,6 @@ pub struct ServerSection {
 
     pub worker_online_seconds: i64,
 
-    pub min_client_version: String,
-
     pub webui_dist: String,
 }
 
@@ -66,7 +64,6 @@ impl Default for ServerSection {
             listen: ":50051".into(),
             http_addr: "127.0.0.1:9536".into(),
             worker_online_seconds: 60,
-            min_client_version: String::new(),
             webui_dist: String::new(),
         }
     }

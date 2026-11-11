@@ -80,7 +80,6 @@ pub async fn status(State(st): State<AppState>) -> ApiResult<Json<StatusView>> {
             variant: server.cfg.selfplay.variant.clone(),
             initial_revealed: ctl.initial_revealed(),
             data_kind: ctl.data_kind().as_str().to_string(),
-            min_client_version: server.cfg.server.min_client_version.clone(),
             counts,
             should_stop,
             stop_reason,

@@ -39,13 +39,6 @@ impl Server {
             ..Default::default()
         };
 
-        let min = &self.cfg.server.min_client_version;
-        if !min.is_empty()
-            && !req.client_version.is_empty()
-            && client_version_too_old(&req.client_version, min)
-        {
-            return Ok(none("client_version_too_old"));
-        }
         if !req.client_version.is_empty() {
             tracing::info!(
                 worker = %req.worker_id, version = %req.client_version,
@@ -96,33 +89,5 @@ impl Server {
             );
         }
         Ok(reply)
-    }
-}
-
-fn client_version_too_old(client: &str, min: &str) -> bool {
-    let parse = |s: &str| -> Option<Vec<Option<u64>>> {
-        let mut parts = Vec::new();
-        for seg in s.split('.') {
-            match seg.parse::<u64>() {
-                Ok(n) => parts.push(Some(n)),
-                Err(_) => return None,
-            }
-        }
-        Some(parts)
-    };
-    match (parse(client), parse(min)) {
-        (Some(c), Some(m)) => {
-            let len = c.len().max(m.len());
-            for i in 0..len {
-                let cv = c.get(i).copied().flatten().unwrap_or(0);
-                let mv = m.get(i).copied().flatten().unwrap_or(0);
-                if cv != mv {
-                    return cv < mv;
-                }
-            }
-            false
-        }
-
-        _ => client < min,
     }
 }

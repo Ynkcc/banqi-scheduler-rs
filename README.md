@@ -47,7 +47,7 @@ SDK。调度器与对象存储之间没有数据面流量（预签名是纯字�
 | 项 | Go 版 | Rust 版 |
 |---|---|---|
 | TLS 监听 | 可选第二 gRPC TLS 口 | **整体剔除（按要求）** |
-| `min_client_version` | 字符串字典序（`0.10.0 < 0.9.0` 缺陷） | 语义化版本感知比较 |
+| `min_client_version` | 字符串字典序（`0.10.0 < 0.9.0` 缺陷） | **整体剔除**（客户端版本仅记录观测，不再门控派单） |
 | magic number | 散落各处、部分为 var | `consts.rs` 唯一定义 |
 | 配置解析 | 手写 TOML 风格解析器 | `toml` crate 权威解析（不支持 `;` 注释） |
 | gatekeeper 自动对打 | 无开关 | 请求级 `RegisterNetworkRequest.skip_match`（单次跳过）+ 全局默认 `[gatekeeper] auto_match`；HTTP 等价入口 `POST /api/networks` |

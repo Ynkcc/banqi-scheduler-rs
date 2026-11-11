@@ -29,7 +29,6 @@ fn status_top_level() {
         variant: "4x8".into(),
         initial_revealed: 0,
         data_kind: "resnet".into(),
-        min_client_version: String::new(),
         counts: CountsView {
             networks: 0,
             candidates: 0,
@@ -47,7 +46,6 @@ fn status_top_level() {
             "variant",
             "initialRevealed",
             "dataKind",
-            "minClientVersion",
             "counts",
             "shouldStop",
             "stopReason",

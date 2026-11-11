@@ -468,38 +468,6 @@ fn get_task_no_sources_means_no_task_available() {
 }
 
 #[test]
-fn get_task_client_version_gate() {
-    let (s, _) = server_with("[server]\nmin_client_version = \"0.9.0\"\n");
-
-    let resp = s
-        .get_task(TaskRequest {
-            worker_id: "w".into(),
-            client_version: "0.10.0".into(),
-            ..Default::default()
-        })
-        .unwrap();
-    assert_ne!(resp.message, "client_version_too_old");
-
-    let resp = s
-        .get_task(TaskRequest {
-            worker_id: "w".into(),
-            client_version: "0.8.9".into(),
-            ..Default::default()
-        })
-        .unwrap();
-    assert!(resp.generation.is_none());
-    assert_eq!(resp.message, "client_version_too_old");
-
-    let resp = s
-        .get_task(TaskRequest {
-            worker_id: "w".into(),
-            ..Default::default()
-        })
-        .unwrap();
-    assert_ne!(resp.message, "client_version_too_old");
-}
-
-#[test]
 fn get_task_serves_collect_then_derive_chain() {
     let (s, f) = server_with("[jobs]\ncollect_overdispatch_games = -1\n");
     f.networks.seed_network("n1", None, "onnx");
