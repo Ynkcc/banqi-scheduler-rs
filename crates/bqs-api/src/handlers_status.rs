@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use axum::Json;
 
 use bqs_core::dispatch::TaskStateStats;
 use bqs_core::types::Network;
@@ -13,14 +13,10 @@ use crate::views::{
     EpisodeRateEstimateView, KindStatsView, MatchConclusionView, MatchView, NetworkView, OkView,
     StatusView, TaskView, WorkerView,
 };
-use crate::{read_endpoint, write_endpoint, ApiError, ApiResult, AppState, MAX_CONTROL_BODY};
+use crate::{ApiError, ApiResult, AppState, MAX_CONTROL_BODY, read_endpoint, write_endpoint};
 
 fn finite_or(x: f64, fallback: f64) -> f64 {
-    if x.is_finite() {
-        x
-    } else {
-        fallback
-    }
+    if x.is_finite() { x } else { fallback }
 }
 
 pub fn to_network_view(n: &Network) -> NetworkView {

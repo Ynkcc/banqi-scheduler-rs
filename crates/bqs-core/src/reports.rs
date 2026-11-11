@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use bqs_config::Config;
-use bqs_judgment::{judge, new_bounds, Hexanomial, Verdict};
+use bqs_judgment::{Hexanomial, Verdict, judge, new_bounds};
 use bqs_proto::{MatchResult, MatchResultAck, TaskKind};
 
 use crate::{
+    CoreError, CoreResult,
     dispatch::{RunningTask, TaskDispatcher, TaskState},
     jobs::{JobManager, RatingSpecJson},
     ports::MatchStore,
-    CoreError, CoreResult,
 };
 
 pub fn lookup_report_task(

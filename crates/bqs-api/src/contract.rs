@@ -432,7 +432,10 @@ fn replay_views() {
     quiet.chosen_value_gap = None;
     quiet.expl_random = None;
     let null_json = serde_json::to_value(&quiet).unwrap();
-    assert!(null_json["searchValue"].is_null(), "无标签包时诊断字段应为 null");
+    assert!(
+        null_json["searchValue"].is_null(),
+        "无标签包时诊断字段应为 null"
+    );
     assert!(null_json["playerValue"].is_null());
     assert!(null_json["hiddenCount"].is_null());
     assert!(null_json["searchDepth"].is_null());

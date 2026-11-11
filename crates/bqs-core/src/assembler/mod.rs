@@ -17,7 +17,7 @@ use std::sync::Arc;
 use bqs_config::Config;
 use bqs_proto::{CollectPlayerSpec, CollectSearchParams};
 
-use crate::{consts, control::Control, ports::ObjectSigner, CoreResult};
+use crate::{CoreResult, consts, control::Control, ports::ObjectSigner};
 
 pub struct TaskAssembler {
     signer: Arc<dyn ObjectSigner>,
@@ -26,11 +26,7 @@ pub struct TaskAssembler {
 }
 
 impl TaskAssembler {
-    pub fn new(
-        signer: Arc<dyn ObjectSigner>,
-        cfg: Arc<Config>,
-        ctl: Arc<Control>,
-    ) -> Self {
+    pub fn new(signer: Arc<dyn ObjectSigner>, cfg: Arc<Config>, ctl: Arc<Control>) -> Self {
         Self { signer, cfg, ctl }
     }
 

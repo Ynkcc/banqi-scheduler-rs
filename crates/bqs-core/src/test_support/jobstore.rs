@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::{
-    ports::{JobPage, JobQuery, JobRow, JobStore, JobTaskLink},
     CoreError, CoreResult,
+    ports::{JobPage, JobQuery, JobRow, JobStore, JobTaskLink},
 };
 
 #[derive(Debug, Default)]
@@ -38,10 +38,7 @@ impl JobStore for FakeJobs {
             .jobs
             .values()
             .filter(|j| {
-                query
-                    .job_id
-                    .as_deref()
-                    .is_none_or(|id| j.job_id == id)
+                query.job_id.as_deref().is_none_or(|id| j.job_id == id)
                     && query.state.as_deref().is_none_or(|s| j.state == s)
                     && query.kind.is_none_or(|k| j.kind == k)
             })

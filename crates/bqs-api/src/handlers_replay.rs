@@ -1,12 +1,12 @@
-use axum::extract::{Path, State};
 use axum::Json;
+use axum::extract::{Path, State};
 use prost::Message;
 
-use bq_record::types::GameRecordBatch;
 use bq_record::GameLabelPack;
+use bq_record::types::GameRecordBatch;
 
-use crate::views::{data_kind_name, ReplayGameSummaryView, ReplayListView};
-use crate::{read_endpoint, ApiError, ApiResult, AppState};
+use crate::views::{ReplayGameSummaryView, ReplayListView, data_kind_name};
+use crate::{ApiError, ApiResult, AppState, read_endpoint};
 
 pub(crate) fn fetch_episode_batch(
     st: &AppState,

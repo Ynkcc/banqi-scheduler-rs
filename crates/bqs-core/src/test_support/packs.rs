@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::{
+    CoreResult,
     ports::{FeaturePackDraft, FeaturePackStore},
     types::FeaturePack,
-    CoreResult,
 };
 
 #[derive(Debug, Default)]

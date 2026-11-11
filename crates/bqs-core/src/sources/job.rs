@@ -4,14 +4,14 @@ use bqs_config::Config;
 use bqs_proto::{TaskRequest, TaskResponse};
 
 use crate::{
-    assembler::{games_for_threads, TaskAssembler},
+    CoreResult,
+    assembler::{TaskAssembler, games_for_threads},
     dispatch::TaskDispatcher,
     jobs::{JobManager, JobSpecJson},
     ports::{JobRow, MatchStore, NetworkStore},
-    CoreResult,
 };
 
-use super::{new_id, TaskSource};
+use super::{TaskSource, new_id};
 
 pub struct JobSource {
     pub jobs: Arc<JobManager>,

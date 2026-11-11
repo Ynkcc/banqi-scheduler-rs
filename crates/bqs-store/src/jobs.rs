@@ -1,5 +1,5 @@
-use bqs_core::ports::{JobPage, JobQuery, JobRow, JobStore, JobTaskLink};
 use bqs_core::CoreResult;
+use bqs_core::ports::{JobPage, JobQuery, JobRow, JobStore, JobTaskLink};
 use rusqlite::OptionalExtension;
 
 use crate::{Store, StoreError};

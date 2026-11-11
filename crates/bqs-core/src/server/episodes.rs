@@ -1,6 +1,6 @@
 use bqs_proto::*;
 
-use crate::{assembler::episode_key, reports::lookup_report_task, types::EpisodeDraft, CoreResult};
+use crate::{CoreResult, assembler::episode_key, reports::lookup_report_task, types::EpisodeDraft};
 
 use super::Server;
 

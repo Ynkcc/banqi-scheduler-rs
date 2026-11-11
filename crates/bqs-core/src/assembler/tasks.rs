@@ -1,9 +1,9 @@
 use bq_record::DataKind;
 use bqs_proto::{CollectionJobSpec, GenerationSpec, SelfPlayParams, TaskRequest, TaskResponse};
 
-use crate::{featurepack::PendingDerive, types::Network, CoreResult};
+use crate::{CoreResult, featurepack::PendingDerive, types::Network};
 
-use super::{data_kind_for_format, producer::network_key, TaskAssembler};
+use super::{TaskAssembler, data_kind_for_format, producer::network_key};
 
 impl TaskAssembler {
     pub fn collect_task(

@@ -121,8 +121,10 @@ mod tests {
         assert_eq!(done.items.len(), 1);
         assert_eq!(done.items[0].job_id, "j-low-1");
 
-        assert!(store
-            .insert_job(row("j-low-1", 0, 50, "running", 2))
-            .is_err());
+        assert!(
+            store
+                .insert_job(row("j-low-1", 0, 50, "running", 2))
+                .is_err()
+        );
     }
 }

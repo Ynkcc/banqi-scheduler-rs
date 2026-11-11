@@ -1,9 +1,8 @@
 use bqs_proto::*;
 
 use crate::{
-    consts,
-    featurepack::{feature_pack_key, PendingDerive, DEFAULT_FEATURE_PACK_VERSION},
-    CoreResult,
+    CoreResult, consts,
+    featurepack::{DEFAULT_FEATURE_PACK_VERSION, PendingDerive, feature_pack_key},
 };
 
 use super::Server;

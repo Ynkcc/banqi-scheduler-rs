@@ -1,13 +1,12 @@
-use bq_env::config::Variant;
 use bq_env::PositionSnapshot;
+use bq_env::config::Variant;
 use bq_replay::ReplayStep;
 
-use bq_record::types::GameRecordBatch;
 use bq_record::GameLabelPack;
+use bq_record::types::GameRecordBatch;
 use bqs_core::types::Episode;
 
 use crate::views::{HiddenBagView, ReplayGameView, ReplayStepView};
-
 
 fn f32_at(b: &[u8], i: usize) -> f32 {
     let s = i * 4;
@@ -49,7 +48,6 @@ fn decode_snapshots(snapshots: &[Vec<u8>], steps: usize) -> Result<Vec<PositionS
         .collect()
 }
 
-
 fn labels_for_game<'a>(pack: &'a GameLabelPack, index: usize) -> Option<&'a bq_record::GameLabels> {
     let exact = pack
         .games
@@ -83,7 +81,6 @@ pub fn build_game(
         .map_err(|e| format!("replay: 未知变体: {e}"))?;
     let _ = variant;
 
-
     let input = bq_record::replay::to_replay_input(rec)?;
     let game = bq_replay::build_replay(&input)?;
 
@@ -104,7 +101,6 @@ pub fn build_game(
         .as_ref()
         .and_then(|b| PositionSnapshot::decode(b).ok())
         .map(|s| s.to_fen());
-
 
     let label = labels.and_then(|p| labels_for_game(p, index));
     let labels_missing = label.is_none();
@@ -218,10 +214,10 @@ pub fn build_game(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bq_env::seed::SeedableEnv;
-    use bq_env::SnapshotEnv;
     use bq_env::DarkChessEnv;
     use bq_env::GameEnv;
+    use bq_env::SnapshotEnv;
+    use bq_env::seed::SeedableEnv;
     use bq_env::types::{Player, Slot};
     use bq_record::codec::{LABEL_PACK_VERSION, encode_label_pack_gz};
     use bq_record::types::{
@@ -230,10 +226,8 @@ mod tests {
     };
     use prost::Message;
 
-
     fn synth(steps: usize, with_diags: bool) -> (GameRecord, GameLabelPack) {
         let mut env = DarkChessEnv::default();
-
 
         env.set_seed(42);
         let initial_layout = env.initial_layout_bytes().expect("设种子后应有初始布局");
@@ -444,7 +438,6 @@ mod tests {
         let g = build_game(&batch(rec), Some(&pack), &episode(), 0).unwrap();
         assert!(!g.labels_missing, "局有 GameLabels 槽位即视为有标签包");
         for m in &g.moves {
-
             assert_eq!(m.search_value, Some(0.0), "TrainingLabels 空组 → 0 值");
             assert_eq!(m.search_depth, Some(0), "StepDiagnostics 空组 → 0 值");
         }
@@ -475,11 +468,12 @@ mod tests {
             play.snapshots.push(env.to_snapshot().encode());
             play.actions
                 .extend_from_slice(&(action as u16).to_le_bytes());
-            play.players.push(if env.get_current_player() == Player::Red {
-                1u8
-            } else {
-                0xFF
-            });
+            play.players
+                .push(if env.get_current_player() == Player::Red {
+                    1u8
+                } else {
+                    0xFF
+                });
             env.step_with_reveal(action, None).unwrap();
         }
         let play = rec.play.as_mut().unwrap();
@@ -521,7 +515,6 @@ mod tests {
         let b = batch(rec);
         let bytes = b.encode_to_vec();
         let b2 = GameRecordBatch::decode(bytes.as_slice()).unwrap();
-
 
         let gz = encode_label_pack_gz(&pack).unwrap();
         let pack2 = bq_record::codec::decode_label_pack_gz(&gz).unwrap();

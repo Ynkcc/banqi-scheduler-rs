@@ -1,4 +1,4 @@
-use crate::{ports::ObjectSigner, CoreResult};
+use crate::{CoreResult, ports::ObjectSigner};
 
 #[derive(Debug, Default)]
 pub struct FakeSigner;

@@ -1,6 +1,6 @@
-use bqs_core::ports::MatchStore;
-use bqs_core::types::{match_status, Match, MatchConclusion};
 use bqs_core::CoreResult;
+use bqs_core::ports::MatchStore;
+use bqs_core::types::{Match, MatchConclusion, match_status};
 use bqs_judgment::Hexanomial;
 
 use crate::{Store, StoreError};

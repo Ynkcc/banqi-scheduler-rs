@@ -1,7 +1,7 @@
 use bqs_proto::{CollectPlayerSpec, CollectionJobSpec, RatingJobSpec};
 
-use super::spec::{valid_scenario, PlayerSpecJson};
 use super::JobManager;
+use super::spec::{PlayerSpecJson, valid_scenario};
 use crate::consts;
 
 fn resolve_network_sha(
@@ -46,11 +46,7 @@ fn resolve_network_sha(
 }
 
 fn check_model_sha(sha: &str, msg: String) -> Result<(), String> {
-    if sha.is_empty() {
-        Ok(())
-    } else {
-        Err(msg)
-    }
+    if sha.is_empty() { Ok(()) } else { Err(msg) }
 }
 
 fn resolve_player(

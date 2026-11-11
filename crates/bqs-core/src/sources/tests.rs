@@ -17,13 +17,13 @@ fn env() -> Env {
 
 fn env_with_jobs(jobs_toml: &str) -> Env {
     let f = Fakes::new();
-    let cfg = Arc::new(Config::parse(
-        &format!(
-            "[selfplay]\ngames_per_task = 8\n{jobs_toml}"
-        ),
-        "test",
-    )
-    .unwrap());
+    let cfg = Arc::new(
+        Config::parse(
+            &format!("[selfplay]\ngames_per_task = 8\n{jobs_toml}"),
+            "test",
+        )
+        .unwrap(),
+    );
     let ports = f.ports();
     let disp = Arc::new(TaskDispatcher::new(&ports, cfg.clone(), f.clock.clone()));
     let jobs = Arc::new(JobManager::new(

@@ -157,7 +157,11 @@ mod tests {
         WS::touch_worker(&*s, "w2", 4, 10, "v1", 8192, "ok", "", "10.0.0.2").unwrap();
 
         assert!(WS::delete_worker(&*s, "w1").unwrap());
-        let ids: Vec<String> = WS::list_workers(&*s).unwrap().into_iter().map(|w| w.id).collect();
+        let ids: Vec<String> = WS::list_workers(&*s)
+            .unwrap()
+            .into_iter()
+            .map(|w| w.id)
+            .collect();
         assert_eq!(ids, vec!["w2".to_string()]);
 
         assert!(!WS::delete_worker(&*s, "w1").unwrap(), "重复删除返回 false");

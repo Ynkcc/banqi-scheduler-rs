@@ -197,9 +197,7 @@ fn rating_task_assembly() {
 #[test]
 fn extra_config_json_semantics() {
     let f = Fakes::new();
-    let cfg = Arc::new(
-        Config::parse("[selfplay]\ninitial_revealed = 3\n", "test").unwrap(),
-    );
+    let cfg = Arc::new(Config::parse("[selfplay]\ninitial_revealed = 3\n", "test").unwrap());
     let ports = f.ports();
     let ctl = Arc::new(Control::new(&ports, cfg.clone()));
     let asm = TaskAssembler::new(Arc::new(FakeSigner), cfg, ctl);

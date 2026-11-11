@@ -1,10 +1,10 @@
 use std::path::Path;
 
+use axum::Router;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{Method, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, delete, get, post, put};
-use axum::Router;
 
 use crate::{
     handlers_control, handlers_episodes, handlers_jobs, handlers_replay, handlers_status,
@@ -34,10 +34,7 @@ pub fn router(state: AppState) -> Router {
             get(handlers_episodes::match_pairs),
         )
         .route("/api/workers", get(handlers_status::workers))
-        .route(
-            "/api/workers/{id}",
-            delete(handlers_status::worker_delete),
-        )
+        .route("/api/workers/{id}", delete(handlers_status::worker_delete))
         .route("/api/workers/{id}/note", put(handlers_status::worker_note))
         .route("/api/episodes", get(handlers_episodes::episodes))
         .route(

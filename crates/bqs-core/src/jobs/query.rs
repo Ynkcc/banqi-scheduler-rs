@@ -1,8 +1,8 @@
 use bqs_proto::JobKind;
 
-use super::spec::{JobSpecJson, RatingSpecJson};
 use super::JobManager;
-use crate::{ports::JobPage, ports::JobQuery, ports::JobRow, CoreResult};
+use super::spec::{JobSpecJson, RatingSpecJson};
+use crate::{CoreResult, ports::JobPage, ports::JobQuery, ports::JobRow};
 
 impl JobManager {
     pub fn list(&self, query: &JobQuery) -> CoreResult<JobPage> {

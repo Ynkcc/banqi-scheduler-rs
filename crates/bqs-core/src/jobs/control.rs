@@ -1,10 +1,10 @@
 use bqs_proto::JobKind;
 
-use super::spec::JobSpecJson;
 use super::JobManager;
+use super::spec::JobSpecJson;
+use crate::CoreResult;
 use crate::consts;
 use crate::ports::JobQuery;
-use crate::CoreResult;
 
 impl JobManager {
     pub fn control(&self, job_id: &str, action: &str) -> CoreResult<(bool, String, String)> {

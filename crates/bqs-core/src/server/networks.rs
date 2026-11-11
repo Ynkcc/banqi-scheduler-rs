@@ -1,6 +1,6 @@
 use bqs_proto::*;
 
-use crate::{consts, CoreResult};
+use crate::{CoreResult, consts};
 
 use super::Server;
 
@@ -24,7 +24,11 @@ impl Server {
         if !created {
             return Ok(ack(false, format!("duplicate_sha:{}", req.sha)));
         }
-        tracing::info!("[network] registered candidate={} format={}", req.sha, format);
+        tracing::info!(
+            "[network] registered candidate={} format={}",
+            req.sha,
+            format
+        );
         Ok(ack(true, "network_registered".into()))
     }
 }

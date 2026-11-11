@@ -13,12 +13,12 @@ use bqs_config::Config;
 use bqs_proto::{TaskRequest, TaskResponse};
 
 use crate::{
+    CoreResult,
     assembler::TaskAssembler,
     dispatch::TaskDispatcher,
     featurepack::DeriveQueue,
     jobs::JobManager,
     ports::{MatchStore, NetworkStore},
-    CoreResult,
 };
 
 pub trait TaskSource: Send + Sync {
