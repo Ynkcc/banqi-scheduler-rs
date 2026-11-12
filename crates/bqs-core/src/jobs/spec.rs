@@ -1,6 +1,6 @@
 use bqs_proto::{
-    CollectPlayerSpec, CollectSearchParams, CollectionJobSpec, OpeningScenario, RatingJobSpec,
-    SeedStrategy, SeedStrategyKind,
+    CollectPlayerSpec, CollectSearchParams, CollectionJobSpec, RatingJobSpec, SeedStrategy,
+    SeedStrategyKind,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -217,7 +217,8 @@ impl SeedStrategyJson {
 #[serde(default, rename_all = "camelCase")]
 pub struct CollectSpecJson {
     pub variant: String,
-    pub scenario: i32,
+
+    pub scenario_json: String,
     #[serde(alias = "seed_strategy")]
     pub seed_strategy: SeedStrategyJson,
     #[serde(alias = "player_a")]
@@ -241,7 +242,7 @@ impl CollectSpecJson {
     pub(super) fn from_proto(s: CollectionJobSpec) -> Self {
         Self {
             variant: s.variant,
-            scenario: s.scenario,
+            scenario_json: s.scenario_json,
             seed_strategy: SeedStrategyJson::from_proto(s.seed_strategy),
             player_a: PlayerSpecJson::from_proto(s.player_a),
             player_b: PlayerSpecJson::from_proto(s.player_b),
@@ -256,7 +257,7 @@ impl CollectSpecJson {
     pub fn to_proto(&self) -> CollectionJobSpec {
         CollectionJobSpec {
             variant: self.variant.clone(),
-            scenario: self.scenario,
+            scenario_json: self.scenario_json.clone(),
             seed_strategy: Some(self.seed_strategy.to_proto()),
             player_a: Some(self.player_a.to_proto()),
             player_b: Some(self.player_b.to_proto()),
@@ -295,7 +296,8 @@ pub struct RatingSpecJson {
     pub match_id: i64,
     #[serde(alias = "start_fens")]
     pub start_fens: Vec<String>,
-    pub scenario: i32,
+
+    pub scenario_json: String,
 
     #[serde(default)]
     pub pair_seed_refresh: bool,
@@ -316,7 +318,7 @@ impl RatingSpecJson {
             side_b: PlayerSpecJson::default(),
             match_id: 0,
             start_fens: s.start_fens,
-            scenario: s.scenario,
+            scenario_json: s.scenario_json,
             pair_seed_refresh: false,
         }
     }
@@ -366,7 +368,7 @@ impl RatingSpecJson {
             side_a: Some(side_a.to_proto()),
             side_b: Some(side_b.to_proto()),
             start_fens: self.start_fens.clone(),
-            scenario: self.scenario,
+            scenario_json: self.scenario_json.clone(),
         }
     }
 }
@@ -421,6 +423,46 @@ pub(super) fn spec_total(spec: &JobSpecJson) -> u64 {
     }
 }
 
-pub fn valid_scenario(scenario: i32) -> bool {
-    OpeningScenario::try_from(scenario).is_ok()
+pub const MAX_SCENARIO_JSON_LEN: usize = 4096;
+
+pub fn canonical_scenario(scenario: &str, variant: &str) -> Result<String, String> {
+    let trimmed = scenario.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("standard") {
+        return Ok(String::new());
+    }
+    if trimmed.len() > MAX_SCENARIO_JSON_LEN {
+        return Err(format!(
+            "scenario_json 过长（{} > {MAX_SCENARIO_JSON_LEN} 字节）",
+            trimmed.len()
+        ));
+    }
+    let value: serde_json::Value = if trimmed.starts_with('{') {
+        serde_json::from_str(trimmed).map_err(|e| format!("scenario_json 非法 JSON: {e}"))?
+    } else {
+        serde_json::json!({ "kind": trimmed })
+    };
+    let s: bq_env::OpeningScenario = serde_json::from_value(value).map_err(|e| {
+        format!(
+            "scenario_json 解析失败（须为 banqi-core OpeningScenario，如 {{\"kind\":\"random_reveals\",\"count\":3}}）: {e}"
+        )
+    })?;
+    let cfg = variant_config(variant)?;
+    s.validate(&cfg)
+        .map_err(|e| format!("scenario 与变体 {variant} 不匹配: {e}"))?;
+    serde_json::to_string(&s).map_err(|e| format!("scenario_json 规范化失败: {e}"))
+}
+
+pub fn scenario_echo(scenario_json: &str) -> serde_json::Value {
+    let trimmed = scenario_json.trim();
+    if trimmed.is_empty() {
+        return serde_json::Value::String("standard".into());
+    }
+    serde_json::from_str(trimmed).unwrap_or(serde_json::Value::String(trimmed.into()))
+}
+
+fn variant_config(variant: &str) -> Result<bq_env::GameConfig, String> {
+    use std::str::FromStr;
+    bq_env::Variant::from_str(variant)
+        .map(|v| v.config())
+        .map_err(|e| format!("variant 解析失败: {e}"))
 }

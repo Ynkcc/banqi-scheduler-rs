@@ -19,7 +19,7 @@ message TaskRequest {
 
 message GenerationSpec {
   string variant = 1;
-  OpeningScenario scenario = 2;
+  reserved 2; // 曾为 OpeningScenario 枚举；场景改为 scenario_json 透传后废弃
   optional uint64 seed = 3;
   bqrecord.DataKind data_kind = 4;
   uint64 games = 5;
@@ -38,6 +38,10 @@ message GenerationSpec {
   // 指定 BFEN 起始局面（rating 链路下发通道；collect 链路经 CollectionJobSpec 内嵌透传）。
   // 非空时对局从这些局面开始、按对局序号取模循环选取；覆盖 scenario/initial_revealed。
   repeated string start_fens = 13;
+  // 开局场景透传：banqi-core OpeningScenario 的 serde JSON
+  // （如 {"kind":"random_reveals","count":3}）；空串 = standard。
+  // banqi-core 新增场景时只需透传 JSON，本契约与 collector 无需改动。
+  string scenario_json = 14;
 }
 
 message Plays {
@@ -273,11 +277,6 @@ enum JobKind {
   JOB_RATING = 3;
 }
 
-enum OpeningScenario {
-  SCENARIO_STANDARD = 0;
-  SCENARIO_ALL_REVEALED = 1;
-}
-
 enum SeedStrategyKind {
   SEED_FIXED = 0;
   SEED_RANDOM = 1;
@@ -336,7 +335,7 @@ message CollectSearchParams {
 
 message CollectionJobSpec {
   string variant = 1;
-  OpeningScenario scenario = 2;
+  reserved 2; // 曾为 OpeningScenario 枚举；场景改为 scenario_json 透传后废弃
   SeedStrategy seed_strategy = 3;
   CollectPlayerSpec player_a = 4;
   CollectPlayerSpec player_b = 5;
@@ -349,6 +348,8 @@ message CollectionJobSpec {
   // 指定 BFEN 起始局面：非空时对局从这些局面开始、按对局序号取模循环选取；
   // 覆盖 scenario/initial_revealed。空 = 完全走既有路径。
   repeated string start_fens = 10;
+  // 开局场景透传：banqi-core OpeningScenario 的 serde JSON（空串 = standard）
+  string scenario_json = 11;
 }
 
 message SelfPlayJobSpec {
@@ -374,8 +375,9 @@ message RatingJobSpec {
   CollectPlayerSpec side_b = 10;
   // 指定 BFEN 起始局面：非空时对局从这些局面开始、按对局序号取模循环选取；覆盖 scenario。
   repeated string start_fens = 11;
-  // 开局场景（SCENARIO_STANDARD / SCENARIO_ALL_REVEALED）；start_fens 非空时被覆盖。
-  OpeningScenario scenario = 12;
+  reserved 12; // 曾为 OpeningScenario 枚举；场景改为 scenario_json 透传后废弃
+  // 开局场景透传：banqi-core OpeningScenario 的 serde JSON（空串 = standard）
+  string scenario_json = 13;
 }
 
 message SubmitJobRequest {

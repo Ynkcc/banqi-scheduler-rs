@@ -137,7 +137,7 @@ fn rating_task_assembly() {
             8,
             0x1234_5678_9abc_def0,
             fens.clone(),
-            bqs_proto::OpeningScenario::ScenarioAllRevealed as i32,
+            r#"{"kind":"all_revealed"}"#.into(),
             &req,
         )
         .unwrap();
@@ -146,9 +146,9 @@ fn rating_task_assembly() {
     assert_eq!(g.games, 8);
     assert_eq!(g.start_fens, fens, "rating 任务须携带 start_fens");
     assert_eq!(
-        g.scenario,
-        bqs_proto::OpeningScenario::ScenarioAllRevealed as i32,
-        "rating 任务须携带 scenario"
+        g.scenario_json,
+        r#"{"kind":"all_revealed"}"#,
+        "rating 任务须携带场景 JSON 透传"
     );
     assert_eq!(
         g.data_kind,
@@ -186,7 +186,7 @@ fn rating_task_assembly() {
             4,
             42,
             Vec::new(),
-            0,
+            String::new(),
             &req2,
         )
         .unwrap();
@@ -223,7 +223,7 @@ fn collect_task_passthrough_pair_overrides() {
     let spec = |pairs_parallel: Option<bool>, pair_seed_refresh: Option<bool>| {
         bqs_proto::CollectionJobSpec {
             variant: "4x8".into(),
-            scenario: 0,
+            scenario_json: String::new(),
             data_kind: bq_record::DataKind::DataResnet as i32,
             total_games: 4,
             pairs_parallel,

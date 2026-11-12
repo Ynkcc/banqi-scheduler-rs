@@ -1,7 +1,7 @@
 use bqs_proto::{CollectPlayerSpec, CollectionJobSpec, RatingJobSpec};
 
 use super::JobManager;
-use super::spec::{PlayerSpecJson, valid_scenario};
+use super::spec::{PlayerSpecJson, canonical_scenario};
 use crate::consts;
 
 fn resolve_network_sha(
@@ -122,6 +122,7 @@ impl JobManager {
         c: &CollectionJobSpec,
     ) -> Result<CollectionJobSpec, String> {
         validate_variant(&c.variant)?;
+        let scenario_json = canonical_scenario(&c.scenario_json, &c.variant)?;
         validate_start_fens(&c.start_fens, &c.variant)?;
         if c.total_games < 2 || c.total_games % 2 != 0 {
             return Err(format!(
@@ -148,6 +149,7 @@ impl JobManager {
             return Err("collect.data_kind 必须为 DATA_RESNET / DATA_NNUE".into());
         }
         let mut out = c.clone();
+        out.scenario_json = scenario_json;
         out.player_a = Some(pa.to_proto());
         out.player_b = Some(pb.to_proto());
         Ok(out)
@@ -158,15 +160,15 @@ impl JobManager {
         r: &RatingJobSpec,
     ) -> Result<(RatingJobSpec, PlayerSpecJson, PlayerSpecJson), String> {
         let mut r = r.clone();
+        let rating_variant = if r.variant.is_empty() {
+            self.cfg.selfplay.variant.as_str()
+        } else {
+            r.variant.as_str()
+        };
         if !r.variant.is_empty() {
             validate_variant(&r.variant)?;
         }
-        if !valid_scenario(r.scenario) {
-            return Err(format!(
-                "rating.scenario 非法: {}（可选 0=standard / 1=all_revealed）",
-                r.scenario
-            ));
-        }
+        r.scenario_json = canonical_scenario(&r.scenario_json, rating_variant)?;
         if !r.start_fens.is_empty() {
             let resolved = if r.variant.is_empty() {
                 self.cfg.selfplay.variant.as_str()

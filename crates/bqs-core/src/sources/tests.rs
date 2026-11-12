@@ -269,7 +269,7 @@ fn submit_collect(env: &Env, total: u64) -> String {
             priority: 0,
             collect: Some(bqs_proto::CollectionJobSpec {
                 variant: "4x8".into(),
-                scenario: bqs_proto::OpeningScenario::ScenarioAllRevealed as i32,
+                scenario_json: r#"{"kind":"all_revealed"}"#.into(),
                 seed_strategy: Some(bqs_proto::SeedStrategy {
                     kind: bqs_proto::SeedStrategyKind::SeedIncremental as i32,
                     base_seed: 1000,
@@ -305,8 +305,9 @@ fn collect_dispatch_generation_snapshot() {
     let g = resp.generation.clone().expect("generation");
     assert_eq!(g.variant, "4x8");
     assert_eq!(
-        g.scenario,
-        bqs_proto::OpeningScenario::ScenarioAllRevealed as i32
+        g.scenario_json,
+        r#"{"kind":"all_revealed"}"#,
+        "场景 JSON 应透传到任务下发"
     );
     assert_eq!(g.seed, Some(1000), "INCREMENTAL base_seed + seq=0");
     assert_eq!(

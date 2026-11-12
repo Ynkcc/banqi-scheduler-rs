@@ -5,10 +5,23 @@ use serde::{Deserialize, Serialize};
 use bqs_core::data_kind;
 use bqs_core::jobs::{
     CollectSpecJson, JobSpecJson, PlayerSpecJson, RatingSpecJson, SeedStrategyJson,
+    canonical_scenario, scenario_echo,
 };
 use bqs_proto::{CollectionJobSpec, JobKind, RatingJobSpec, SeedStrategy, SubmitJobRequest};
 
 use crate::{ApiError, ApiResult, AppState};
+
+fn scenario_json_from_value(v: &serde_json::Value, variant: &str) -> Result<String, String> {
+    match v {
+        serde_json::Value::Null => Ok(String::new()),
+        serde_json::Value::String(s) => canonical_scenario(s, variant),
+        other => {
+            let s =
+                serde_json::to_string(other).map_err(|e| format!("scenario 序列化失败: {e}"))?;
+            canonical_scenario(&s, variant)
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -65,7 +78,7 @@ impl SeedStrategyBody {
 pub struct CollectBody {
     pub variant: String,
 
-    pub scenario: String,
+    pub scenario: serde_json::Value,
     pub seed_strategy: SeedStrategyBody,
     pub player_a: PlayerSpecJson,
     pub player_b: PlayerSpecJson,
@@ -82,19 +95,11 @@ pub struct CollectBody {
 
 impl CollectBody {
     fn to_proto(&self) -> Result<CollectionJobSpec, String> {
-        let scenario = match self.scenario.as_str() {
-            "" | "standard" => bqs_proto::OpeningScenario::ScenarioStandard as i32,
-            "all_revealed" => bqs_proto::OpeningScenario::ScenarioAllRevealed as i32,
-            other => {
-                return Err(format!(
-                    "unknown scenario \"{other}\"（可选 standard/all_revealed）"
-                ));
-            }
-        };
+        let scenario_json = scenario_json_from_value(&self.scenario, &self.variant)?;
         let data_kind = data_kind::parse(&self.data_kind).map(data_kind::to_proto)?;
         Ok(CollectionJobSpec {
             variant: self.variant.clone(),
-            scenario,
+            scenario_json,
             seed_strategy: Some(self.seed_strategy.to_proto()?),
             player_a: Some(self.player_a.to_proto()),
             player_b: Some(self.player_b.to_proto()),
@@ -109,10 +114,7 @@ impl CollectBody {
     fn from_json(c: &CollectSpecJson) -> Self {
         Self {
             variant: c.variant.clone(),
-            scenario: match bqs_proto::OpeningScenario::try_from(c.scenario) {
-                Ok(bqs_proto::OpeningScenario::ScenarioAllRevealed) => "all_revealed".into(),
-                _ => "standard".into(),
-            },
+            scenario: scenario_echo(&c.scenario_json),
             seed_strategy: SeedStrategyBody::from_json(&c.seed_strategy),
             player_a: c.player_a.clone(),
             player_b: c.player_b.clone(),
@@ -163,20 +165,12 @@ pub struct RatingBody {
 
     pub start_fens: Vec<String>,
 
-    pub scenario: String,
+    pub scenario: serde_json::Value,
 }
 
 impl RatingBody {
     fn to_proto(&self) -> Result<RatingJobSpec, String> {
-        let scenario = match self.scenario.as_str() {
-            "" | "standard" => bqs_proto::OpeningScenario::ScenarioStandard as i32,
-            "all_revealed" => bqs_proto::OpeningScenario::ScenarioAllRevealed as i32,
-            other => {
-                return Err(format!(
-                    "unknown scenario \"{other}\"（可选 standard/all_revealed）"
-                ));
-            }
-        };
+        let scenario_json = scenario_json_from_value(&self.scenario, &self.variant)?;
         let sprt_elo0 = self
             .sprt_elo0
             .ok_or("rating.sprtElo0 必填（后端不再提供 SPRT 默认值/回退）")?;
@@ -201,7 +195,7 @@ impl RatingBody {
             side_a: self.side_a.as_ref().map(|p| p.to_proto()),
             side_b: self.side_b.as_ref().map(|p| p.to_proto()),
             start_fens: self.start_fens.clone(),
-            scenario,
+            scenario_json,
         })
     }
 
@@ -219,10 +213,7 @@ impl RatingBody {
             side_a: Some(side_a),
             side_b: Some(side_b),
             start_fens: r.start_fens.clone(),
-            scenario: match bqs_proto::OpeningScenario::try_from(r.scenario) {
-                Ok(bqs_proto::OpeningScenario::ScenarioAllRevealed) => "all_revealed".into(),
-                _ => "standard".into(),
-            },
+            scenario: scenario_echo(&r.scenario_json),
         }
     }
 }
@@ -304,10 +295,57 @@ mod tests {
             side_a: None,
             side_b: None,
             start_fens: Vec::new(),
-            scenario: "standard".into(),
+            scenario: serde_json::Value::Null,
         };
         let err = body.to_proto().unwrap_err();
         assert!(err.contains("sprtElo0"), "{err}");
+    }
+
+    #[test]
+    fn scenario_shapes_map_to_json() {
+        for (input, want) in [
+            (serde_json::Value::Null, String::new()),
+            (serde_json::json!("standard"), String::new()),
+            (
+                serde_json::json!("all_revealed"),
+                r#"{"kind":"all_revealed"}"#.into(),
+            ),
+            (
+                serde_json::json!({"kind": "random_reveals", "count": 3}),
+                r#"{"kind":"random_reveals","count":3}"#.into(),
+            ),
+        ] {
+            let body = CollectBody {
+                variant: "4x8".into(),
+                scenario: input.clone(),
+                seed_strategy: SeedStrategyBody {
+                    kind: "fixed".into(),
+                    ..Default::default()
+                },
+                player_a: PlayerSpecJson::default(),
+                player_b: PlayerSpecJson::default(),
+                data_kind: "resnet".into(),
+                total_games: 2,
+                pairs_parallel: None,
+                pair_seed_refresh: None,
+                start_fens: Vec::new(),
+            };
+            let proto = body.to_proto().unwrap_or_else(|e| {
+                panic!("scenario {input} 应接受: {e}");
+            });
+            assert_eq!(proto.scenario_json, want, "scenario {input}");
+        }
+    }
+
+    #[test]
+    fn unknown_scenario_rejected() {
+        let body = CollectBody {
+            variant: "4x8".into(),
+            scenario: serde_json::json!({"kind": "no_such_scenario"}),
+            ..CollectBody::default()
+        };
+        let err = body.to_proto().unwrap_err();
+        assert!(err.contains("scenario"), "{err}");
     }
 }
 

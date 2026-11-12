@@ -310,7 +310,7 @@ impl JobSource {
             games,
             seed,
             spec.start_fens.clone(),
-            spec.scenario,
+            spec.scenario_json.clone(),
             req,
         )?;
         self.jobs.note_dispatch(

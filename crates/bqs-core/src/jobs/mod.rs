@@ -9,7 +9,7 @@ mod tests;
 
 pub use spec::{
     CollectSpecJson, JobSpecJson, PlayerSpecJson, RatingSpecJson, SearchSpecJson, SeedStrategyJson,
-    resolve_seed, valid_scenario,
+    canonical_scenario, resolve_seed, scenario_echo,
 };
 
 use std::collections::HashMap;

@@ -34,7 +34,7 @@ impl TaskAssembler {
             }),
             generation: Some(GenerationSpec {
                 variant: spec.variant.clone(),
-                scenario: spec.scenario,
+                scenario_json: spec.scenario_json.clone(),
                 seed: Some(seed),
                 data_kind: spec.data_kind,
                 games,
@@ -79,7 +79,7 @@ impl TaskAssembler {
         games: i64,
         seed: u64,
         start_fens: Vec<String>,
-        scenario: i32,
+        scenario_json: String,
         req: &TaskRequest,
     ) -> CoreResult<TaskResponse> {
         let data_kind = a_net
@@ -97,7 +97,7 @@ impl TaskAssembler {
             network_key: a_key.clone(),
             generation: Some(GenerationSpec {
                 variant: variant.to_string(),
-                scenario,
+                scenario_json,
                 data_kind,
                 games: games as u64,
 

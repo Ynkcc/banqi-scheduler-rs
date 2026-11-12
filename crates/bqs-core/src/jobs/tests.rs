@@ -45,7 +45,7 @@ fn collect_req(
         priority: 0,
         collect: Some(CollectionJobSpec {
             variant: variant.into(),
-            scenario: 0,
+            scenario_json: String::new(),
             seed_strategy: Some(SeedStrategy {
                 kind: SeedStrategyKind::SeedIncremental as i32,
                 base_seed: 1000,
@@ -663,7 +663,7 @@ fn rating_req(total: u64, candidate: &str, opponent: &str) -> SubmitJobRequest {
             side_a: None,
             side_b: None,
             start_fens: Vec::new(),
-            scenario: 0,
+            scenario_json: String::new(),
         }),
         ..Default::default()
     }
@@ -1156,7 +1156,7 @@ fn rating_scenario_validation() {
     e.f.networks.seed_network("cand", None, "onnx");
 
     let mut req = rating_req(20, "cand", "best");
-    req.rating.as_mut().unwrap().scenario = bqs_proto::OpeningScenario::ScenarioAllRevealed as i32;
+    req.rating.as_mut().unwrap().scenario_json = r#"{"kind":"all_revealed"}"#.into();
     let (ok, msg, id) = e.jobs.submit(&req).unwrap();
     assert!(ok, "{msg}");
     let row = e.jobs.get(&id).unwrap().unwrap();
@@ -1164,14 +1164,50 @@ fn rating_scenario_validation() {
         panic!("rating spec json");
     };
     assert_eq!(
-        spec.scenario,
-        bqs_proto::OpeningScenario::ScenarioAllRevealed as i32,
-        "scenario 须落库并在查询时回显"
+        spec.scenario_json, r#"{"kind":"all_revealed"}"#,
+        "场景 JSON 须落库并在查询时回显"
     );
 
     let mut req = rating_req(20, "cand", "best");
-    req.rating.as_mut().unwrap().scenario = 99;
+    req.rating.as_mut().unwrap().scenario_json = r#"{"kind":"no_such_scenario"}"#.into();
     let (ok, msg, _) = e.jobs.submit(&req).unwrap();
-    assert!(!ok, "rating 非法 scenario 应拒绝");
-    assert!(msg.contains("scenario 非法"), "{msg}");
+    assert!(!ok, "rating 未知场景应拒绝");
+    assert!(msg.contains("scenario_json"), "{msg}");
+
+    let mut req = rating_req(20, "cand", "best");
+    req.rating.as_mut().unwrap().variant = "4x4".into();
+    req.rating.as_mut().unwrap().scenario_json = r#"{"kind":"random_reveals","count":99}"#.into();
+    let (ok, msg, _) = e.jobs.submit(&req).unwrap();
+    assert!(!ok, "rating 越界场景参数应拒绝");
+    assert!(msg.contains("scenario"), "{msg}");
+}
+
+#[test]
+fn collect_scenario_passthrough_validation() {
+    let e = env("");
+    e.f.networks.seed_network("n1", None, "onnx");
+
+    for (input, want) in [
+        ("all_revealed", r#"{"kind":"all_revealed"}"#),
+        (
+            r#"{"kind":"random_reveals","count":3}"#,
+            r#"{"kind":"random_reveals","count":3}"#,
+        ),
+    ] {
+        let mut req = collect_req("4x8", 4, "", "random", "rule:capture_first");
+        req.collect.as_mut().unwrap().scenario_json = input.into();
+        let (ok, msg, id) = e.jobs.submit(&req).unwrap();
+        assert!(ok, "场景 {input} 应接受: {msg}");
+        let row = e.jobs.get(&id).unwrap().unwrap();
+        let JobSpecJson::Collect(spec) = JobSpecJson::parse(&row.spec_json).unwrap() else {
+            panic!("collect spec json");
+        };
+        assert_eq!(spec.scenario_json, want, "场景应规范化透传落库");
+    }
+
+    let mut req = collect_req("4x8", 4, "", "random", "rule:capture_first");
+    req.collect.as_mut().unwrap().scenario_json = r#"{"kind":"no_such"}"#.into();
+    let (ok, msg, _) = e.jobs.submit(&req).unwrap();
+    assert!(!ok, "collect 未知场景应拒绝");
+    assert!(msg.contains("scenario_json"), "{msg}");
 }
