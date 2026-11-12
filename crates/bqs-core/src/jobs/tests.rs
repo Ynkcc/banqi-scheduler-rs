@@ -902,6 +902,7 @@ fn rating_sides_submit_normalizes_and_freezes() {
                 network_sha: String::new(),
                 search: Some(bqs_proto::CollectSearchParams {
                     expectimax_node_budget: 1000,
+                    expectimax_chance_outcome_depth: Some(2),
                     ..Default::default()
                 }),
             },
@@ -925,8 +926,18 @@ fn rating_sides_submit_normalizes_and_freezes() {
         4000
     );
     assert_eq!(
+        spec.side_a.search.as_ref().unwrap().expectimax_chance_outcome_depth,
+        None,
+        "submit 未指定 k 时 spec 冻结应保持 None（派发时由 assembler 补默认）"
+    );
+    assert_eq!(
         spec.side_b.search.as_ref().unwrap().expectimax_node_budget,
         1000
+    );
+    assert_eq!(
+        spec.side_b.search.as_ref().unwrap().expectimax_chance_outcome_depth,
+        Some(2),
+        "显式指定的 k 应随 spec 冻结透传"
     );
 
     let m = e.f.matches.get_match(spec.match_id).unwrap().unwrap();

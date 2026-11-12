@@ -197,6 +197,8 @@ fn rating_dispatch_with_sides_and_non_network_opponent() {
                     network_sha: "cand".into(),
                     search: Some(bqs_proto::CollectSearchParams {
                         expectimax_node_budget: 4000,
+
+                        expectimax_chance_outcome_depth: Some(0),
                         ..Default::default()
                     }),
                 }),
@@ -241,11 +243,23 @@ fn rating_dispatch_with_sides_and_non_network_opponent() {
     let sa = sides.player_a.unwrap();
     assert_eq!(sa.kind, "expectimax_nnue");
     assert_eq!(sa.network_sha, "cand");
-    assert_eq!(sa.search.unwrap().expectimax_node_budget, 4000);
+    let sa_search = sa.search.unwrap();
+    assert_eq!(sa_search.expectimax_node_budget, 4000);
+    assert_eq!(
+        sa_search.expectimax_chance_outcome_depth,
+        Some(0),
+        "显式 k=0 覆盖应被尊重"
+    );
     let sb = sides.player_b.unwrap();
     assert_eq!(sb.kind, "rule:capture_first");
     assert_eq!(sb.network_sha, "");
-    assert_eq!(sb.search.unwrap().expectimax_node_budget, 1000);
+    let sb_search = sb.search.unwrap();
+    assert_eq!(sb_search.expectimax_node_budget, 1000);
+    assert_eq!(
+        sb_search.expectimax_chance_outcome_depth,
+        Some(0),
+        "search 段未指定 k 时应补调度器默认值"
+    );
 
     let t = e.src.disp.lookup(&resp.task_id).unwrap();
     assert_eq!(t.opponent_sha, "");
@@ -305,8 +319,7 @@ fn collect_dispatch_generation_snapshot() {
     let g = resp.generation.clone().expect("generation");
     assert_eq!(g.variant, "4x8");
     assert_eq!(
-        g.scenario_json,
-        r#"{"kind":"all_revealed"}"#,
+        g.scenario_json, r#"{"kind":"all_revealed"}"#,
         "场景 JSON 应透传到任务下发"
     );
     assert_eq!(g.seed, Some(1000), "INCREMENTAL base_seed + seq=0");

@@ -146,8 +146,7 @@ fn rating_task_assembly() {
     assert_eq!(g.games, 8);
     assert_eq!(g.start_fens, fens, "rating 任务须携带 start_fens");
     assert_eq!(
-        g.scenario_json,
-        r#"{"kind":"all_revealed"}"#,
+        g.scenario_json, r#"{"kind":"all_revealed"}"#,
         "rating 任务须携带场景 JSON 透传"
     );
     assert_eq!(
@@ -302,5 +301,51 @@ fn collect_task_fills_network_keys() {
     assert_eq!(
         resp.network_url, "get:networks/best-nnue.nnue",
         "worker 未持有时应签下载 URL"
+    );
+}
+
+#[test]
+fn collect_task_fills_chance_outcome_depth_default_and_explicit_zero() {
+    let f = Fakes::new();
+    let asm = assembler(&f);
+    let req = TaskRequest {
+        threads: 4,
+        ..Default::default()
+    };
+    let player_search_of = |json: &str| -> Option<i32> {
+        let parsed = crate::jobs::JobSpecJson::parse(json).expect("collect spec json 应可解析");
+        let crate::jobs::JobSpecJson::Collect(spec) = parsed else {
+            panic!("应为 collect spec");
+        };
+        let resp = asm
+            .collect_task("t", &req, &spec.to_proto(), 2, 42, 1000, None, None)
+            .unwrap();
+        let g = gen_spec(&resp);
+        match g.behavior.expect("behavior 缺省") {
+            bqs_proto::generation_spec::Behavior::Plays(p) => {
+                p.player_a
+                    .expect("player_a 缺省")
+                    .search
+                    .expect("search 缺省")
+                    .expectimax_chance_outcome_depth
+            }
+            _ => panic!("expected plays behavior"),
+        }
+    };
+
+    let no_k = r#"{"collect":{"variant":"4x8","totalGames":2,
+        "playerA":{"kind":"expectimax_nnue","networkSha":"sha","search":{"expectimaxNodeBudget":500000,"expectimaxMaxDepth":8}}}}"#;
+    assert_eq!(
+        player_search_of(no_k),
+        Some(0),
+        "search 段只写部分字段时 k 应补调度器默认值 0"
+    );
+
+    let explicit_zero = r#"{"collect":{"variant":"4x8","totalGames":2,
+        "playerA":{"kind":"expectimax_nnue","networkSha":"sha","search":{"expectimaxNodeBudget":500000,"expectimaxMaxDepth":8,"expectimaxChanceOutcomeDepth":0}}}}"#;
+    assert_eq!(
+        player_search_of(explicit_zero),
+        Some(0),
+        "显式 expectimaxChanceOutcomeDepth=0 应被尊重"
     );
 }

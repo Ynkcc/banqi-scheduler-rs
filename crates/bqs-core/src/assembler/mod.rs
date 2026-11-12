@@ -60,12 +60,23 @@ impl TaskAssembler {
             health_confidence_exp: d.health_confidence_exp,
             expl_mode: d.expl_mode.clone(),
             expectimax_root_fullwidth: d.expectimax_root_fullwidth,
+            expectimax_chance_outcome_depth: Some(d.expectimax_chance_outcome_depth),
         }
     }
 
     pub fn player_with_search(&self, p: CollectPlayerSpec) -> CollectPlayerSpec {
         CollectPlayerSpec {
-            search: Some(p.search.unwrap_or_else(|| self.default_search())),
+            search: Some(match p.search {
+                None => self.default_search(),
+
+                Some(mut s) => {
+                    if s.expectimax_chance_outcome_depth.is_none() {
+                        s.expectimax_chance_outcome_depth =
+                            Some(self.cfg.selfplay.search.expectimax_chance_outcome_depth);
+                    }
+                    s
+                }
+            }),
             ..p
         }
     }
