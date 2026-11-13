@@ -159,6 +159,8 @@ pub struct RatingBody {
     pub sprt_alpha: Option<f64>,
     pub sprt_beta: Option<f64>,
 
+    pub disable_sprt: bool,
+
     pub side_a: Option<PlayerSpecJson>,
 
     pub side_b: Option<PlayerSpecJson>,
@@ -192,6 +194,7 @@ impl RatingBody {
             sprt_elo1,
             sprt_alpha,
             sprt_beta,
+            disable_sprt: self.disable_sprt,
             side_a: self.side_a.as_ref().map(|p| p.to_proto()),
             side_b: self.side_b.as_ref().map(|p| p.to_proto()),
             start_fens: self.start_fens.clone(),
@@ -210,6 +213,7 @@ impl RatingBody {
             sprt_elo1: Some(r.sprt_elo1),
             sprt_alpha: Some(r.sprt_alpha),
             sprt_beta: Some(r.sprt_beta),
+            disable_sprt: r.disable_sprt,
             side_a: Some(side_a),
             side_b: Some(side_b),
             start_fens: r.start_fens.clone(),
@@ -292,6 +296,7 @@ mod tests {
             sprt_elo1: Some(30.0),
             sprt_alpha: Some(0.05),
             sprt_beta: Some(0.05),
+            disable_sprt: false,
             side_a: None,
             side_b: None,
             start_fens: Vec::new(),

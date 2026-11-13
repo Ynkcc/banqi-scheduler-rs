@@ -178,22 +178,31 @@ impl JobManager {
             validate_start_fens(&r.start_fens, resolved)?;
         }
 
-        if r.total_games != 0 && (r.total_games < 2 || r.total_games % 2 != 0) {
-            return Err(format!(
-                "rating.total_games 必须为 0（仅 SPRT 判停）或 ≥2 且为偶数，当前 {}",
-                r.total_games
-            ));
-        }
+        if r.disable_sprt {
+            if r.total_games < 2 || r.total_games % 2 != 0 {
+                return Err(format!(
+                    "rating.disable_sprt=true 时 total_games 必须 ≥2 且为偶数，当前 {}",
+                    r.total_games
+                ));
+            }
+        } else {
+            if r.total_games != 0 && (r.total_games < 2 || r.total_games % 2 != 0) {
+                return Err(format!(
+                    "rating.total_games 必须为 0（仅 SPRT 判停）或 ≥2 且为偶数，当前 {}",
+                    r.total_games
+                ));
+            }
 
-        if r.sprt_elo1 <= r.sprt_elo0 {
-            return Err(format!(
-                "rating.sprt_elo1 ({}) 必须大于 rating.sprt_elo0 ({})",
-                r.sprt_elo1, r.sprt_elo0
-            ));
-        }
-        for (name, v) in [("alpha", r.sprt_alpha), ("beta", r.sprt_beta)] {
-            if !(0.0 < v && v < 1.0) {
-                return Err(format!("rating.sprt_{name} 必须在 (0,1)，当前 {v}"));
+            if r.sprt_elo1 <= r.sprt_elo0 {
+                return Err(format!(
+                    "rating.sprt_elo1 ({}) 必须大于 rating.sprt_elo0 ({})",
+                    r.sprt_elo1, r.sprt_elo0
+                ));
+            }
+            for (name, v) in [("alpha", r.sprt_alpha), ("beta", r.sprt_beta)] {
+                if !(0.0 < v && v < 1.0) {
+                    return Err(format!("rating.sprt_{name} 必须在 (0,1)，当前 {v}"));
+                }
             }
         }
 

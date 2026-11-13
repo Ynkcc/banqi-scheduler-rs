@@ -660,10 +660,7 @@ fn rating_req(total: u64, candidate: &str, opponent: &str) -> SubmitJobRequest {
             sprt_elo1: 15.0,
             sprt_alpha: 0.05,
             sprt_beta: 0.05,
-            side_a: None,
-            side_b: None,
-            start_fens: Vec::new(),
-            scenario_json: String::new(),
+            ..Default::default()
         }),
         ..Default::default()
     }

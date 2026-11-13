@@ -127,6 +127,40 @@ impl ReportRouter {
             tracing::warn!("[job] ⚠️ rating 上报聚合失败 task={}: {e}", req.task_id);
         }
 
+        if spec.disable_sprt {
+            let cap_reached = spec.total_games > 0 && agg.num_games >= spec.total_games as i64;
+            let mut concluded = false;
+            if cap_reached {
+                concluded = self.matches.conclude_match_with_stats(
+                    m.id,
+                    crate::types::MatchConclusion {
+                        verdict: "cap".to_string(),
+                        llr: 0.0,
+                        sprt_elo0: spec.sprt_elo0,
+                        sprt_elo1: spec.sprt_elo1,
+                        sprt_alpha: spec.sprt_alpha,
+                        sprt_beta: spec.sprt_beta,
+                    },
+                )?;
+            }
+            if concluded {
+                self.jobs.complete_rating_job(&task.job_id)?;
+            }
+            tracing::info!(
+                "[rating] match={} job={} sprt=disabled cap={} concluded={concluded} pairs={}",
+                m.id,
+                task.job_id,
+                cap_reached,
+                agg.pairs.labeled()
+            );
+            return Ok(MatchResultAck {
+                accepted: true,
+                message: String::new(),
+                match_concluded: concluded,
+                ..Default::default()
+            });
+        }
+
         if spec.sprt_elo1 <= spec.sprt_elo0
             || !(0.0 < spec.sprt_alpha && spec.sprt_alpha < 1.0)
             || !(0.0 < spec.sprt_beta && spec.sprt_beta < 1.0)
@@ -257,6 +291,10 @@ mod tests {
     }
 
     fn seed_rating_job(e: &Env, total: u64) -> (String, i64) {
+        seed_rating_job_opts(e, total, false)
+    }
+
+    fn seed_rating_job_opts(e: &Env, total: u64, disable_sprt: bool) -> (String, i64) {
         e.f.networks.seed_network("cand", None, "onnx");
         e.f.networks.seed_network("fixed", None, "onnx");
         let req = SubmitJobRequest {
@@ -272,6 +310,7 @@ mod tests {
                 sprt_elo1: 15.0,
                 sprt_alpha: 0.05,
                 sprt_beta: 0.05,
+                disable_sprt,
                 ..Default::default()
             }),
             ..Default::default()
@@ -412,6 +451,57 @@ mod tests {
             .unwrap();
         assert!(!ack.accepted);
         assert!(ack.message.contains("not_running"), "{}", ack.message);
+    }
+
+    #[test]
+    fn rating_disable_sprt_runs_to_cap() {
+        let e = env();
+        let (job_id, match_id) = seed_rating_job_opts(&e, 20, true);
+        assign_rating_task(&e, "rt1", &job_id, match_id, "w1");
+
+        let ack = e
+            .router
+            .route(&rating_result("w1", "rt1", [0, 0, 0, 0, 0, 8], 16))
+            .unwrap();
+        assert!(ack.accepted && !ack.match_concluded);
+        assert_eq!(e.jobs.get(&job_id).unwrap().unwrap().state, "running");
+
+        assign_rating_task(&e, "rt2", &job_id, match_id, "w1");
+        let ack = e
+            .router
+            .route(&rating_result("w1", "rt2", [0, 0, 0, 0, 0, 2], 4))
+            .unwrap();
+        assert!(ack.accepted && ack.match_concluded);
+        assert_eq!(e.jobs.get(&job_id).unwrap().unwrap().state, "completed");
+        let m = e.f.matches.get_match(match_id).unwrap().unwrap();
+        assert_eq!(m.num_games, 20);
+        let conclusion = m.conclusion.expect("cap conclusion");
+        assert_eq!(conclusion.verdict, "cap");
+    }
+
+    #[test]
+    fn rating_disable_sprt_requires_total_games() {
+        let e = env();
+        e.f.networks.seed_network("cand", None, "onnx");
+        e.f.networks.seed_network("fixed", None, "onnx");
+        let (ok, msg, _job_id) = e
+            .jobs
+            .submit(&SubmitJobRequest {
+                requester: "test".into(),
+                kind: JobKind::JobRating as i32,
+                priority: 0,
+                rating: Some(RatingJobSpec {
+                    candidate_sha: "cand".into(),
+                    opponent_sha: "fixed".into(),
+                    total_games: 0,
+                    disable_sprt: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(!ok, "禁用 SPRT 且 total_games=0 应拒绝提交");
+        assert!(msg.contains("total_games"), "{}", msg);
     }
 
     #[test]

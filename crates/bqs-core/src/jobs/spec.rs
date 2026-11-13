@@ -294,6 +294,9 @@ pub struct RatingSpecJson {
     pub sprt_alpha: f64,
     #[serde(alias = "sprt_beta")]
     pub sprt_beta: f64,
+
+    #[serde(alias = "disable_sprt")]
+    pub disable_sprt: bool,
     #[serde(alias = "side_a")]
     pub side_a: PlayerSpecJson,
     #[serde(alias = "side_b")]
@@ -320,6 +323,7 @@ impl RatingSpecJson {
             sprt_elo1: s.sprt_elo1,
             sprt_alpha: s.sprt_alpha,
             sprt_beta: s.sprt_beta,
+            disable_sprt: s.disable_sprt,
             side_a: PlayerSpecJson::default(),
             side_b: PlayerSpecJson::default(),
             match_id: 0,
@@ -371,6 +375,7 @@ impl RatingSpecJson {
             sprt_elo1: self.sprt_elo1,
             sprt_alpha: self.sprt_alpha,
             sprt_beta: self.sprt_beta,
+            disable_sprt: self.disable_sprt,
             side_a: Some(side_a.to_proto()),
             side_b: Some(side_b.to_proto()),
             start_fens: self.start_fens.clone(),

@@ -381,6 +381,8 @@ message RatingJobSpec {
   reserved 12; // 曾为 OpeningScenario 枚举；场景改为 scenario_json 透传后废弃
   // 开局场景透传：banqi-core OpeningScenario 的 serde JSON（空串 = standard）
   string scenario_json = 13;
+  // 禁用 SPRT 提前判定：true 时按 total_games 跑满后以 "cap" 结论收尾（默认 false = 启用 SPRT）
+  bool disable_sprt = 14;
 }
 
 message SubmitJobRequest {

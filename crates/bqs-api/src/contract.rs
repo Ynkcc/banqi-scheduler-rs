@@ -256,8 +256,9 @@ fn episode_views() {
         items: vec![],
         next_before: 0,
         has_more: false,
+        total: 0,
     };
-    assert_keys(&keys(&page), &["items", "nextBefore", "hasMore"]);
+    assert_keys(&keys(&page), &["items", "nextBefore", "hasMore", "total"]);
 }
 
 #[test]
