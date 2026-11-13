@@ -145,6 +145,8 @@ pub struct SearchDefaults {
     pub expectimax_root_fullwidth: bool,
 
     pub expectimax_chance_outcome_depth: i32,
+
+    pub expectimax_chance_budget_ratio: f64,
 }
 
 impl Default for SearchDefaults {
@@ -174,6 +176,7 @@ impl Default for SearchDefaults {
             expectimax_root_fullwidth: true,
 
             expectimax_chance_outcome_depth: 0,
+            expectimax_chance_budget_ratio: 0.25,
         }
     }
 }

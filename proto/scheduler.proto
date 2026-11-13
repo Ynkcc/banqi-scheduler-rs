@@ -334,6 +334,9 @@ message CollectSearchParams {
   // 机会节点前瞻深度 k（Chance.outcome_depth）：0 = k=0 现语义；optional 表达 presence，
   // 必传由调度器组装保证（collector 收到 None 时显式报错 fail fast）。
   optional int32 expectimax_chance_outcome_depth = 26;
+  // 机会子树预算占 node_budget 的比例（Chance 预算隔离）：0-1，仅 k>=1 时生效；
+  // optional 表达 presence，必传由调度器组装保证（collector 收到 None 时显式报错 fail fast）。
+  optional float expectimax_chance_budget_ratio = 27;
 }
 
 message CollectionJobSpec {

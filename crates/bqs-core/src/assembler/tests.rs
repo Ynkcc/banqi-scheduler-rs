@@ -349,3 +349,49 @@ fn collect_task_fills_chance_outcome_depth_default_and_explicit_zero() {
         "显式 expectimaxChanceOutcomeDepth=0 应被尊重"
     );
 }
+
+#[test]
+fn collect_task_fills_chance_budget_ratio_default_and_explicit_zero() {
+    let f = Fakes::new();
+    let asm = assembler(&f);
+    let req = TaskRequest {
+        threads: 4,
+        ..Default::default()
+    };
+    let player_search_of = |json: &str| -> Option<f32> {
+        let parsed = crate::jobs::JobSpecJson::parse(json).expect("collect spec json 应可解析");
+        let crate::jobs::JobSpecJson::Collect(spec) = parsed else {
+            panic!("应为 collect spec");
+        };
+        let resp = asm
+            .collect_task("t", &req, &spec.to_proto(), 2, 42, 1000, None, None)
+            .unwrap();
+        let g = gen_spec(&resp);
+        match g.behavior.expect("behavior 缺省") {
+            bqs_proto::generation_spec::Behavior::Plays(p) => {
+                p.player_a
+                    .expect("player_a 缺省")
+                    .search
+                    .expect("search 缺省")
+                    .expectimax_chance_budget_ratio
+            }
+            _ => panic!("expected plays behavior"),
+        }
+    };
+
+    let no_ratio = r#"{"collect":{"variant":"4x8","totalGames":2,
+        "playerA":{"kind":"expectimax_nnue","networkSha":"sha","search":{"expectimaxNodeBudget":500000,"expectimaxMaxDepth":8}}}}"#;
+    assert_eq!(
+        player_search_of(no_ratio),
+        Some(0.25),
+        "search 段只写部分字段时 ratio 应补调度器默认值 0.25"
+    );
+
+    let explicit_zero = r#"{"collect":{"variant":"4x8","totalGames":2,
+        "playerA":{"kind":"expectimax_nnue","networkSha":"sha","search":{"expectimaxNodeBudget":500000,"expectimaxMaxDepth":8,"expectimaxChanceBudgetRatio":0}}}}"#;
+    assert_eq!(
+        player_search_of(explicit_zero),
+        Some(0.0),
+        "显式 expectimaxChanceBudgetRatio=0 应被尊重（0 = 无 chance 预算隔离）"
+    );
+}

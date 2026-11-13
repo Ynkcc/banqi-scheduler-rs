@@ -61,6 +61,7 @@ impl TaskAssembler {
             expl_mode: d.expl_mode.clone(),
             expectimax_root_fullwidth: d.expectimax_root_fullwidth,
             expectimax_chance_outcome_depth: Some(d.expectimax_chance_outcome_depth),
+            expectimax_chance_budget_ratio: Some(d.expectimax_chance_budget_ratio as f32),
         }
     }
 
@@ -73,6 +74,10 @@ impl TaskAssembler {
                     if s.expectimax_chance_outcome_depth.is_none() {
                         s.expectimax_chance_outcome_depth =
                             Some(self.cfg.selfplay.search.expectimax_chance_outcome_depth);
+                    }
+                    if s.expectimax_chance_budget_ratio.is_none() {
+                        s.expectimax_chance_budget_ratio =
+                            Some(self.cfg.selfplay.search.expectimax_chance_budget_ratio as f32);
                     }
                     s
                 }

@@ -923,7 +923,11 @@ fn rating_sides_submit_normalizes_and_freezes() {
         4000
     );
     assert_eq!(
-        spec.side_a.search.as_ref().unwrap().expectimax_chance_outcome_depth,
+        spec.side_a
+            .search
+            .as_ref()
+            .unwrap()
+            .expectimax_chance_outcome_depth,
         None,
         "submit 未指定 k 时 spec 冻结应保持 None（派发时由 assembler 补默认）"
     );
@@ -932,7 +936,11 @@ fn rating_sides_submit_normalizes_and_freezes() {
         1000
     );
     assert_eq!(
-        spec.side_b.search.as_ref().unwrap().expectimax_chance_outcome_depth,
+        spec.side_b
+            .search
+            .as_ref()
+            .unwrap()
+            .expectimax_chance_outcome_depth,
         Some(2),
         "显式指定的 k 应随 spec 冻结透传"
     );
@@ -940,6 +948,99 @@ fn rating_sides_submit_normalizes_and_freezes() {
     let m = e.f.matches.get_match(spec.match_id).unwrap().unwrap();
     assert_eq!(m.candidate, "best");
     assert_eq!(m.opponent, "");
+}
+
+#[test]
+fn rating_sides_submit_freezes_chance_budget_ratio() {
+    let e = env("");
+    e.f.networks.seed_network("best", None, "onnx");
+    e.f.networks.seed_network("cand", None, "onnx");
+
+    let req = sides_rating_req(
+        Some((
+            CollectPlayerSpec {
+                kind: "expectimax_nnue".into(),
+                network_sha: "best".into(),
+                search: Some(bqs_proto::CollectSearchParams {
+                    expectimax_node_budget: 4000,
+                    expectimax_chance_budget_ratio: Some(0.4),
+                    ..Default::default()
+                }),
+            },
+            CollectPlayerSpec {
+                kind: "expectimax_nnue".into(),
+                network_sha: "cand".into(),
+                search: Some(bqs_proto::CollectSearchParams {
+                    expectimax_node_budget: 1000,
+                    expectimax_chance_budget_ratio: Some(0.0),
+                    ..Default::default()
+                }),
+            },
+        )),
+        20,
+    );
+    let (ok, msg, id) = e.jobs.submit(&req).unwrap();
+    assert!(ok, "{msg}");
+    let row = e.jobs.get(&id).unwrap().unwrap();
+    let JobSpecJson::Rating(spec) = JobSpecJson::parse(&row.spec_json).unwrap() else {
+        panic!("rating spec json");
+    };
+
+    let ratio_a = spec
+        .side_a
+        .search
+        .as_ref()
+        .unwrap()
+        .expectimax_chance_budget_ratio
+        .expect("显式 ratio 应随 spec 冻结透传");
+    assert!(
+        (ratio_a - 0.4).abs() < 1e-6,
+        "显式 ratio 应随 spec 冻结透传（f32 往返误差可忽略）"
+    );
+    let ratio_b = spec
+        .side_b
+        .search
+        .as_ref()
+        .unwrap()
+        .expectimax_chance_budget_ratio
+        .expect("显式 ratio=0.0 应被尊重（0 预算隔离语义）");
+    assert_eq!(ratio_b, 0.0, "显式 ratio=0.0 应被尊重（0 预算隔离语义）");
+
+    let req = sides_rating_req(
+        Some((
+            CollectPlayerSpec {
+                kind: "expectimax_nnue".into(),
+                network_sha: "best".into(),
+                search: Some(bqs_proto::CollectSearchParams {
+                    expectimax_node_budget: 4000,
+                    ..Default::default()
+                }),
+            },
+            CollectPlayerSpec {
+                kind: "expectimax_nnue".into(),
+                network_sha: "cand".into(),
+                search: Some(bqs_proto::CollectSearchParams {
+                    expectimax_node_budget: 1000,
+                    ..Default::default()
+                }),
+            },
+        )),
+        20,
+    );
+    let (ok, msg, id) = e.jobs.submit(&req).unwrap();
+    assert!(ok, "{msg}");
+    let row = e.jobs.get(&id).unwrap().unwrap();
+    let JobSpecJson::Rating(spec) = JobSpecJson::parse(&row.spec_json).unwrap() else {
+        panic!("rating spec json");
+    };
+    assert_eq!(
+        spec.side_a
+            .search
+            .as_ref()
+            .and_then(|s| s.expectimax_chance_budget_ratio),
+        None,
+        "submit 未指定 ratio 时 spec 冻结应保持 None（派发时由 assembler 补默认）"
+    );
 }
 
 #[test]

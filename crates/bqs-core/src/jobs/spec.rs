@@ -54,6 +54,9 @@ pub struct SearchSpecJson {
 
     #[serde(alias = "expectimax_chance_outcome_depth")]
     pub expectimax_chance_outcome_depth: Option<i32>,
+
+    #[serde(alias = "expectimax_chance_budget_ratio")]
+    pub expectimax_chance_budget_ratio: Option<f64>,
 }
 
 impl SearchSpecJson {
@@ -84,6 +87,9 @@ impl SearchSpecJson {
                 expl_mode: s.expl_mode,
                 expectimax_root_fullwidth: s.expectimax_root_fullwidth,
                 expectimax_chance_outcome_depth: s.expectimax_chance_outcome_depth,
+                expectimax_chance_budget_ratio: s
+                    .expectimax_chance_budget_ratio
+                    .map(|v| v as f64),
             },
             None => Self::default(),
         }
@@ -114,6 +120,7 @@ impl SearchSpecJson {
             && self.expl_mode.is_empty()
             && !self.expectimax_root_fullwidth
             && self.expectimax_chance_outcome_depth.is_none()
+            && self.expectimax_chance_budget_ratio.is_none()
     }
 
     pub fn to_proto(&self) -> Option<CollectSearchParams> {
@@ -146,6 +153,9 @@ impl SearchSpecJson {
             expl_mode: s.expl_mode.clone(),
             expectimax_root_fullwidth: s.expectimax_root_fullwidth,
             expectimax_chance_outcome_depth: s.expectimax_chance_outcome_depth,
+            expectimax_chance_budget_ratio: s
+                .expectimax_chance_budget_ratio
+                .map(|v| v as f32),
         })
     }
 }
