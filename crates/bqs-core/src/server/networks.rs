@@ -39,7 +39,7 @@ fn normalize_format(format: &str) -> Result<String, String> {
         Ok(f)
     } else {
         Err(format!(
-            "unsupported_format=\"{format}\" (want onnx/pt/nnue)"
+            "unsupported_format=\"{format}\" (want onnx/pt/nnue/bqdmq)"
         ))
     }
 }
