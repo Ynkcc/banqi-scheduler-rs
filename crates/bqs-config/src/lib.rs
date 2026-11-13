@@ -134,8 +134,8 @@ pub struct SearchDefaults {
     pub health_enabled: bool,
     pub health_weight: f64,
     pub health_confidence_exp: f64,
-    pub expectimax_node_budget: u64,
-    pub expectimax_max_depth: u32,
+    #[serde(alias = "expectimax_max_depth")]
+    pub expectimax_deterministic_depth: u32,
     pub expl_enabled: bool,
     pub expl_topk: u32,
     pub expl_mode: String,
@@ -145,8 +145,6 @@ pub struct SearchDefaults {
     pub expectimax_root_fullwidth: bool,
 
     pub expectimax_chance_outcome_depth: i32,
-
-    pub expectimax_chance_budget_ratio: f64,
 }
 
 impl Default for SearchDefaults {
@@ -165,8 +163,7 @@ impl Default for SearchDefaults {
             health_enabled: false,
             health_weight: 0.0,
             health_confidence_exp: 0.0,
-            expectimax_node_budget: 500_000,
-            expectimax_max_depth: 8,
+            expectimax_deterministic_depth: 8,
             expl_enabled: false,
             expl_topk: 8,
             expl_mode: "gumbel".into(),
@@ -176,7 +173,6 @@ impl Default for SearchDefaults {
             expectimax_root_fullwidth: true,
 
             expectimax_chance_outcome_depth: 0,
-            expectimax_chance_budget_ratio: 0.25,
         }
     }
 }

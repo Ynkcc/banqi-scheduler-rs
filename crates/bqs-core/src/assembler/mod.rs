@@ -43,8 +43,7 @@ impl TaskAssembler {
             mcts_gumbel_scale: d.mcts_gumbel_scale,
             temperature: 0.0,
             playout_cap_random: d.playout_cap_random,
-            expectimax_node_budget: d.expectimax_node_budget,
-            expectimax_max_depth: d.expectimax_max_depth,
+            expectimax_deterministic_depth: d.expectimax_deterministic_depth,
             expl_enabled: d.expl_enabled,
             expl_topk: d.expl_topk,
             expl_temp_start: d.expl_temp_start,
@@ -61,7 +60,6 @@ impl TaskAssembler {
             expl_mode: d.expl_mode.clone(),
             expectimax_root_fullwidth: d.expectimax_root_fullwidth,
             expectimax_chance_outcome_depth: Some(d.expectimax_chance_outcome_depth),
-            expectimax_chance_budget_ratio: Some(d.expectimax_chance_budget_ratio as f32),
         }
     }
 
@@ -74,10 +72,6 @@ impl TaskAssembler {
                     if s.expectimax_chance_outcome_depth.is_none() {
                         s.expectimax_chance_outcome_depth =
                             Some(self.cfg.selfplay.search.expectimax_chance_outcome_depth);
-                    }
-                    if s.expectimax_chance_budget_ratio.is_none() {
-                        s.expectimax_chance_budget_ratio =
-                            Some(self.cfg.selfplay.search.expectimax_chance_budget_ratio as f32);
                     }
                     s
                 }

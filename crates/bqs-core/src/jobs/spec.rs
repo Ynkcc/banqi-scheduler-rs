@@ -17,10 +17,10 @@ pub struct SearchSpecJson {
     pub temperature: f32,
     #[serde(alias = "playout_cap_random")]
     pub playout_cap_random: bool,
-    #[serde(alias = "expectimax_node_budget")]
-    pub expectimax_node_budget: u64,
+    #[serde(alias = "expectimax_deterministic_depth")]
     #[serde(alias = "expectimax_max_depth")]
-    pub expectimax_max_depth: u32,
+    #[serde(alias = "expectimaxMaxDepth")]
+    pub expectimax_deterministic_depth: u32,
     #[serde(alias = "expl_enabled")]
     pub expl_enabled: bool,
     #[serde(alias = "expl_topk")]
@@ -54,9 +54,6 @@ pub struct SearchSpecJson {
 
     #[serde(alias = "expectimax_chance_outcome_depth")]
     pub expectimax_chance_outcome_depth: Option<i32>,
-
-    #[serde(alias = "expectimax_chance_budget_ratio")]
-    pub expectimax_chance_budget_ratio: Option<f64>,
 }
 
 impl SearchSpecJson {
@@ -69,8 +66,7 @@ impl SearchSpecJson {
                 mcts_gumbel_scale: s.mcts_gumbel_scale,
                 temperature: s.temperature,
                 playout_cap_random: s.playout_cap_random,
-                expectimax_node_budget: s.expectimax_node_budget,
-                expectimax_max_depth: s.expectimax_max_depth,
+                expectimax_deterministic_depth: s.expectimax_deterministic_depth,
                 expl_enabled: s.expl_enabled,
                 expl_topk: s.expl_topk,
                 expl_temp_start: s.expl_temp_start,
@@ -87,9 +83,6 @@ impl SearchSpecJson {
                 expl_mode: s.expl_mode,
                 expectimax_root_fullwidth: s.expectimax_root_fullwidth,
                 expectimax_chance_outcome_depth: s.expectimax_chance_outcome_depth,
-                expectimax_chance_budget_ratio: s
-                    .expectimax_chance_budget_ratio
-                    .map(|v| v as f64),
             },
             None => Self::default(),
         }
@@ -102,8 +95,7 @@ impl SearchSpecJson {
             && self.mcts_gumbel_scale == 0.0
             && self.temperature == 0.0
             && !self.playout_cap_random
-            && self.expectimax_node_budget == 0
-            && self.expectimax_max_depth == 0
+            && self.expectimax_deterministic_depth == 0
             && !self.expl_enabled
             && self.expl_topk == 0
             && self.expl_temp_start == 0.0
@@ -120,7 +112,6 @@ impl SearchSpecJson {
             && self.expl_mode.is_empty()
             && !self.expectimax_root_fullwidth
             && self.expectimax_chance_outcome_depth.is_none()
-            && self.expectimax_chance_budget_ratio.is_none()
     }
 
     pub fn to_proto(&self) -> Option<CollectSearchParams> {
@@ -135,8 +126,7 @@ impl SearchSpecJson {
             mcts_gumbel_scale: s.mcts_gumbel_scale,
             temperature: s.temperature,
             playout_cap_random: s.playout_cap_random,
-            expectimax_node_budget: s.expectimax_node_budget,
-            expectimax_max_depth: s.expectimax_max_depth,
+            expectimax_deterministic_depth: s.expectimax_deterministic_depth,
             expl_enabled: s.expl_enabled,
             expl_topk: s.expl_topk,
             expl_temp_start: s.expl_temp_start,
@@ -153,9 +143,6 @@ impl SearchSpecJson {
             expl_mode: s.expl_mode.clone(),
             expectimax_root_fullwidth: s.expectimax_root_fullwidth,
             expectimax_chance_outcome_depth: s.expectimax_chance_outcome_depth,
-            expectimax_chance_budget_ratio: s
-                .expectimax_chance_budget_ratio
-                .map(|v| v as f32),
         })
     }
 }

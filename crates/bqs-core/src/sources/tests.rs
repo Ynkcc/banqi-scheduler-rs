@@ -196,7 +196,7 @@ fn rating_dispatch_with_sides_and_non_network_opponent() {
                     kind: "expectimax_nnue".into(),
                     network_sha: "cand".into(),
                     search: Some(bqs_proto::CollectSearchParams {
-                        expectimax_node_budget: 4000,
+                        expectimax_deterministic_depth: 8,
 
                         expectimax_chance_outcome_depth: Some(0),
                         ..Default::default()
@@ -206,7 +206,7 @@ fn rating_dispatch_with_sides_and_non_network_opponent() {
                     kind: "rule:capture_first".into(),
                     network_sha: String::new(),
                     search: Some(bqs_proto::CollectSearchParams {
-                        expectimax_node_budget: 1000,
+                        expectimax_deterministic_depth: 4,
                         ..Default::default()
                     }),
                 }),
@@ -244,7 +244,7 @@ fn rating_dispatch_with_sides_and_non_network_opponent() {
     assert_eq!(sa.kind, "expectimax_nnue");
     assert_eq!(sa.network_sha, "cand");
     let sa_search = sa.search.unwrap();
-    assert_eq!(sa_search.expectimax_node_budget, 4000);
+    assert_eq!(sa_search.expectimax_deterministic_depth, 8);
     assert_eq!(
         sa_search.expectimax_chance_outcome_depth,
         Some(0),
@@ -254,7 +254,7 @@ fn rating_dispatch_with_sides_and_non_network_opponent() {
     assert_eq!(sb.kind, "rule:capture_first");
     assert_eq!(sb.network_sha, "");
     let sb_search = sb.search.unwrap();
-    assert_eq!(sb_search.expectimax_node_budget, 1000);
+    assert_eq!(sb_search.expectimax_deterministic_depth, 4);
     assert_eq!(
         sb_search.expectimax_chance_outcome_depth,
         Some(0),
