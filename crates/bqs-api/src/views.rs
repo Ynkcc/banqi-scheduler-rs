@@ -357,6 +357,9 @@ pub struct EpisodePageView {
     pub next_before: i64,
     #[serde(rename = "hasMore")]
     pub has_more: bool,
+
+    #[serde(rename = "total")]
+    pub total: i64,
 }
 
 #[derive(Debug, Serialize)]

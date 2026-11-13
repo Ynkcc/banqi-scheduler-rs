@@ -166,31 +166,55 @@ pub async fn episodes(State(st): State<AppState>, uri: Uri) -> ApiResult<Json<Ep
     let before = int_query(uri.query(), "before");
     let limit = clamp_episode_page_limit(int_query(uri.query(), "limit"));
     let match_id = int_query(uri.query(), "match");
+    let offset = int_query(uri.query(), "offset").max(0);
     let job = str_query(uri.query(), "job")
         .map(str::trim)
         .map(str::to_string);
     read_endpoint(&st, move |st| -> Result<EpisodePageView, ApiError> {
-        let items = if let Some(job) = job.as_deref().filter(|s| !s.is_empty()) {
-            if st.server.ports.jobs.get_job(job)?.is_none() {
-                return Err(ApiError::bad_request(format!("job {job} 不存在")));
-            }
-            st.server
-                .ports
-                .episodes
-                .list_episodes_by_job(job, before, limit)?
-        } else if match_id > 0 {
-            st.server
-                .ports
-                .episodes
-                .list_episodes_by_match(match_id, before, limit)?
+        let job_ref = job.as_deref().filter(|s| !s.is_empty());
+        let (items, total, has_more, next) = if before > 0 {
+
+            let items = if let Some(job) = job_ref {
+                if st.server.ports.jobs.get_job(job)?.is_none() {
+                    return Err(ApiError::bad_request(format!("job {job} 不存在")));
+                }
+                st.server
+                    .ports
+                    .episodes
+                    .list_episodes_by_job(job, before, limit)?
+            } else if match_id > 0 {
+                st.server
+                    .ports
+                    .episodes
+                    .list_episodes_by_match(match_id, before, limit)?
+            } else {
+                st.server.ports.episodes.list_episodes_page(before, limit)?
+            };
+            let total = st.server.ports.episodes.count_episodes(match_id, job_ref)?;
+            let has_more = items.len() as i64 == limit;
+            let next = items.last().map(|e| e.id).unwrap_or(before);
+            (items, total, has_more, next)
         } else {
-            st.server.ports.episodes.list_episodes_page(before, limit)?
+
+            if let Some(job) = job_ref {
+                if st.server.ports.jobs.get_job(job)?.is_none() {
+                    return Err(ApiError::bad_request(format!("job {job} 不存在")));
+                }
+            }
+            let items = st
+                .server
+                .ports
+                .episodes
+                .list_episodes_offset(match_id, job_ref, offset, limit)?;
+            let total = st.server.ports.episodes.count_episodes(match_id, job_ref)?;
+            let has_more = offset + (items.len() as i64) < total;
+            (items, total, has_more, 0)
         };
-        let next = items.last().map(|e| e.id).unwrap_or(before);
         Ok(EpisodePageView {
             items: items.iter().map(to_episode_view).collect(),
             next_before: next,
-            has_more: items.len() as i64 == limit,
+            has_more,
+            total,
         })
     })
     .await

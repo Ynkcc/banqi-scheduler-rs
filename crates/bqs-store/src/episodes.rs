@@ -29,6 +29,27 @@ const EPISODE_COLUMNS: &str = "id, worker_id, task_id, network_sha, game_count, 
      seed_base, pairs_parallel, pair_seed_refresh, \
      label_object_key, label_sha256, label_size";
 
+fn episode_page_where(
+    match_id: i64,
+    job_id: Option<&str>,
+    args: &mut Vec<Box<dyn rusqlite::ToSql>>,
+) -> String {
+    let mut clauses: Vec<String> = Vec::new();
+    if let Some(job) = job_id.filter(|s| !s.is_empty()) {
+        clauses.push("task_id IN (SELECT task_id FROM job_tasks WHERE job_id = ?)".to_string());
+        args.push(Box::new(job.to_string()));
+    }
+    if match_id > 0 {
+        clauses.push("match_id = ?".to_string());
+        args.push(Box::new(match_id));
+    }
+    if clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", clauses.join(" AND "))
+    }
+}
+
 fn scan_episode_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Episode> {
     Ok(Episode {
         id: row.get(0)?,
@@ -247,6 +268,49 @@ impl EpisodeStore for Store {
                 .map_err(StoreError::from)?;
             rows.collect::<Result<Vec<_>, _>>()
                 .map_err(StoreError::from)
+        })
+    }
+
+    fn list_episodes_offset(
+        &self,
+        match_id: i64,
+        job_id: Option<&str>,
+        offset: i64,
+        limit: i64,
+    ) -> CoreResult<Vec<Episode>> {
+        let limit = clamp_episode_page_limit(limit);
+        let offset = offset.max(0);
+        self.with_conn(|conn| {
+            let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            let where_sql = episode_page_where(match_id, job_id, &mut args);
+            let query = format!(
+                "SELECT {EPISODE_COLUMNS} FROM episodes{where_sql} ORDER BY id DESC LIMIT ? OFFSET ?"
+            );
+            args.push(Box::new(limit));
+            args.push(Box::new(offset));
+            let mut stmt = conn.prepare(&query).map_err(StoreError::from)?;
+            let rows = stmt
+                .query_map(
+                    rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())),
+                    scan_episode_row,
+                )
+                .map_err(StoreError::from)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
+        })
+    }
+
+    fn count_episodes(&self, match_id: i64, job_id: Option<&str>) -> CoreResult<i64> {
+        self.with_conn(|conn| {
+            let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            let where_sql = episode_page_where(match_id, job_id, &mut args);
+            let query = format!("SELECT COUNT(*) FROM episodes{where_sql}");
+            conn.query_row(
+                &query,
+                rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())),
+                |row| row.get(0),
+            )
+            .map_err(StoreError::from)
         })
     }
 
@@ -624,6 +688,48 @@ mod tests {
             (got.red_wins, got.black_wins, got.draw_no_capture),
             (1, 2, 1)
         );
+    }
+
+    #[test]
+    fn offset_page_and_count() {
+        let (_dir, s) = crate::testutil::open_temp_store();
+
+        for (i, key) in ["k/a", "k/b", "k/c", "k/d", "k/e"].iter().enumerate() {
+            let mut d = draft(&format!("t{i}"), key, 0, 100 + i as i64);
+            d.match_id = if i % 2 == 0 { 7 } else { 0 };
+            ES::insert_episode(&*s, d).unwrap();
+        }
+
+        use bqs_core::ports::EpisodeStore as ES2;
+        let page0 = ES2::list_episodes_offset(&*s, 0, None, 0, 2).unwrap();
+        let page1 = ES2::list_episodes_offset(&*s, 0, None, 2, 2).unwrap();
+        let page2 = ES2::list_episodes_offset(&*s, 0, None, 4, 2).unwrap();
+        assert_eq!(page0.len() + page1.len() + page2.len(), 5);
+
+        let mut ids: Vec<i64> = page0
+            .iter()
+            .chain(&page1)
+            .chain(&page2)
+            .map(|e| e.id)
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids.len(), 5);
+
+        assert!(
+            ES2::list_episodes_offset(&*s, 0, None, 100, 2)
+                .unwrap()
+                .is_empty()
+        );
+
+        assert_eq!(ES2::count_episodes(&*s, 7, None).unwrap(), 3);
+        assert_eq!(
+            ES2::list_episodes_offset(&*s, 7, None, 0, 10)
+                .unwrap()
+                .len(),
+            3
+        );
+
+        assert_eq!(ES2::count_episodes(&*s, 0, Some("ghost")).unwrap(), 0);
     }
 
     #[test]

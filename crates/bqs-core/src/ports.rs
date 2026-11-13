@@ -82,6 +82,26 @@ pub trait EpisodeStore: Send + Sync {
 
     fn list_episodes_page(&self, before_id: i64, limit: i64) -> CoreResult<Vec<Episode>>;
 
+    fn list_episodes_offset(
+        &self,
+        match_id: i64,
+        job_id: Option<&str>,
+        offset: i64,
+        limit: i64,
+    ) -> CoreResult<Vec<Episode>> {
+        let _ = (match_id, job_id, offset, limit);
+        Err(CoreError::Internal(
+            "list_episodes_offset 仅 bqs-store::Store 实现（对局记录分页需求）".into(),
+        ))
+    }
+
+    fn count_episodes(&self, match_id: i64, job_id: Option<&str>) -> CoreResult<i64> {
+        let _ = (match_id, job_id);
+        Err(CoreError::Internal(
+            "count_episodes 仅 bqs-store::Store 实现（对局记录分页需求）".into(),
+        ))
+    }
+
     fn list_episodes_by_match(
         &self,
         match_id: i64,
