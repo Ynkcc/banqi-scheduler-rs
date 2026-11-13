@@ -173,7 +173,6 @@ pub async fn episodes(State(st): State<AppState>, uri: Uri) -> ApiResult<Json<Ep
     read_endpoint(&st, move |st| -> Result<EpisodePageView, ApiError> {
         let job_ref = job.as_deref().filter(|s| !s.is_empty());
         let (items, total, has_more, next) = if before > 0 {
-
             let items = if let Some(job) = job_ref {
                 if st.server.ports.jobs.get_job(job)?.is_none() {
                     return Err(ApiError::bad_request(format!("job {job} 不存在")));
@@ -195,7 +194,6 @@ pub async fn episodes(State(st): State<AppState>, uri: Uri) -> ApiResult<Json<Ep
             let next = items.last().map(|e| e.id).unwrap_or(before);
             (items, total, has_more, next)
         } else {
-
             if let Some(job) = job_ref {
                 if st.server.ports.jobs.get_job(job)?.is_none() {
                     return Err(ApiError::bad_request(format!("job {job} 不存在")));
@@ -208,7 +206,9 @@ pub async fn episodes(State(st): State<AppState>, uri: Uri) -> ApiResult<Json<Ep
                 .list_episodes_offset(match_id, job_ref, offset, limit)?;
             let total = st.server.ports.episodes.count_episodes(match_id, job_ref)?;
             let has_more = offset + (items.len() as i64) < total;
-            (items, total, has_more, 0)
+
+            let next = items.last().map(|e| e.id).unwrap_or(0);
+            (items, total, has_more, next)
         };
         Ok(EpisodePageView {
             items: items.iter().map(to_episode_view).collect(),
