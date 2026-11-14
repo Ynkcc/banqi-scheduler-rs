@@ -68,7 +68,7 @@ fn data_kind_for_format_mapping() {
         bq_record::DataKind::DataResnet as i32
     );
     assert_eq!(
-        data_kind_for_format("nnue"),
+        data_kind_for_format("bqnq"),
         bq_record::DataKind::DataNnue as i32
     );
     assert_eq!(
@@ -105,7 +105,7 @@ fn derive_task_assembly() {
 fn rating_task_assembly() {
     let f = Fakes::new();
     f.networks.seed_network("cand", None, "onnx");
-    f.networks.seed_network("opp", None, "nnue");
+    f.networks.seed_network("opp", None, "bqnq");
     let asm = assembler(&f);
     let cand = f.networks.get_network("cand").unwrap().unwrap();
     let opp = f.networks.get_network("opp").unwrap().unwrap();
@@ -164,9 +164,9 @@ fn rating_task_assembly() {
     assert_eq!(resp.network_key, "networks/cand.onnx");
     assert_eq!(resp.network_url, "", "本地已有主网络不签 URL");
     assert_eq!(resp.opponent_sha, "opp");
-    assert_eq!(resp.opponent_key, "networks/opp.nnue");
+    assert_eq!(resp.opponent_key, "networks/opp.bqnq");
     assert_eq!(
-        resp.opponent_url, "get:networks/opp.nnue",
+        resp.opponent_url, "get:networks/opp.bqnq",
         "对手 URL 恒签发"
     );
 
@@ -264,7 +264,7 @@ fn collect_task_passthrough_pair_overrides() {
 fn collect_task_fills_network_keys() {
     let f = Fakes::new();
     f.networks
-        .register_network("best-nnue", None, None, "nnue")
+        .register_network("best-nnue", None, None, "bqnq")
         .unwrap();
     let asm = assembler(&f);
     let best = f.networks.get_network("best-nnue").unwrap().unwrap();
@@ -291,15 +291,15 @@ fn collect_task_fills_network_keys() {
         .unwrap();
     assert_eq!(resp.network_sha, "best-nnue");
     assert_eq!(
-        resp.network_key, "networks/best-nnue.nnue",
+        resp.network_key, "networks/best-nnue.bqnq",
         "collect 任务必须下发主网络对象键"
     );
     assert_eq!(
-        resp.opponent_key, "networks/best-nnue.nnue",
+        resp.opponent_key, "networks/best-nnue.bqnq",
         "collect 任务必须下发对手网络对象键"
     );
     assert_eq!(
-        resp.network_url, "get:networks/best-nnue.nnue",
+        resp.network_url, "get:networks/best-nnue.bqnq",
         "worker 未持有时应签下载 URL"
     );
 }
