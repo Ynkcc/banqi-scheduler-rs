@@ -333,7 +333,9 @@ message CollectSearchParams {
   string expl_mode = 24;
   // Expectimax 根层全窗口搜索（root_values 完整分布，供探索采样/policy 标签；根层剪枝收益归零、显著变慢）
   bool expectimax_root_fullwidth = 25;
-  // 机会节点前瞻深度 k（Chance.outcome_depth）：0 = k=0 现语义；optional 表达 presence，
+  // 机会节点前瞻深度 k（Chance.outcome_depth）：chance 递归语义，0 = chance 节点直接
+  // Q(s,a)，>0 = 展开全部翻子 outcome 并按 deterministic_depth 续搜子树，子树内 chance
+  // 节点以 depth-1 递归，叶子静态评估 = max_a Q(s,a)；optional 表达 presence，
   // 必传由调度器组装保证（collector 收到 None 时显式报错 fail fast）。
   optional int32 expectimax_chance_outcome_depth = 26;
   // 字段号 27 曾为 expectimax_chance_budget_ratio（Chance 预算隔离概念已移除），勿复用。

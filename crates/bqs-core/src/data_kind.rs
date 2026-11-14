@@ -36,7 +36,7 @@ pub fn display_name(kind: i64) -> &'static str {
 pub fn weight_format(kind: DataKind) -> &'static str {
     match kind {
         DataKind::Resnet => "onnx",
-        DataKind::Nnue => "bqnq",
+        DataKind::Nnue => "nnue",
     }
 }
 
@@ -47,13 +47,13 @@ pub fn weight_format_for_proto(kind: i32) -> Option<&'static str> {
 pub fn proto_for_weight_format(format: &str) -> Result<i32, String> {
     match format.trim().to_ascii_lowercase().as_str() {
         "onnx" => Ok(ProtoDataKind::DataResnet as i32),
-        "bqnq" => Ok(ProtoDataKind::DataNnue as i32),
-        other => Err(format!("未知权重格式 \"{other}\"（可选 onnx / bqnq）")),
+        "nnue" => Ok(ProtoDataKind::DataNnue as i32),
+        other => Err(format!("未知权重格式 \"{other}\"（可选 onnx / nnue）")),
     }
 }
 
 pub fn proto_for_format(format: &str) -> i32 {
-    if format == "bqnq" {
+    if format == "nnue" {
         ProtoDataKind::DataNnue as i32
     } else {
         ProtoDataKind::DataResnet as i32
@@ -94,20 +94,20 @@ mod tests {
     #[test]
     fn weight_format_mapping() {
         assert_eq!(weight_format(DataKind::Resnet), "onnx");
-        assert_eq!(weight_format(DataKind::Nnue), "bqnq");
+        assert_eq!(weight_format(DataKind::Nnue), "nnue");
         assert_eq!(weight_format_for_proto(0), Some("onnx"));
-        assert_eq!(weight_format_for_proto(1), Some("bqnq"));
+        assert_eq!(weight_format_for_proto(1), Some("nnue"));
         assert_eq!(weight_format_for_proto(2), None);
         assert_eq!(proto_for_weight_format("onnx"), Ok(0));
-        assert_eq!(proto_for_weight_format("bqnq"), Ok(1));
-        assert_eq!(proto_for_weight_format("BQNQ"), Ok(1), "扩展名大小写不敏感");
+        assert_eq!(proto_for_weight_format("nnue"), Ok(1));
+        assert_eq!(proto_for_weight_format("NNUE"), Ok(1), "扩展名大小写不敏感");
         assert!(proto_for_weight_format("pt").is_err());
-        assert!(proto_for_weight_format("nnue").is_err(), "旧 .nnue 已删除");
+
         assert!(
             proto_for_weight_format("bqdmq").is_err(),
             "旧 .bqdmq 已删除"
         );
-        assert_eq!(proto_for_format("bqnq"), 1);
+        assert_eq!(proto_for_format("nnue"), 1);
         assert_eq!(proto_for_format("onnx"), 0);
         assert_eq!(proto_for_format("whatever"), 0);
     }

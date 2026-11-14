@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-pub const WEIGHT_FORMATS: [&str; 3] = ["onnx", "pt", "bqnq"];
+pub const WEIGHT_FORMATS: [&str; 3] = ["onnx", "pt", "nnue"];
 
 pub const DONE_TASK_RETENTION: Duration = Duration::from_secs(30 * 60);
 

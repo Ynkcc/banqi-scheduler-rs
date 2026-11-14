@@ -279,7 +279,7 @@ pub async fn sign_upload(
     }
     if !bqs_core::consts::WEIGHT_FORMATS.contains(&format.as_str()) {
         return Err(ApiError::bad_request(format!(
-            "unsupported_format=\"{}\" (want onnx/pt/bqnq)",
+            "unsupported_format=\"{}\" (want onnx/pt/nnue)",
             body.format.trim()
         )));
     }
