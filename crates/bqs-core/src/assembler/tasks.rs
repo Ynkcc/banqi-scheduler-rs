@@ -38,8 +38,7 @@ impl TaskAssembler {
             network_key: a_key.clone(),
             params: Some(SelfPlayParams {
                 extra_config: self.extra_config(),
-                // SelfPlayParams 已全 reserved（search=7 / search_json=8 均废弃，死通道彻底关闭）；
-                // 探索参数唯一下发通道 = GenerationSpec.Plays.player_a/b.search_json。
+
                 ..Default::default()
             }),
             generation: Some(GenerationSpec {
