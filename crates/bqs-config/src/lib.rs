@@ -121,58 +121,125 @@ impl Default for SelfplaySection {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct SearchDefaults {
-    pub mcts_sims: u32,
-    pub mcts_max_considered_actions: u32,
-    pub mcts_c_scale: f64,
-    pub mcts_gumbel_scale: f64,
-    pub playout_cap_random: bool,
-    pub fast_mcts_sims: u32,
-    pub full_search_prob: f64,
-    pub mcts_eta: u32,
-    pub mcts_ucb_c: f64,
-    pub mcts_crn_enabled: bool,
-    pub health_enabled: bool,
-    pub health_weight: f64,
-    pub health_confidence_exp: f64,
-    #[serde(alias = "expectimax_max_depth")]
-    pub expectimax_deterministic_depth: u32,
-    pub expl_enabled: bool,
-    pub expl_topk: u32,
-    pub expl_mode: String,
-    pub expl_temp_start: f64,
-    pub expl_temp_end: f64,
-    pub expl_temp_decay_steps: u32,
-    pub expectimax_root_fullwidth: bool,
+    pub mcts: MctsSearchDefaults,
+    pub expectimax: ExpectimaxSearchDefaults,
+}
 
-    pub expectimax_chance_outcome_depth: i32,
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct MctsSearchDefaults {
+    pub sims: u32,
+
+    pub max_considered_actions: u32,
+
+    pub c_scale: f64,
+
+    pub gumbel_scale: f64,
+
+    pub playout_cap_random: bool,
+
+    pub fast_sims: u32,
+
+    pub full_search_prob: f64,
+
+    pub eta: u32,
+
+    pub ucb_c: f64,
+
+    pub crn_enabled: bool,
+
+    pub health: HealthSearchDefaults,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct HealthSearchDefaults {
+    pub enabled: bool,
+    pub weight: f64,
+    pub confidence_exp: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ExpectimaxSearchDefaults {
+    pub deterministic_depth: u32,
+
+    pub chance_outcome_depth: i32,
+
+    pub root_fullwidth: bool,
+
+    pub expl: ExplSearchDefaults,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ExplSearchDefaults {
+    pub enabled: bool,
+
+    pub mode: String,
+    pub topk: u32,
+    pub temp_start: f64,
+    pub temp_end: f64,
+    pub temp_decay_steps: u32,
 }
 
 impl Default for SearchDefaults {
     fn default() -> Self {
         Self {
-            mcts_sims: 64,
-            mcts_max_considered_actions: 16,
-            mcts_c_scale: 1.0,
-            mcts_gumbel_scale: 1.0,
-            playout_cap_random: false,
-            fast_mcts_sims: 0,
-            full_search_prob: 0.25,
-            mcts_eta: 2,
-            mcts_ucb_c: 0.0,
-            mcts_crn_enabled: false,
-            health_enabled: false,
-            health_weight: 0.0,
-            health_confidence_exp: 0.0,
-            expectimax_deterministic_depth: 8,
-            expl_enabled: false,
-            expl_topk: 8,
-            expl_mode: "gumbel".into(),
-            expl_temp_start: 1.0,
-            expl_temp_end: 0.15,
-            expl_temp_decay_steps: 48,
-            expectimax_root_fullwidth: true,
+            mcts: MctsSearchDefaults::default(),
+            expectimax: ExpectimaxSearchDefaults::default(),
+        }
+    }
+}
 
-            expectimax_chance_outcome_depth: 0,
+impl Default for MctsSearchDefaults {
+    fn default() -> Self {
+        Self {
+            sims: 64,
+            max_considered_actions: 16,
+            c_scale: 1.0,
+            gumbel_scale: 1.0,
+            playout_cap_random: false,
+            fast_sims: 0,
+            full_search_prob: 0.25,
+            eta: 2,
+            ucb_c: 0.0,
+            crn_enabled: false,
+            health: HealthSearchDefaults::default(),
+        }
+    }
+}
+
+impl Default for HealthSearchDefaults {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            weight: 0.0,
+            confidence_exp: 0.0,
+        }
+    }
+}
+
+impl Default for ExpectimaxSearchDefaults {
+    fn default() -> Self {
+        Self {
+            deterministic_depth: 8,
+            chance_outcome_depth: 0,
+            root_fullwidth: true,
+            expl: ExplSearchDefaults::default(),
+        }
+    }
+}
+
+impl Default for ExplSearchDefaults {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: "gumbel".into(),
+            topk: 8,
+            temp_start: 1.0,
+            temp_end: 0.15,
+            temp_decay_steps: 48,
         }
     }
 }
@@ -230,19 +297,19 @@ impl Config {
             ));
         }
         let d = &s.search;
-        if d.mcts_sims == 0 {
+        if d.mcts.sims == 0 {
             return Err(ConfigError::Invalid(
-                "selfplay.search.mcts_sims 必须 >= 1（任务下发的探索参数必填校验）".into(),
+                "selfplay.search.mcts.sims 必须 >= 1（任务下发的探索参数必填校验）".into(),
             ));
         }
-        if d.mcts_max_considered_actions == 0 {
+        if d.mcts.max_considered_actions == 0 {
             return Err(ConfigError::Invalid(
-                "selfplay.search.mcts_max_considered_actions 必须 >= 1".into(),
+                "selfplay.search.mcts.max_considered_actions 必须 >= 1".into(),
             ));
         }
-        if d.mcts_eta < 2 {
+        if d.mcts.eta < 2 {
             return Err(ConfigError::Invalid(
-                "selfplay.search.mcts_eta 必须 >= 2".into(),
+                "selfplay.search.mcts.eta 必须 >= 2".into(),
             ));
         }
 

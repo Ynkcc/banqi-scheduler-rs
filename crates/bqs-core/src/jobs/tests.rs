@@ -874,7 +874,7 @@ fn nnue_side(sha: &str) -> CollectPlayerSpec {
     CollectPlayerSpec {
         kind: "expectimax_nnue".into(),
         network_sha: sha.into(),
-        search: None,
+        search_json: String::new(),
     }
 }
 
@@ -889,19 +889,13 @@ fn rating_sides_submit_normalizes_and_freezes() {
             CollectPlayerSpec {
                 kind: "expectimax_nnue".into(),
                 network_sha: "best".into(),
-                search: Some(bqs_proto::CollectSearchParams {
-                    expectimax_deterministic_depth: 8,
-                    ..Default::default()
-                }),
+                search_json: r#"{"expectimax":{"deterministic_depth":8}}"#.into(),
             },
             CollectPlayerSpec {
                 kind: "expectimax_rule".into(),
                 network_sha: String::new(),
-                search: Some(bqs_proto::CollectSearchParams {
-                    expectimax_deterministic_depth: 4,
-                    expectimax_chance_outcome_depth: Some(2),
-                    ..Default::default()
-                }),
+                search_json: r#"{"expectimax":{"deterministic_depth":4,"chance_outcome_depth":2}}"#
+                    .into(),
             },
         )),
         20,
@@ -918,38 +912,28 @@ fn rating_sides_submit_normalizes_and_freezes() {
     assert_eq!(spec.side_b.kind, "expectimax_rule");
     assert_eq!(spec.side_b.network_sha, "", "非网络类 sha 为空");
 
+    let sa_search: serde_json::Value =
+        serde_json::from_str(spec.side_a.search_json.as_deref().unwrap()).unwrap();
     assert_eq!(
-        spec.side_a
-            .search
-            .as_ref()
-            .unwrap()
-            .expectimax_deterministic_depth,
-        8
+        sa_search["expectimax"]["deterministic_depth"], 8,
+        "submit 显式字段应保留"
     );
     assert_eq!(
-        spec.side_a
-            .search
-            .as_ref()
-            .unwrap()
-            .expectimax_chance_outcome_depth,
-        None,
-        "submit 未指定 k 时 spec 冻结应保持 None（派发时由 assembler 补默认）"
+        sa_search["expectimax"]["chance_outcome_depth"], 0,
+        "submit 未指定 k 时按配置默认补齐（canonical JSON）"
+    );
+    assert!(
+        sa_search.get("mcts").is_none(),
+        "expectimax_nnue 裁剪后不得携带 mcts 域（collector 跨域 fail-fast）"
+    );
+    let sb_search: serde_json::Value =
+        serde_json::from_str(spec.side_b.search_json.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        sb_search["expectimax"]["deterministic_depth"], 4,
+        "submit 显式字段应保留"
     );
     assert_eq!(
-        spec.side_b
-            .search
-            .as_ref()
-            .unwrap()
-            .expectimax_deterministic_depth,
-        4
-    );
-    assert_eq!(
-        spec.side_b
-            .search
-            .as_ref()
-            .unwrap()
-            .expectimax_chance_outcome_depth,
-        Some(2),
+        sb_search["expectimax"]["chance_outcome_depth"], 2,
         "显式指定的 k 应随 spec 冻结透传"
     );
 
@@ -1018,6 +1002,15 @@ fn rating_sides_validation_rejects() {
         .unwrap();
     assert!(!ok);
     assert!(msg.contains("total_games"), "{msg}");
+}
+
+#[test]
+fn legacy_spec_json_search_object_rejected() {
+    let legacy = r#"{"collect":{"variant":"4x8","totalGames":4,
+        "playerA":{"kind":"random","networkSha":"","search":{"mcts_sims":64}}}}"#;
+    let err = JobSpecJson::parse(legacy).unwrap_err();
+    assert!(err.contains("重新提交"), "{err}");
+    assert!(err.contains("search"), "{err}");
 }
 
 #[test]

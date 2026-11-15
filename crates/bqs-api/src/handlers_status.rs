@@ -321,7 +321,7 @@ pub async fn matches(State(st): State<AppState>) -> ApiResult<Json<Vec<MatchView
             .map(|p| p.items)
             .unwrap_or_default()
         {
-            if let Some(bqs_core::jobs::JobSpecJson::Rating(spec)) =
+            if let Ok(bqs_core::jobs::JobSpecJson::Rating(spec)) =
                 bqs_core::jobs::JobSpecJson::parse(&j.spec_json)
             {
                 if spec.match_id != 0 {

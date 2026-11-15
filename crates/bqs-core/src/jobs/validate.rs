@@ -49,6 +49,27 @@ fn check_model_sha(sha: &str, msg: String) -> Result<(), String> {
     if sha.is_empty() { Ok(()) } else { Err(msg) }
 }
 
+fn canonicalize_search(
+    raw: Option<&str>,
+    defaults: &bqs_config::SearchDefaults,
+    kind: &str,
+) -> Result<String, String> {
+    crate::search_json::canonicalize(
+        raw.unwrap_or(""),
+        &crate::search_json::SearchJson::from_defaults(defaults),
+        kind,
+    )
+}
+
+fn store_canonical_search(
+    player: &mut PlayerSpecJson,
+    defaults: &bqs_config::SearchDefaults,
+) -> Result<(), String> {
+    let canonical = canonicalize_search(player.search_json.as_deref(), defaults, &player.kind)?;
+    player.search_json = (!canonical.is_empty()).then_some(canonical);
+    Ok(())
+}
+
 fn resolve_player(
     p: &PlayerSpecJson,
     nets: &dyn crate::ports::NetworkStore,
@@ -141,8 +162,10 @@ impl JobManager {
             .as_ref()
             .map(|p| PlayerSpecJson::from_proto(Some(p.clone())))
             .ok_or("collect.player_b required")?;
-        let pa = resolve_player(&pa, nets)?;
-        let pb = resolve_player(&pb, nets)?;
+        let mut pa = resolve_player(&pa, nets)?;
+        store_canonical_search(&mut pa, &self.cfg.selfplay.search)?;
+        let mut pb = resolve_player(&pb, nets)?;
+        store_canonical_search(&mut pb, &self.cfg.selfplay.search)?;
         if c.data_kind != bq_record::DataKind::DataResnet as i32
             && c.data_kind != bq_record::DataKind::DataNnue as i32
         {
@@ -245,7 +268,7 @@ impl JobManager {
         let mk = |sha: &str| PlayerSpecJson {
             kind: "expectimax_nnue".into(),
             network_sha: sha.to_string(),
-            search: None,
+            search_json: None,
         };
         let (a, b) = (mk(&r.candidate_sha), mk(&r.opponent_sha));
         Ok((r, a, b))
@@ -265,6 +288,7 @@ impl JobManager {
         };
         let mut out = PlayerSpecJson::from_proto(Some(p.clone()));
         out.kind = kind.to_string();
+        store_canonical_search(&mut out, &self.cfg.selfplay.search)?;
         if bq_policy::player_kind::requires_model(kind) {
             if out.network_sha.is_empty() {
                 return Err(format!(

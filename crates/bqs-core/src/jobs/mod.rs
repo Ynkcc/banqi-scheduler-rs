@@ -8,7 +8,7 @@ mod validate;
 mod tests;
 
 pub use spec::{
-    CollectSpecJson, JobSpecJson, PlayerSpecJson, RatingSpecJson, SearchSpecJson, SeedStrategyJson,
+    CollectSpecJson, JobSpecJson, PlayerSpecJson, RatingSpecJson, SeedStrategyJson,
     canonical_scenario, resolve_seed, scenario_echo,
 };
 

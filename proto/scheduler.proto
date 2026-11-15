@@ -82,10 +82,11 @@ enum TaskKind {
 message SelfPlayParams {
   int32 mcts_sims = 1;
   string extra_config = 5;
-  // 任务级探索参数（与 CollectSearchParams 同构）。调度器创建任务时必填下发，
-  // worker 以此为唯一来源构建搜索配置，本地不再保留任何默认值。
-  CollectSearchParams search = 7;
-  reserved 2, 3, 4, 6;
+  // 字段号 7 曾为 CollectSearchParams search——死通道：调度器从不设置平铺 search，
+  // collector 读到恒为 None，该通道的 search 语义废弃。
+  // 字段号 8 曾短暂预留给 search_json（诊断回显），最终裁定死通道彻底关闭，一并 reserved。
+  // 探索参数唯一传输通道 = CollectPlayerSpec.search_json（下发通道仅此一个）。勿复用。
+  reserved 2, 3, 4, 6, 7, 8;
 }
 
 message EpisodeMeta {
@@ -295,52 +296,31 @@ message SeedStrategy {
 message CollectPlayerSpec {
   string kind = 1;
   string network_sha = 2;
-  CollectSearchParams search = 3;
+  // 字段号 3 曾为 CollectSearchParams search（全字段平铺的探索参数 message），
+  // 改为分层 JSON 透传后废弃，勿复用。
+  reserved 3;
+  // 搜索参数透传：分层 JSON（snake_case，形如 {"mcts":{...},"expectimax":{...}}），
+  // mcts 域字段：sims/max_considered_actions/c_scale/gumbel_scale/playout_cap_random/
+  //   fast_sims/full_search_prob/eta/ucb_c/crn_enabled/health{enabled,weight,confidence_exp}；
+  // expectimax 域字段：deterministic_depth/chance_outcome_depth(显式 0 与缺失可区分)/
+  //   root_fullwidth/expl{enabled,mode(gumbel|softmax),topk,temp_start,temp_end,temp_decay_steps}。
+  // 结构真源 = bqc-config::SearchJson；本契约只透传，不感知内部字段。
+  // 空串 = 无搜索参数：调度器组装时与 [selfplay.search] 配置默认按域做字段级合并、
+  // 再按 player kind 裁剪为单域 canonical JSON 后下发（mcts_resnet → 仅 mcts 域；
+  // expectimax_* → 仅 expectimax 域，chance_outcome_depth 由组装保证必填；
+  // NoSearch kind → 空串）。
+  string search_json = 4;
 }
 
-message CollectSearchParams {
-  uint32 mcts_sims = 1;
-  uint32 mcts_max_considered_actions = 2;
-  double mcts_c_scale = 3;
-  double mcts_gumbel_scale = 4;
-  float temperature = 5;
-  bool playout_cap_random = 6;
-  // 字段号 7 曾为 expectimax_node_budget（预算口径改为 depth/用时后移除），勿复用。
-  reserved 7;
-  // 决定性（deterministic）前瞻深度；曾名 expectimax_max_depth（字段号不变，线上兼容）
-  uint32 expectimax_deterministic_depth = 8;
-  // 字段号 9/10 曾为标注器参数（labeler 概念已移除），勿复用。
-  reserved 9, 10;
-  bool expl_enabled = 11;
-  uint32 expl_topk = 12;
-  double expl_temp_start = 13;
-  double expl_temp_end = 14;
-  uint32 expl_temp_decay_steps = 15;
-  // Fast/Full Search 混合（算力分配随机化）；fast = 0 表示由 mcts_sims 派生
-  uint32 fast_mcts_sims = 16;
-  double full_search_prob = 17;
-  // SHA 淘汰率因子 eta（每阶段保留 1/eta 候选）
-  uint32 mcts_eta = 18;
-  // SHA 淘汰判据置信系数（0 = 点估计）
-  double mcts_ucb_c = 19;
-  // 机会节点共同随机数
-  bool mcts_crn_enabled = 20;
-  // 血量差异头复合效用 U = Q_win + λ·Q_hp
-  bool health_enabled = 21;
-  double health_weight = 22;
-  double health_confidence_exp = 23;
-  // Expectimax 探索采样模式：gumbel（默认）| softmax
-  string expl_mode = 24;
-  // Expectimax 根层全窗口搜索（root_values 完整分布，供探索采样/policy 标签；根层剪枝收益归零、显著变慢）
-  bool expectimax_root_fullwidth = 25;
-  // 机会节点前瞻深度 k（Chance.outcome_depth）：chance 递归语义，0 = chance 节点直接
-  // Q(s,a)，>0 = 展开全部翻子 outcome 并按 deterministic_depth 续搜子树，子树内 chance
-  // 节点以 depth-1 递归，叶子静态评估 = max_a Q(s,a)；optional 表达 presence，
-  // 必传由调度器组装保证（collector 收到 None 时显式报错 fail fast）。
-  optional int32 expectimax_chance_outcome_depth = 26;
-  // 字段号 27 曾为 expectimax_chance_budget_ratio（Chance 预算隔离概念已移除），勿复用。
-  reserved 27;
-}
+// 原 CollectSearchParams（全字段平铺）已删除，字段号留档（全部勿复用）：
+//   1 mcts_sims / 2 mcts_max_considered_actions / 3 mcts_c_scale / 4 mcts_gumbel_scale /
+//   5 temperature / 6 playout_cap_random / 7 expectimax_node_budget（已废弃）/ 8
+//   expectimax_deterministic_depth / 9,10 标注器参数（已废弃）/ 11-15 expl_enabled/topk/
+//   temp_start/temp_end/temp_decay_steps / 16 fast_mcts_sims / 17 full_search_prob /
+//   18 mcts_eta / 19 mcts_ucb_c / 20 mcts_crn_enabled / 21-23 health_enabled/weight/
+//   confidence_exp / 24 expl_mode / 25 expectimax_root_fullwidth /
+//   26 expectimax_chance_outcome_depth / 27 expectimax_chance_budget_ratio（已废弃）。
+// 语义迁移：上述字段 → search_json 分层结构（见 CollectPlayerSpec.search_json 注释）。
 
 message CollectionJobSpec {
   string variant = 1;
@@ -367,7 +347,11 @@ message SelfPlayJobSpec {
   string network_sha = 3;
   string opponent_sha = 4;
   double mix_ratio = 5;
-  CollectSearchParams search = 6;
+  // 字段号 6 曾为 CollectSearchParams search（平铺探索参数）。已核实无存活提交链路：
+  // gRPC SubmitJob 拒绝 JOB_SELFPLAY（selfplay_removed）、HTTP API parse_job_kind 不受理、
+  // SubmitJobRequest.selfplay 恒为 None，故仅 reserved、不加替代 search_json
+  // （字段号 8 曾短暂预留给 search_json（v1.0），v1.1 起废弃）。勿复用。
+  reserved 6, 8;
   uint64 total_games = 7;
 }
 

@@ -452,7 +452,7 @@ pub struct JobListView {
 }
 
 fn job_view(st: &AppState, r: &bqs_core::ports::JobRow) -> JobView {
-    let parsed = JobSpecJson::parse(&r.spec_json);
+    let parsed = JobSpecJson::parse(&r.spec_json).ok();
     let spec = spec_echo(parsed.as_ref());
 
     let rating_stats = match (&parsed, JobKind::try_from(r.kind as i32)) {

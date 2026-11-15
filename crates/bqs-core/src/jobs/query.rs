@@ -37,7 +37,7 @@ impl JobManager {
             .store
             .get_job(job_id)?
             .and_then(|j| match JobSpecJson::parse(&j.spec_json) {
-                Some(JobSpecJson::Rating(r)) => Some(r),
+                Ok(JobSpecJson::Rating(r)) => Some(r),
                 _ => None,
             }))
     }

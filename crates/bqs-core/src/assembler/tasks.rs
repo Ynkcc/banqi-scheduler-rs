@@ -17,8 +17,16 @@ impl TaskAssembler {
         a_net: Option<&Network>,
         b_net: Option<&Network>,
     ) -> CoreResult<TaskResponse> {
-        let player_a = spec.player_a.clone().map(|p| self.player_with_search(p));
-        let player_b = spec.player_b.clone().map(|p| self.player_with_search(p));
+        let player_a = spec
+            .player_a
+            .clone()
+            .map(|p| self.player_with_search(p))
+            .transpose()?;
+        let player_b = spec
+            .player_b
+            .clone()
+            .map(|p| self.player_with_search(p))
+            .transpose()?;
         let (a_sha, a_key) = match a_net {
             Some(n) => (n.sha.clone(), network_key(&n.sha, &n.format)),
             None => (String::new(), String::new()),
@@ -30,6 +38,8 @@ impl TaskAssembler {
             network_key: a_key.clone(),
             params: Some(SelfPlayParams {
                 extra_config: self.extra_config(),
+                // SelfPlayParams 已全 reserved（search=7 / search_json=8 均废弃，死通道彻底关闭）；
+                // 探索参数唯一下发通道 = GenerationSpec.Plays.player_a/b.search_json。
                 ..Default::default()
             }),
             generation: Some(GenerationSpec {
@@ -90,6 +100,8 @@ impl TaskAssembler {
             Some(n) => (n.sha.clone(), network_key(&n.sha, &n.format)),
             None => (String::new(), String::new()),
         };
+        let side_a = self.player_with_search(side_a.clone())?;
+        let side_b = self.player_with_search(side_b.clone())?;
         let mut resp = TaskResponse {
             task_id: task_id.to_string(),
             network_sha: a_sha.clone(),
@@ -107,8 +119,8 @@ impl TaskAssembler {
                 pair_seed_refresh: Some(false),
                 behavior: Some(bqs_proto::generation_spec::Behavior::Plays(
                     bqs_proto::Plays {
-                        player_a: Some(self.player_with_search(side_a.clone())),
-                        player_b: Some(self.player_with_search(side_b.clone())),
+                        player_a: Some(side_a),
+                        player_b: Some(side_b),
                     },
                 )),
                 start_fens,

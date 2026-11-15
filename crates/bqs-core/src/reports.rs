@@ -318,7 +318,7 @@ mod tests {
         let (ok, msg, job_id) = e.jobs.submit(&req).unwrap();
         assert!(ok, "{msg}");
         let row = e.jobs.get(&job_id).unwrap().unwrap();
-        let Some(crate::jobs::JobSpecJson::Rating(spec)) =
+        let Ok(crate::jobs::JobSpecJson::Rating(spec)) =
             crate::jobs::JobSpecJson::parse(&row.spec_json)
         else {
             panic!("rating spec json");
@@ -530,7 +530,7 @@ mod tests {
             .unwrap();
         assert!(ok, "{msg}");
         let row = e.jobs.get(&job_id).unwrap().unwrap();
-        let Some(crate::jobs::JobSpecJson::Rating(spec)) =
+        let Ok(crate::jobs::JobSpecJson::Rating(spec)) =
             crate::jobs::JobSpecJson::parse(&row.spec_json)
         else {
             panic!("rating spec json");

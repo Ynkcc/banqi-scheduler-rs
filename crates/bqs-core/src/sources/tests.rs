@@ -74,7 +74,7 @@ fn submit_rating(env: &Env, total: u64, opponent: &str) -> (String, i64) {
         .unwrap();
     assert!(ok, "{msg}");
     let row = env.jobs.get(&id).unwrap().unwrap();
-    let Some(JobSpecJson::Rating(spec)) = JobSpecJson::parse(&row.spec_json) else {
+    let Ok(JobSpecJson::Rating(spec)) = JobSpecJson::parse(&row.spec_json) else {
         panic!("rating spec json");
     };
     (id, spec.match_id)
@@ -195,20 +195,13 @@ fn rating_dispatch_with_sides_and_non_network_opponent() {
                 side_a: Some(bqs_proto::CollectPlayerSpec {
                     kind: "expectimax_nnue".into(),
                     network_sha: "cand".into(),
-                    search: Some(bqs_proto::CollectSearchParams {
-                        expectimax_deterministic_depth: 8,
-
-                        expectimax_chance_outcome_depth: Some(0),
-                        ..Default::default()
-                    }),
+                    search_json: r#"{"expectimax":{"deterministic_depth":8,"chance_outcome_depth":0}}"#
+                        .into(),
                 }),
                 side_b: Some(bqs_proto::CollectPlayerSpec {
                     kind: "rule:capture_first".into(),
                     network_sha: String::new(),
-                    search: Some(bqs_proto::CollectSearchParams {
-                        expectimax_deterministic_depth: 4,
-                        ..Default::default()
-                    }),
+                    search_json: r#"{"expectimax":{"deterministic_depth":4}}"#.into(),
                 }),
                 total_games: 20,
                 sprt_elo0: 0.0,
@@ -243,22 +236,18 @@ fn rating_dispatch_with_sides_and_non_network_opponent() {
     let sa = sides.player_a.unwrap();
     assert_eq!(sa.kind, "expectimax_nnue");
     assert_eq!(sa.network_sha, "cand");
-    let sa_search = sa.search.unwrap();
-    assert_eq!(sa_search.expectimax_deterministic_depth, 8);
+    let sa_search: serde_json::Value = serde_json::from_str(&sa.search_json).unwrap();
+    assert_eq!(sa_search["expectimax"]["deterministic_depth"], 8);
     assert_eq!(
-        sa_search.expectimax_chance_outcome_depth,
-        Some(0),
+        sa_search["expectimax"]["chance_outcome_depth"], 0,
         "显式 k=0 覆盖应被尊重"
     );
     let sb = sides.player_b.unwrap();
     assert_eq!(sb.kind, "rule:capture_first");
     assert_eq!(sb.network_sha, "");
-    let sb_search = sb.search.unwrap();
-    assert_eq!(sb_search.expectimax_deterministic_depth, 4);
     assert_eq!(
-        sb_search.expectimax_chance_outcome_depth,
-        Some(0),
-        "search 段未指定 k 时应补调度器默认值"
+        sb.search_json, "",
+        "NoSearch kind（rule:capture_first）的 search_json 应为空串（提交的搜索参数被裁剪丢弃）"
     );
 
     let t = e.src.disp.lookup(&resp.task_id).unwrap();

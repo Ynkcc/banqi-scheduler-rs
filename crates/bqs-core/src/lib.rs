@@ -10,6 +10,7 @@ pub mod dispatch;
 pub mod featurepack;
 pub mod jobs;
 pub mod reports;
+pub mod search_json;
 pub mod sources;
 pub mod trainconfig;
 

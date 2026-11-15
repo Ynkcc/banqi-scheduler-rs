@@ -1,159 +1,15 @@
 use bqs_proto::{
-    CollectPlayerSpec, CollectSearchParams, CollectionJobSpec, RatingJobSpec, SeedStrategy,
-    SeedStrategyKind,
+    CollectPlayerSpec, CollectionJobSpec, RatingJobSpec, SeedStrategy, SeedStrategyKind,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct SearchSpecJson {
-    #[serde(alias = "mcts_sims")]
-    pub mcts_sims: u32,
-    #[serde(alias = "mcts_max_considered_actions")]
-    pub mcts_max_considered_actions: u32,
-    #[serde(alias = "mcts_c_scale")]
-    pub mcts_c_scale: f64,
-    #[serde(alias = "mcts_gumbel_scale")]
-    pub mcts_gumbel_scale: f64,
-    pub temperature: f32,
-    #[serde(alias = "playout_cap_random")]
-    pub playout_cap_random: bool,
-    #[serde(alias = "expectimax_deterministic_depth")]
-    #[serde(alias = "expectimax_max_depth")]
-    #[serde(alias = "expectimaxMaxDepth")]
-    pub expectimax_deterministic_depth: u32,
-    #[serde(alias = "expl_enabled")]
-    pub expl_enabled: bool,
-    #[serde(alias = "expl_topk")]
-    pub expl_topk: u32,
-    #[serde(alias = "expl_temp_start")]
-    pub expl_temp_start: f64,
-    #[serde(alias = "expl_temp_end")]
-    pub expl_temp_end: f64,
-    #[serde(alias = "expl_temp_decay_steps")]
-    pub expl_temp_decay_steps: u32,
-    #[serde(alias = "fast_mcts_sims")]
-    pub fast_mcts_sims: u32,
-    #[serde(alias = "full_search_prob")]
-    pub full_search_prob: f64,
-    #[serde(alias = "mcts_eta")]
-    pub mcts_eta: u32,
-    #[serde(alias = "mcts_ucb_c")]
-    pub mcts_ucb_c: f64,
-    #[serde(alias = "mcts_crn_enabled")]
-    pub mcts_crn_enabled: bool,
-    #[serde(alias = "health_enabled")]
-    pub health_enabled: bool,
-    #[serde(alias = "health_weight")]
-    pub health_weight: f64,
-    #[serde(alias = "health_confidence_exp")]
-    pub health_confidence_exp: f64,
-    #[serde(alias = "expl_mode")]
-    pub expl_mode: String,
-    #[serde(alias = "expectimax_root_fullwidth")]
-    pub expectimax_root_fullwidth: bool,
-
-    #[serde(alias = "expectimax_chance_outcome_depth")]
-    pub expectimax_chance_outcome_depth: Option<i32>,
-}
-
-impl SearchSpecJson {
-    pub fn from_proto(s: Option<CollectSearchParams>) -> Self {
-        match s {
-            Some(s) => Self {
-                mcts_sims: s.mcts_sims,
-                mcts_max_considered_actions: s.mcts_max_considered_actions,
-                mcts_c_scale: s.mcts_c_scale,
-                mcts_gumbel_scale: s.mcts_gumbel_scale,
-                temperature: s.temperature,
-                playout_cap_random: s.playout_cap_random,
-                expectimax_deterministic_depth: s.expectimax_deterministic_depth,
-                expl_enabled: s.expl_enabled,
-                expl_topk: s.expl_topk,
-                expl_temp_start: s.expl_temp_start,
-                expl_temp_end: s.expl_temp_end,
-                expl_temp_decay_steps: s.expl_temp_decay_steps,
-                fast_mcts_sims: s.fast_mcts_sims,
-                full_search_prob: s.full_search_prob,
-                mcts_eta: s.mcts_eta,
-                mcts_ucb_c: s.mcts_ucb_c,
-                mcts_crn_enabled: s.mcts_crn_enabled,
-                health_enabled: s.health_enabled,
-                health_weight: s.health_weight,
-                health_confidence_exp: s.health_confidence_exp,
-                expl_mode: s.expl_mode,
-                expectimax_root_fullwidth: s.expectimax_root_fullwidth,
-                expectimax_chance_outcome_depth: s.expectimax_chance_outcome_depth,
-            },
-            None => Self::default(),
-        }
-    }
-
-    pub fn is_zero(&self) -> bool {
-        self.mcts_sims == 0
-            && self.mcts_max_considered_actions == 0
-            && self.mcts_c_scale == 0.0
-            && self.mcts_gumbel_scale == 0.0
-            && self.temperature == 0.0
-            && !self.playout_cap_random
-            && self.expectimax_deterministic_depth == 0
-            && !self.expl_enabled
-            && self.expl_topk == 0
-            && self.expl_temp_start == 0.0
-            && self.expl_temp_end == 0.0
-            && self.expl_temp_decay_steps == 0
-            && self.fast_mcts_sims == 0
-            && self.full_search_prob == 0.0
-            && self.mcts_eta == 0
-            && self.mcts_ucb_c == 0.0
-            && !self.mcts_crn_enabled
-            && !self.health_enabled
-            && self.health_weight == 0.0
-            && self.health_confidence_exp == 0.0
-            && self.expl_mode.is_empty()
-            && !self.expectimax_root_fullwidth
-            && self.expectimax_chance_outcome_depth.is_none()
-    }
-
-    pub fn to_proto(&self) -> Option<CollectSearchParams> {
-        let s = &self;
-        if s.is_zero() {
-            return None;
-        }
-        Some(CollectSearchParams {
-            mcts_sims: s.mcts_sims,
-            mcts_max_considered_actions: s.mcts_max_considered_actions,
-            mcts_c_scale: s.mcts_c_scale,
-            mcts_gumbel_scale: s.mcts_gumbel_scale,
-            temperature: s.temperature,
-            playout_cap_random: s.playout_cap_random,
-            expectimax_deterministic_depth: s.expectimax_deterministic_depth,
-            expl_enabled: s.expl_enabled,
-            expl_topk: s.expl_topk,
-            expl_temp_start: s.expl_temp_start,
-            expl_temp_end: s.expl_temp_end,
-            expl_temp_decay_steps: s.expl_temp_decay_steps,
-            fast_mcts_sims: s.fast_mcts_sims,
-            full_search_prob: s.full_search_prob,
-            mcts_eta: s.mcts_eta,
-            mcts_ucb_c: s.mcts_ucb_c,
-            mcts_crn_enabled: s.mcts_crn_enabled,
-            health_enabled: s.health_enabled,
-            health_weight: s.health_weight,
-            health_confidence_exp: s.health_confidence_exp,
-            expl_mode: s.expl_mode.clone(),
-            expectimax_root_fullwidth: s.expectimax_root_fullwidth,
-            expectimax_chance_outcome_depth: s.expectimax_chance_outcome_depth,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct PlayerSpecJson {
     pub kind: String,
     #[serde(alias = "network_sha")]
     pub network_sha: String,
-    pub search: Option<SearchSpecJson>,
+
+    pub search_json: Option<String>,
 }
 
 impl PlayerSpecJson {
@@ -162,7 +18,7 @@ impl PlayerSpecJson {
             Some(p) => Self {
                 kind: p.kind,
                 network_sha: p.network_sha,
-                search: p.search.map(|s| SearchSpecJson::from_proto(Some(s))),
+                search_json: (!p.search_json.is_empty()).then_some(p.search_json),
             },
             None => Self::default(),
         }
@@ -172,7 +28,7 @@ impl PlayerSpecJson {
         CollectPlayerSpec {
             kind: self.kind.clone(),
             network_sha: self.network_sha.clone(),
-            search: self.search.as_ref().and_then(|s| s.to_proto()),
+            search_json: self.search_json.clone().unwrap_or_default(),
         }
     }
 }
@@ -343,12 +199,12 @@ impl RatingSpecJson {
             PlayerSpecJson {
                 kind: "expectimax_nnue".into(),
                 network_sha: self.candidate_sha.clone(),
-                search: None,
+                search_json: None,
             },
             PlayerSpecJson {
                 kind: "expectimax_nnue".into(),
                 network_sha: self.opponent_sha.clone(),
-                search: None,
+                search_json: None,
             },
         )
     }
@@ -393,8 +249,10 @@ impl JobSpecJson {
         serde_json::to_string(self).unwrap_or_default()
     }
 
-    pub fn parse(json: &str) -> Option<Self> {
-        serde_json::from_str(json).ok()
+    pub fn parse(json: &str) -> Result<Self, String> {
+        serde_json::from_str(json).map_err(|e| {
+            format!("spec_json 解析失败（旧平铺 search 格式已废弃，请重新提交 job）: {e}")
+        })
     }
 }
 

@@ -118,12 +118,12 @@ fn rating_task_assembly() {
     let side_a = bqs_proto::CollectPlayerSpec {
         kind: "expectimax_nnue".into(),
         network_sha: "cand".into(),
-        search: None,
+        search_json: String::new(),
     };
     let side_b = bqs_proto::CollectPlayerSpec {
         kind: "mcts_resnet".into(),
         network_sha: "opp".into(),
-        search: None,
+        search_json: String::new(),
     };
     let fens = vec![valid_4x8_fen()];
     let resp = asm
@@ -312,7 +312,7 @@ fn collect_task_fills_chance_outcome_depth_default_and_explicit_zero() {
         threads: 4,
         ..Default::default()
     };
-    let player_search_of = |json: &str| -> Option<i32> {
+    let player_search_of = |json: &str| -> serde_json::Value {
         let parsed = crate::jobs::JobSpecJson::parse(json).expect("collect spec json 应可解析");
         let crate::jobs::JobSpecJson::Collect(spec) = parsed else {
             panic!("应为 collect spec");
@@ -323,30 +323,165 @@ fn collect_task_fills_chance_outcome_depth_default_and_explicit_zero() {
         let g = gen_spec(&resp);
         match g.behavior.expect("behavior 缺省") {
             bqs_proto::generation_spec::Behavior::Plays(p) => {
-                p.player_a
-                    .expect("player_a 缺省")
-                    .search
-                    .expect("search 缺省")
-                    .expectimax_chance_outcome_depth
+                let raw = p.player_a.expect("player_a 缺省").search_json;
+                assert!(!raw.is_empty(), "组装后 search_json 必为 canonical JSON");
+                serde_json::from_str(&raw).expect("search_json 应为合法 JSON")
             }
             _ => panic!("expected plays behavior"),
         }
     };
 
     let no_k = r#"{"collect":{"variant":"4x8","totalGames":2,
-        "playerA":{"kind":"expectimax_nnue","networkSha":"sha","search":{"expectimaxDeterministicDepth":8}}}}"#;
+        "playerA":{"kind":"expectimax_nnue","networkSha":"sha",
+        "searchJson":"{\"expectimax\":{\"deterministic_depth\":8}}"}}}"#;
+    let search = player_search_of(no_k);
     assert_eq!(
-        player_search_of(no_k),
-        Some(0),
-        "search 段只写部分字段时 k 应补调度器默认值 0"
+        search["expectimax"]["deterministic_depth"], 8,
+        "显式 deterministic_depth 保留"
+    );
+    assert_eq!(
+        search["expectimax"]["chance_outcome_depth"], 0,
+        "search_json 只写部分字段时 k 应补调度器默认值 0"
     );
 
     let explicit_zero = r#"{"collect":{"variant":"4x8","totalGames":2,
-        "playerA":{"kind":"expectimax_nnue","networkSha":"sha","search":{"expectimaxDeterministicDepth":8,"expectimaxChanceOutcomeDepth":0}}}}"#;
+        "playerA":{"kind":"expectimax_nnue","networkSha":"sha",
+        "searchJson":"{\"expectimax\":{\"deterministic_depth\":8,\"chance_outcome_depth\":0}}"}}}"#;
+    let search = player_search_of(explicit_zero);
     assert_eq!(
-        player_search_of(explicit_zero),
-        Some(0),
-        "显式 expectimaxChanceOutcomeDepth=0 应被尊重"
+        search["expectimax"]["chance_outcome_depth"], 0,
+        "显式 chance_outcome_depth=0 应被尊重（与缺失同值但语义为显式透传）"
+    );
+
+    let full_default = r#"{"collect":{"variant":"4x8","totalGames":2,
+        "playerA":{"kind":"expectimax_nnue","networkSha":"sha"}}}"#;
+    let search = player_search_of(full_default);
+    assert_eq!(
+        search["expectimax"]["deterministic_depth"], 8,
+        "search_json 缺省时 expectimax 域应填配置默认"
+    );
+    assert_eq!(
+        search["expectimax"]["root_fullwidth"], true,
+        "缺失字段补配置默认"
+    );
+    assert!(
+        search.get("mcts").is_none(),
+        "expectimax_nnue 裁剪后不得携带 mcts 域（collector 跨域 fail-fast）"
     );
 }
 
+#[test]
+fn search_json_domain_merge() {
+    let f = Fakes::new();
+    let asm = assembler(&f);
+
+    let merged = asm
+        .player_with_search(bqs_proto::CollectPlayerSpec {
+            kind: "mcts_resnet".into(),
+            network_sha: "sha".into(),
+            search_json: r#"{"mcts":{"sims":128}}"#.into(),
+        })
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&merged.search_json).unwrap();
+    assert_eq!(v["mcts"]["sims"], 128, "job 显式字段优先");
+    assert_eq!(v["mcts"]["max_considered_actions"], 16, "缺失字段补默认");
+    assert!(
+        v.get("expectimax").is_none(),
+        "mcts_resnet 裁剪后不得携带 expectimax 域（collector 跨域 fail-fast）"
+    );
+
+    let merged = asm
+        .player_with_search(bqs_proto::CollectPlayerSpec {
+            kind: "expectimax_nnue".into(),
+            network_sha: "sha".into(),
+            search_json: r#"{"expectimax":{"chance_outcome_depth":2}}"#.into(),
+        })
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&merged.search_json).unwrap();
+    assert_eq!(v["expectimax"]["chance_outcome_depth"], 2);
+    assert_eq!(
+        v["expectimax"]["deterministic_depth"], 8,
+        "同域缺失字段补默认"
+    );
+    assert!(
+        v.get("mcts").is_none(),
+        "expectimax_nnue 裁剪后不得携带 mcts 域"
+    );
+
+    let merged = asm
+        .player_with_search(bqs_proto::CollectPlayerSpec {
+            kind: "random".into(),
+            network_sha: String::new(),
+            search_json: String::new(),
+        })
+        .unwrap();
+    assert_eq!(
+        merged.search_json, "",
+        "NoSearch kind 的 search_json 应为空串"
+    );
+
+    let merged = asm
+        .player_with_search(bqs_proto::CollectPlayerSpec {
+            kind: "mcts_resnet".into(),
+            network_sha: "sha".into(),
+            search_json: String::new(),
+        })
+        .unwrap();
+    let defaults =
+        crate::search_json::SearchJson::from_defaults(&bqs_config::SearchDefaults::default());
+    let d = defaults.to_canonical_for_kind("mcts_resnet").unwrap();
+    assert_eq!(
+        merged.search_json, d,
+        "空 search_json 应产出与配置默认一致的单域 canonical JSON"
+    );
+
+    let err = asm
+        .player_with_search(bqs_proto::CollectPlayerSpec {
+            kind: "mcts_resnet".into(),
+            network_sha: "sha".into(),
+            search_json: r#"{"mcts":{"nope":1}}"#.into(),
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("search_json"), "{err}");
+}
+
+#[test]
+fn collect_task_fills_params_search_json_diagnostic_echo() {
+    let f = Fakes::new();
+    let asm = assembler(&f);
+    let req = TaskRequest {
+        threads: 4,
+        ..Default::default()
+    };
+    let spec = bqs_proto::CollectionJobSpec {
+        variant: "4x8".into(),
+        data_kind: bq_record::DataKind::DataNnue as i32,
+        total_games: 2,
+        player_a: Some(bqs_proto::CollectPlayerSpec {
+            kind: "expectimax_nnue".into(),
+            network_sha: "sha".into(),
+            search_json: r#"{"expectimax":{"deterministic_depth":6}}"#.into(),
+        }),
+        ..Default::default()
+    };
+    let resp = asm
+        .collect_task("t", &req, &spec, 2, 42, 1000, None, None)
+        .unwrap();
+    let params = resp.params.clone().expect("params 缺省");
+    let g = gen_spec(&resp);
+    let player_a = match g.behavior.expect("behavior 缺省") {
+        bqs_proto::generation_spec::Behavior::Plays(p) => p.player_a.expect("player_a 缺省"),
+        _ => panic!("expected plays behavior"),
+    };
+    assert_eq!(
+        params.search_json, player_a.search_json,
+        "params.search_json 诊断回显应与 player_a.search_json 为同一 canonical 字符串"
+    );
+    let v: serde_json::Value = serde_json::from_str(&params.search_json).unwrap();
+    assert_eq!(v["expectimax"]["deterministic_depth"], 6, "显式字段保留");
+    assert_eq!(
+        v["expectimax"]["chance_outcome_depth"], 0,
+        "k 由组装保证必填"
+    );
+    assert!(v.get("mcts").is_none(), "诊断回显同样按 kind 裁剪为单域");
+}

@@ -215,7 +215,7 @@ impl JobManager {
     }
 
     fn cancel_rating_match(&self, spec_json: &str) {
-        if let Some(JobSpecJson::Rating(spec)) = JobSpecJson::parse(spec_json) {
+        if let Ok(JobSpecJson::Rating(spec)) = JobSpecJson::parse(spec_json) {
             if spec.match_id != 0 {
                 match self.matches.cancel_match(spec.match_id) {
                     Ok(true) => {

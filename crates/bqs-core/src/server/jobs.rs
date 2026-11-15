@@ -42,7 +42,7 @@ impl Server {
     fn job_status(&self, r: &JobRow) -> JobStatus {
         let kind = JobKind::try_from(r.kind as i32).unwrap_or(JobKind::JobCollect);
         let collect = match JobSpecJson::parse(&r.spec_json) {
-            Some(JobSpecJson::Collect(c)) => Some(c.to_proto()),
+            Ok(JobSpecJson::Collect(c)) => Some(c.to_proto()),
             _ => None,
         };
         JobStatus {

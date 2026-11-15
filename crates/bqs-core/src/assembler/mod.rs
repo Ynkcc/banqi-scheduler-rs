@@ -15,7 +15,7 @@ pub use crate::data_kind::{
 use std::sync::Arc;
 
 use bqs_config::Config;
-use bqs_proto::{CollectPlayerSpec, CollectSearchParams};
+use bqs_proto::CollectPlayerSpec;
 
 use crate::{CoreResult, consts, control::Control, ports::ObjectSigner};
 
@@ -34,50 +34,20 @@ impl TaskAssembler {
         consts::PRESIGN_TTL.as_secs() as i64
     }
 
-    pub fn default_search(&self) -> CollectSearchParams {
-        let d = &self.cfg.selfplay.search;
-        CollectSearchParams {
-            mcts_sims: d.mcts_sims,
-            mcts_max_considered_actions: d.mcts_max_considered_actions,
-            mcts_c_scale: d.mcts_c_scale,
-            mcts_gumbel_scale: d.mcts_gumbel_scale,
-            temperature: 0.0,
-            playout_cap_random: d.playout_cap_random,
-            expectimax_deterministic_depth: d.expectimax_deterministic_depth,
-            expl_enabled: d.expl_enabled,
-            expl_topk: d.expl_topk,
-            expl_temp_start: d.expl_temp_start,
-            expl_temp_end: d.expl_temp_end,
-            expl_temp_decay_steps: d.expl_temp_decay_steps,
-            fast_mcts_sims: d.fast_mcts_sims,
-            full_search_prob: d.full_search_prob,
-            mcts_eta: d.mcts_eta,
-            mcts_ucb_c: d.mcts_ucb_c,
-            mcts_crn_enabled: d.mcts_crn_enabled,
-            health_enabled: d.health_enabled,
-            health_weight: d.health_weight,
-            health_confidence_exp: d.health_confidence_exp,
-            expl_mode: d.expl_mode.clone(),
-            expectimax_root_fullwidth: d.expectimax_root_fullwidth,
-            expectimax_chance_outcome_depth: Some(d.expectimax_chance_outcome_depth),
-        }
+    pub fn default_search(&self, kind: &str) -> CoreResult<String> {
+        let defaults = crate::search_json::SearchJson::from_defaults(&self.cfg.selfplay.search);
+        crate::search_json::canonicalize("", &defaults, kind).map_err(crate::CoreError::Internal)
     }
 
-    pub fn player_with_search(&self, p: CollectPlayerSpec) -> CollectPlayerSpec {
-        CollectPlayerSpec {
-            search: Some(match p.search {
-                None => self.default_search(),
+    pub fn player_with_search(&self, p: CollectPlayerSpec) -> CoreResult<CollectPlayerSpec> {
+        let defaults = crate::search_json::SearchJson::from_defaults(&self.cfg.selfplay.search);
 
-                Some(mut s) => {
-                    if s.expectimax_chance_outcome_depth.is_none() {
-                        s.expectimax_chance_outcome_depth =
-                            Some(self.cfg.selfplay.search.expectimax_chance_outcome_depth);
-                    }
-                    s
-                }
-            }),
+        let canonical = crate::search_json::canonicalize(&p.search_json, &defaults, &p.kind)
+            .map_err(crate::CoreError::Internal)?;
+        Ok(CollectPlayerSpec {
+            search_json: canonical,
             ..p
-        }
+        })
     }
 
     pub fn extra_config(&self) -> String {

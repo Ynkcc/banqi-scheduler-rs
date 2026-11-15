@@ -63,9 +63,19 @@ impl JobSource {
         job: &JobRow,
         req: &TaskRequest,
     ) -> CoreResult<Option<TaskResponse>> {
-        let Some(JobSpecJson::Collect(spec)) = JobSpecJson::parse(&job.spec_json) else {
-            tracing::warn!("[job] collect job {} spec_json 解析失败，跳过", job.job_id);
-            return Ok(None);
+        let spec = match JobSpecJson::parse(&job.spec_json) {
+            Ok(JobSpecJson::Collect(spec)) => spec,
+            Err(e) => {
+                tracing::warn!(
+                    "[job] collect job {} spec_json 解析失败，跳过: {e}",
+                    job.job_id
+                );
+                return Ok(None);
+            }
+            Ok(_) => {
+                tracing::warn!("[job] collect job {} spec_json 非 collect 规格，跳过", job.job_id);
+                return Ok(None);
+            }
         };
         let proto_spec = spec.to_proto();
 
@@ -209,9 +219,19 @@ impl JobSource {
         job: &JobRow,
         req: &TaskRequest,
     ) -> CoreResult<Option<TaskResponse>> {
-        let Some(JobSpecJson::Rating(spec)) = JobSpecJson::parse(&job.spec_json) else {
-            tracing::warn!("[job] rating job {} spec_json 解析失败，跳过", job.job_id);
-            return Ok(None);
+        let spec = match JobSpecJson::parse(&job.spec_json) {
+            Ok(JobSpecJson::Rating(spec)) => spec,
+            Err(e) => {
+                tracing::warn!(
+                    "[job] rating job {} spec_json 解析失败，跳过: {e}",
+                    job.job_id
+                );
+                return Ok(None);
+            }
+            Ok(_) => {
+                tracing::warn!("[job] rating job {} spec_json 非 rating 规格，跳过", job.job_id);
+                return Ok(None);
+            }
         };
         if spec.match_id == 0 {
             tracing::warn!("[job] rating job {} 无对发行（提交异常），跳过", job.job_id);
