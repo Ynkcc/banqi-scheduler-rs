@@ -54,11 +54,7 @@ fn canonicalize_search(
     defaults: &bqs_config::SearchDefaults,
     kind: &str,
 ) -> Result<String, String> {
-    crate::search_json::canonicalize(
-        raw.unwrap_or(""),
-        &crate::search_json::SearchJson::from_defaults(defaults),
-        kind,
-    )
+    crate::search_json::canonicalize(raw.unwrap_or(""), defaults, kind)
 }
 
 fn store_canonical_search(

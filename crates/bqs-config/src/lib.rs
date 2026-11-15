@@ -107,141 +107,25 @@ pub struct SelfplaySection {
 
 impl Default for SelfplaySection {
     fn default() -> Self {
+        let mut search = SearchDefaults::default();
+
+        search.expectimax.fullwidth = true;
         Self {
             variant: "4x8".into(),
             games_per_task: 16,
             threads_baseline: 4,
             initial_revealed: 0,
             data_kind: DataKind::Resnet,
-            search: SearchDefaults::default(),
+            search,
         }
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, default)]
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
 pub struct SearchDefaults {
-    pub mcts: MctsSearchDefaults,
-    pub expectimax: ExpectimaxSearchDefaults,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, default)]
-pub struct MctsSearchDefaults {
-    pub sims: u32,
-
-    pub max_considered_actions: u32,
-
-    pub c_scale: f64,
-
-    pub gumbel_scale: f64,
-
-    pub playout_cap_random: bool,
-
-    pub fast_sims: u32,
-
-    pub full_search_prob: f64,
-
-    pub eta: u32,
-
-    pub ucb_c: f64,
-
-    pub crn_enabled: bool,
-
-    pub health: HealthSearchDefaults,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, default)]
-pub struct HealthSearchDefaults {
-    pub enabled: bool,
-    pub weight: f64,
-    pub confidence_exp: f64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, default)]
-pub struct ExpectimaxSearchDefaults {
-    pub deterministic_depth: u32,
-
-    pub chance_outcome_depth: i32,
-
-    pub root_fullwidth: bool,
-
-    pub expl: ExplSearchDefaults,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, default)]
-pub struct ExplSearchDefaults {
-    pub enabled: bool,
-
-    pub mode: String,
-    pub topk: u32,
-    pub temp_start: f64,
-    pub temp_end: f64,
-    pub temp_decay_steps: u32,
-}
-
-impl Default for SearchDefaults {
-    fn default() -> Self {
-        Self {
-            mcts: MctsSearchDefaults::default(),
-            expectimax: ExpectimaxSearchDefaults::default(),
-        }
-    }
-}
-
-impl Default for MctsSearchDefaults {
-    fn default() -> Self {
-        Self {
-            sims: 64,
-            max_considered_actions: 16,
-            c_scale: 1.0,
-            gumbel_scale: 1.0,
-            playout_cap_random: false,
-            fast_sims: 0,
-            full_search_prob: 0.25,
-            eta: 2,
-            ucb_c: 0.0,
-            crn_enabled: false,
-            health: HealthSearchDefaults::default(),
-        }
-    }
-}
-
-impl Default for HealthSearchDefaults {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            weight: 0.0,
-            confidence_exp: 0.0,
-        }
-    }
-}
-
-impl Default for ExpectimaxSearchDefaults {
-    fn default() -> Self {
-        Self {
-            deterministic_depth: 8,
-            chance_outcome_depth: 0,
-            root_fullwidth: true,
-            expl: ExplSearchDefaults::default(),
-        }
-    }
-}
-
-impl Default for ExplSearchDefaults {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            mode: "gumbel".into(),
-            topk: 8,
-            temp_start: 1.0,
-            temp_end: 0.15,
-            temp_decay_steps: 48,
-        }
-    }
+    pub mcts: bq_engine_config::MctsSchema,
+    pub expectimax: bq_engine_config::ExpectimaxSchema,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -297,21 +181,13 @@ impl Config {
             ));
         }
         let d = &s.search;
-        if d.mcts.sims == 0 {
-            return Err(ConfigError::Invalid(
-                "selfplay.search.mcts.sims 必须 >= 1（任务下发的探索参数必填校验）".into(),
-            ));
-        }
-        if d.mcts.max_considered_actions == 0 {
-            return Err(ConfigError::Invalid(
-                "selfplay.search.mcts.max_considered_actions 必须 >= 1".into(),
-            ));
-        }
-        if d.mcts.eta < 2 {
-            return Err(ConfigError::Invalid(
-                "selfplay.search.mcts.eta 必须 >= 2".into(),
-            ));
-        }
+
+        d.mcts
+            .validate()
+            .map_err(|e| ConfigError::Invalid(format!("selfplay.{e}")))?;
+        d.expectimax
+            .validate()
+            .map_err(|e| ConfigError::Invalid(format!("selfplay.{e}")))?;
 
         Ok(())
     }
@@ -352,5 +228,13 @@ mod tests {
     fn data_kind_parses() {
         let cfg = Config::parse("[selfplay]\ndata_kind = \"nnue\"\n", "test").unwrap();
         assert_eq!(cfg.selfplay.data_kind, DataKind::Nnue);
+    }
+
+    #[test]
+    fn scheduler_fullwidth_default_is_true() {
+        let cfg = Config::parse("", "test").unwrap();
+        assert!(cfg.selfplay.search.expectimax.fullwidth);
+
+        assert!(!bq_engine_config::ExpectimaxSchema::default().fullwidth);
     }
 }

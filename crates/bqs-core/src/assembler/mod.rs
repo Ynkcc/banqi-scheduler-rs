@@ -35,15 +35,14 @@ impl TaskAssembler {
     }
 
     pub fn default_search(&self, kind: &str) -> CoreResult<String> {
-        let defaults = crate::search_json::SearchJson::from_defaults(&self.cfg.selfplay.search);
-        crate::search_json::canonicalize("", &defaults, kind).map_err(crate::CoreError::Internal)
+        crate::search_json::canonicalize("", &self.cfg.selfplay.search, kind)
+            .map_err(crate::CoreError::Internal)
     }
 
     pub fn player_with_search(&self, p: CollectPlayerSpec) -> CoreResult<CollectPlayerSpec> {
-        let defaults = crate::search_json::SearchJson::from_defaults(&self.cfg.selfplay.search);
-
-        let canonical = crate::search_json::canonicalize(&p.search_json, &defaults, &p.kind)
-            .map_err(crate::CoreError::Internal)?;
+        let canonical =
+            crate::search_json::canonicalize(&p.search_json, &self.cfg.selfplay.search, &p.kind)
+                .map_err(crate::CoreError::Internal)?;
         Ok(CollectPlayerSpec {
             search_json: canonical,
             ..p

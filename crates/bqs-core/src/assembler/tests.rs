@@ -361,8 +361,8 @@ fn collect_task_fills_chance_outcome_depth_default_and_explicit_zero() {
         "search_json 缺省时 expectimax 域应填配置默认"
     );
     assert_eq!(
-        search["expectimax"]["root_fullwidth"], true,
-        "缺失字段补配置默认"
+        search["expectimax"]["fullwidth"], true,
+        "缺失字段补配置默认（调度器采集默认 fullwidth=true，SelfplaySection::default 覆盖 core schema false）"
     );
     assert!(
         search.get("mcts").is_none(),
@@ -427,9 +427,9 @@ fn search_json_domain_merge() {
             search_json: String::new(),
         })
         .unwrap();
-    let defaults =
-        crate::search_json::SearchJson::from_defaults(&bqs_config::SearchDefaults::default());
-    let d = defaults.to_canonical_for_kind("mcts_resnet").unwrap();
+    let d =
+        crate::search_json::canonicalize("", &bqs_config::SearchDefaults::default(), "mcts_resnet")
+            .unwrap();
     assert_eq!(
         merged.search_json, d,
         "空 search_json 应产出与配置默认一致的单域 canonical JSON"
@@ -446,7 +446,7 @@ fn search_json_domain_merge() {
 }
 
 #[test]
-fn collect_task_fills_params_search_json_diagnostic_echo() {
+fn collect_task_player_search_json_is_canonical_single_domain() {
     let f = Fakes::new();
     let asm = assembler(&f);
     let req = TaskRequest {
@@ -467,21 +467,16 @@ fn collect_task_fills_params_search_json_diagnostic_echo() {
     let resp = asm
         .collect_task("t", &req, &spec, 2, 42, 1000, None, None)
         .unwrap();
-    let params = resp.params.clone().expect("params 缺省");
     let g = gen_spec(&resp);
     let player_a = match g.behavior.expect("behavior 缺省") {
         bqs_proto::generation_spec::Behavior::Plays(p) => p.player_a.expect("player_a 缺省"),
         _ => panic!("expected plays behavior"),
     };
-    assert_eq!(
-        params.search_json, player_a.search_json,
-        "params.search_json 诊断回显应与 player_a.search_json 为同一 canonical 字符串"
-    );
-    let v: serde_json::Value = serde_json::from_str(&params.search_json).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&player_a.search_json).unwrap();
     assert_eq!(v["expectimax"]["deterministic_depth"], 6, "显式字段保留");
     assert_eq!(
         v["expectimax"]["chance_outcome_depth"], 0,
         "k 由组装保证必填"
     );
-    assert!(v.get("mcts").is_none(), "诊断回显同样按 kind 裁剪为单域");
+    assert!(v.get("mcts").is_none(), "组装按 kind 裁剪为单域");
 }
