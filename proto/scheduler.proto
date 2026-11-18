@@ -35,7 +35,10 @@ message GenerationSpec {
     DeriveFeatures derive = 12;
   }
   // 字段号 11 曾为 reanalysis 行为（重搜链路已移除），勿复用。
-  // 指定 BFEN 起始局面（rating 链路下发通道；collect 链路经 CollectionJobSpec 内嵌透传）。
+  // DEPRECATED（保留兼容旧配置，勿在新代码中使用）：指定 BFEN 起始局面。
+  // 新配置改用 scenario_json 传 {"kind":"from_fen","fen":"..."}；
+  // worker 侧会把本字段逐条转换为 from_fen 场景（任一条非法整批拒绝），
+  // 多 FEN 轮换列表暂无单场景 JSON 等价表达，故本字段暂时保留透传。
   // 非空时对局从这些局面开始、按对局序号取模循环选取；覆盖 scenario/initial_revealed。
   repeated string start_fens = 13;
   // 开局场景透传：banqi-core OpeningScenario 的 serde JSON
@@ -334,7 +337,9 @@ message CollectionJobSpec {
   optional bool pairs_parallel = 8;
   // 任务级覆写：对内第二局是否刷新种子（缺省 = 调度器默认 true；rating 类保持同种子传 false）
   optional bool pair_seed_refresh = 9;
-  // 指定 BFEN 起始局面：非空时对局从这些局面开始、按对局序号取模循环选取；
+  // DEPRECATED（保留兼容旧配置，勿在新代码中使用）：指定 BFEN 起始局面。
+  // 新配置改用 scenario_json 传 {"kind":"from_fen","fen":"..."}；
+  // 非空时对局从这些局面开始、按对局序号取模循环选取；
   // 覆盖 scenario/initial_revealed。空 = 完全走既有路径。
   repeated string start_fens = 10;
   // 开局场景透传：banqi-core OpeningScenario 的 serde JSON（空串 = standard）
@@ -366,7 +371,9 @@ message RatingJobSpec {
   double sprt_beta = 8;
   CollectPlayerSpec side_a = 9;
   CollectPlayerSpec side_b = 10;
-  // 指定 BFEN 起始局面：非空时对局从这些局面开始、按对局序号取模循环选取；覆盖 scenario。
+  // DEPRECATED（保留兼容旧配置，勿在新代码中使用）：指定 BFEN 起始局面。
+  // 新配置改用 scenario_json 传 {"kind":"from_fen","fen":"..."}；
+  // 非空时对局从这些局面开始、按对局序号取模循环选取；覆盖 scenario。
   repeated string start_fens = 11;
   reserved 12; // 曾为 OpeningScenario 枚举；场景改为 scenario_json 透传后废弃
   // 开局场景透传：banqi-core OpeningScenario 的 serde JSON（空串 = standard）

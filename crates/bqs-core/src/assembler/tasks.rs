@@ -5,6 +5,21 @@ use crate::{CoreResult, featurepack::PendingDerive, types::Network};
 
 use super::{TaskAssembler, data_kind_for_format, producer::network_key};
 
+fn merge_start_fens_compat(
+    start_fens: Vec<String>,
+    scenario_json: String,
+) -> (Vec<String>, String) {
+    if scenario_json.trim().is_empty() && start_fens.len() == 1 {
+        let fen = start_fens[0].trim();
+        if let Ok(s) = bq_env::OpeningScenario::try_from_fen(fen)
+            && let Ok(json) = serde_json::to_string(&s)
+        {
+            return (Vec::new(), json);
+        }
+    }
+    (start_fens, scenario_json)
+}
+
 impl TaskAssembler {
     pub fn collect_task(
         &self,
@@ -31,6 +46,8 @@ impl TaskAssembler {
             Some(n) => (n.sha.clone(), network_key(&n.sha, &n.format)),
             None => (String::new(), String::new()),
         };
+        let (start_fens, scenario_json) =
+            merge_start_fens_compat(spec.start_fens.clone(), spec.scenario_json.clone());
         let mut resp = TaskResponse {
             task_id: task_id.to_string(),
             network_sha: a_sha.clone(),
@@ -43,7 +60,7 @@ impl TaskAssembler {
             }),
             generation: Some(GenerationSpec {
                 variant: spec.variant.clone(),
-                scenario_json: spec.scenario_json.clone(),
+                scenario_json,
                 seed: Some(seed),
                 data_kind: spec.data_kind,
                 games,
@@ -51,7 +68,7 @@ impl TaskAssembler {
 
                 pairs_parallel: spec.pairs_parallel,
                 pair_seed_refresh: spec.pair_seed_refresh,
-                start_fens: spec.start_fens.clone(),
+                start_fens,
                 behavior: Some(bqs_proto::generation_spec::Behavior::Plays(
                     bqs_proto::Plays { player_a, player_b },
                 )),
@@ -101,6 +118,7 @@ impl TaskAssembler {
         };
         let side_a = self.player_with_search(side_a.clone())?;
         let side_b = self.player_with_search(side_b.clone())?;
+        let (start_fens, scenario_json) = merge_start_fens_compat(start_fens, scenario_json);
         let mut resp = TaskResponse {
             task_id: task_id.to_string(),
             network_sha: a_sha.clone(),
