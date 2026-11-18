@@ -1,4 +1,6 @@
-use bq_engine_config::{ExpectimaxPartial, ExpectimaxSchema, MctsPartial, MctsSchema};
+use bq_engine_config::{
+    DmcPartial, DmcSchema, ExpectimaxPartial, ExpectimaxSchema, MctsPartial, MctsSchema,
+};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_SEARCH_JSON_LEN: usize = 8192;
@@ -8,6 +10,7 @@ pub const MAX_SEARCH_JSON_LEN: usize = 8192;
 pub struct SearchJsonIn {
     pub mcts: Option<MctsPartial>,
     pub expectimax: Option<ExpectimaxPartial>,
+    pub dmc: Option<DmcPartial>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -16,21 +19,31 @@ struct SearchJsonOut<'a> {
     mcts: Option<&'a MctsSchema>,
     #[serde(skip_serializing_if = "Option::is_none")]
     expectimax: Option<&'a ExpectimaxSchema>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dmc: Option<&'a DmcSchema>,
 }
 
 fn canonical_for_kind(
     mcts: &MctsSchema,
     expectimax: &ExpectimaxSchema,
+    dmc: &DmcSchema,
     kind: &str,
 ) -> Result<String, String> {
     let out = match bq_policy::player_kind::canonical(kind) {
         Some("mcts_resnet") => serde_json::to_string(&SearchJsonOut {
             mcts: Some(mcts),
             expectimax: None,
+            dmc: None,
         }),
         Some("expectimax_nnue" | "expectimax_rule") => serde_json::to_string(&SearchJsonOut {
             mcts: None,
             expectimax: Some(expectimax),
+            dmc: None,
+        }),
+        Some("dmc_greedy") => serde_json::to_string(&SearchJsonOut {
+            mcts: None,
+            expectimax: None,
+            dmc: Some(dmc),
         }),
         _ => return Ok(String::new()),
     };
@@ -61,8 +74,12 @@ pub fn canonicalize(
     if let Some(p) = job.expectimax {
         expectimax.merge_partial(p);
     }
+    let mut dmc = defaults.dmc;
+    if let Some(p) = job.dmc {
+        dmc.merge_partial(p);
+    }
 
-    canonical_for_kind(&mcts, &expectimax, kind)
+    canonical_for_kind(&mcts, &expectimax, &dmc, kind)
 }
 
 fn check_len(s: &str) -> Result<(), String> {
@@ -148,11 +165,34 @@ mod tests {
             "rule:capture_first",
             "rule:reveal_first",
             "policy_resnet",
-            "dmc_greedy",
         ] {
             let out = canonicalize(r#"{"mcts":{"sims":32}}"#, &defaults(), kind).unwrap();
             assert_eq!(out, "", "NoSearch kind {kind} 的 search_json 应为空串");
         }
+    }
+
+    #[test]
+    fn dmc_greedy_yields_dmc_domain() {
+        let out = canonicalize("", &defaults(), "dmc_greedy").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["dmc"]["eps"], 0.0, "默认 = 纯 argmax 贪心: {out}");
+        assert_eq!(v["dmc"]["near_gap"], 0.0);
+        assert!(v.get("mcts").is_none() && v.get("expectimax").is_none());
+
+        let out = canonicalize(
+            r#"{"dmc":{"eps":0.15,"near_gap":0.05}}"#,
+            &defaults(),
+            "dmc_greedy",
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["dmc"]["eps"], 0.15);
+        assert_eq!(v["dmc"]["near_gap"], 0.05);
+
+        let out = canonicalize(r#"{"mcts":{"sims":32}}"#, &defaults(), "dmc_greedy").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(v.get("mcts").is_none(), "mcts 域应被裁剪掉: {out}");
+        assert_eq!(v["dmc"]["eps"], 0.0);
     }
 
     #[test]
@@ -273,6 +313,7 @@ mod tests {
         let mcts_out = serde_json::to_string(&super::SearchJsonOut {
             mcts: Some(&d.mcts),
             expectimax: None,
+            dmc: None,
         })
         .unwrap();
         assert_eq!(
@@ -283,8 +324,16 @@ mod tests {
         let e_out = serde_json::to_string(&super::SearchJsonOut {
             mcts: None,
             expectimax: Some(&d.expectimax),
+            dmc: None,
         })
         .unwrap();
         assert_eq!(canonicalize("", &d, "expectimax_nnue").unwrap(), e_out);
+        let dmc_out = serde_json::to_string(&super::SearchJsonOut {
+            mcts: None,
+            expectimax: None,
+            dmc: Some(&d.dmc),
+        })
+        .unwrap();
+        assert_eq!(canonicalize("", &d, "dmc_greedy").unwrap(), dmc_out);
     }
 }

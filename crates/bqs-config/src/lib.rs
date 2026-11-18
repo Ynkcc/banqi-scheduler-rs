@@ -126,6 +126,7 @@ impl Default for SelfplaySection {
 pub struct SearchDefaults {
     pub mcts: bq_engine_config::MctsSchema,
     pub expectimax: bq_engine_config::ExpectimaxSchema,
+    pub dmc: bq_engine_config::DmcSchema,
 }
 
 #[derive(Debug, Clone, Deserialize)]
