@@ -108,7 +108,6 @@ mod tests {
         assert_eq!(v["mcts"]["sims"], 64);
         assert_eq!(v["mcts"]["max_considered_actions"], 16);
         assert_eq!(v["mcts"]["eta"], 2);
-        assert_eq!(v["mcts"]["health"]["enabled"], false);
         assert!(
             v.get("expectimax").is_none(),
             "mcts_resnet 不得携带 expectimax 域（collector 跨域 fail-fast）: {out}"
@@ -235,19 +234,6 @@ mod tests {
         .unwrap();
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["expectimax"]["deterministic_depth"], 4);
-
-        let out = canonicalize(
-            r#"{"mcts":{"health_enabled":true,"health_weight":0.2}}"#,
-            &defaults(),
-            "mcts_resnet",
-        )
-        .unwrap();
-        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(
-            v["mcts"]["health"]["enabled"], true,
-            "打平旧名归并进 health 子结构"
-        );
-        assert_eq!(v["mcts"]["health"]["weight"], 0.2);
 
         let out = canonicalize(
             r#"{"expectimax":{"expl_topk":4}}"#,

@@ -107,18 +107,6 @@ static SPECS: &[(&str, TrainConfigSpec)] = &[
         },
     ),
     ("POLICY_TARGET_ACTION_MIX", f(0.0, 1.0)),
-    ("HEALTH_LOSS_WEIGHT", f(0.0, 10.0)),
-    (
-        "HEALTH_GAUSS_SIGMA",
-        TrainConfigSpec {
-            kind: TrainConfigKind::Float,
-            min: 0.0,
-            max: 1.0,
-            has_max: true,
-            gt_zero: true,
-            enum_values: &[],
-        },
-    ),
     (
         "VALUE_GAUSS_SIGMA",
         TrainConfigSpec {
@@ -285,7 +273,7 @@ mod tests {
     #[test]
     fn whitelist_complete() {
         let names = TrainConfig::field_names();
-        assert_eq!(names.len(), 30);
+        assert_eq!(names.len(), 28);
 
         let mut sorted = names.clone();
         sorted.sort();
@@ -343,12 +331,9 @@ mod tests {
 
     #[test]
     fn unknown_field_rejects_whole_batch() {
-        let input = map(&[
-            ("LEARNING_RATE", "0.1"),
-            ("HEALTH_VALUE_HEAD_ENABLED", "true"),
-        ]);
+        let input = map(&[("LEARNING_RATE", "0.1"), ("BOGUS_FIELD", "true")]);
         let err = TrainConfig::normalize(&input).unwrap_err();
-        assert!(err.contains("HEALTH_VALUE_HEAD_ENABLED"), "{err}");
+        assert!(err.contains("BOGUS_FIELD"), "{err}");
         assert!(err.contains("不可远程调节"), "{err}");
     }
 
@@ -358,11 +343,10 @@ mod tests {
         assert!(TrainConfig::normalize(&map(&[("TRAIN_BATCH", "0")])).is_err());
         assert!(TrainConfig::normalize(&map(&[("LR_DECAY_STEPS", "-3")])).is_err());
         assert!(TrainConfig::normalize(&map(&[("POLICY_TARGET_TEMPERATURE", "0")])).is_err());
-        assert!(TrainConfig::normalize(&map(&[("HEALTH_GAUSS_SIGMA", "0")])).is_err());
         assert!(TrainConfig::normalize(&map(&[("TRAIN_BATCH", "abc")])).is_err());
         assert!(TrainConfig::normalize(&map(&[("VALUE_TARGET_MODE", "bogus")])).is_err());
 
-        TrainConfig::normalize(&map(&[("HEALTH_GAUSS_SIGMA", "1.0")])).unwrap();
+        TrainConfig::normalize(&map(&[("VALUE_GAUSS_SIGMA", "1.0")])).unwrap();
     }
 
     #[test]

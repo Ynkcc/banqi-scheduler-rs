@@ -304,7 +304,7 @@ message CollectPlayerSpec {
   reserved 3;
   // 搜索参数透传：分层 JSON（snake_case，形如 {"mcts":{...},"expectimax":{...}}），
   // mcts 域字段：sims/max_considered_actions/c_scale/gumbel_scale/playout_cap_random/
-  //   fast_sims/full_search_prob/eta/ucb_c/crn_enabled/health{enabled,weight,confidence_exp}；
+  //   fast_sims/full_search_prob/eta/ucb_c/crn_enabled；
   // expectimax 域字段：deterministic_depth/chance_outcome_depth(显式 0 与缺失可区分)/
   //   root_fullwidth/expl{enabled,mode(gumbel|softmax),topk,temp_start,temp_end,temp_decay_steps}。
   // 结构真源 = bqc-config::SearchJson；本契约只透传，不感知内部字段。
@@ -320,8 +320,8 @@ message CollectPlayerSpec {
 //   5 temperature / 6 playout_cap_random / 7 expectimax_node_budget（已废弃）/ 8
 //   expectimax_deterministic_depth / 9,10 标注器参数（已废弃）/ 11-15 expl_enabled/topk/
 //   temp_start/temp_end/temp_decay_steps / 16 fast_mcts_sims / 17 full_search_prob /
-//   18 mcts_eta / 19 mcts_ucb_c / 20 mcts_crn_enabled / 21-23 health_enabled/weight/
-//   confidence_exp / 24 expl_mode / 25 expectimax_root_fullwidth /
+//   18 mcts_eta / 19 mcts_ucb_c / 20 mcts_crn_enabled / 21-23 已废弃（勿复用）/
+//   24 expl_mode / 25 expectimax_root_fullwidth /
 //   26 expectimax_chance_outcome_depth / 27 expectimax_chance_budget_ratio（已废弃）。
 // 语义迁移：上述字段 → search_json 分层结构（见 CollectPlayerSpec.search_json 注释）。
 
