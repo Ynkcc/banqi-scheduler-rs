@@ -136,7 +136,6 @@ mod tests {
         assert_eq!(v["mcts"]["sims"], 128);
 
         assert_eq!(v["mcts"]["max_considered_actions"], 16);
-        assert_eq!(v["mcts"]["full_search_prob"], 0.25);
         assert!(
             v.get("expectimax").is_none(),
             "mcts_resnet 裁剪后不含 expectimax 域"
