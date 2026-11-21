@@ -30,7 +30,7 @@ fn canonical_for_kind(
     kind: &str,
 ) -> Result<String, String> {
     let out = match bq_policy::player_kind::canonical(kind) {
-        Some("mcts_resnet") => serde_json::to_string(&SearchJsonOut {
+        Some("mcts_resnet" | "mcts_nnue") => serde_json::to_string(&SearchJsonOut {
             mcts: Some(mcts),
             expectimax: None,
             dmc: None,
@@ -126,6 +126,22 @@ mod tests {
             v.get("mcts").is_none(),
             "expectimax_nnue 不得携带 mcts 域: {out}"
         );
+    }
+
+    #[test]
+    fn mcts_nnue_yields_mcts_domain() {
+        let out = canonicalize("", &defaults(), "mcts_nnue").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["mcts"]["sims"], 64);
+        assert!(
+            v.get("expectimax").is_none() && v.get("dmc").is_none(),
+            "mcts_nnue 只保留 mcts 单域: {out}"
+        );
+
+        let out = canonicalize(r#"{"mcts":{"sims":32}}"#, &defaults(), "mcts_nnue").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["mcts"]["sims"], 32);
+        assert!(v.get("expectimax").is_none());
     }
 
     #[test]
